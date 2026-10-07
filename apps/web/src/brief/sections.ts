@@ -1,11 +1,16 @@
 import type { IntakeRecord } from '@matra/shared';
 import type { BriefBlock, BriefOptions, BriefRow, BriefSection } from './types';
 import {
-  DISCLOSURE_METHOD_LABELS, EVIDENCE_KIND_LABELS, IDENTIFIER_LABELS, INCIDENT_TYPE_LABELS,
-  NOT_PROVIDED, formatBytes, formatDate, formatTimestamp, goalLabel, has, orNP, yesNo,
+  AGENCY_TYPE_LABELS, DISCLOSURE_METHOD_LABELS, EVIDENCE_KIND_LABELS, FORCE_LABELS, IDENTIFIER_LABELS,
+  INCIDENT_TYPE_LABELS, NOT_PROVIDED, PHYSICAL_EVIDENCE_LABELS, SUBSTANCE_LABELS, formatBytes, formatDate,
+  formatTimestamp, goalLabel, has, immediateSafetyAnswer, immediateSafetyOf, orNP, survivorAnswered, yesNo,
 } from './format';
 
-export const BRIEF_TITLE = 'Confidential — Victim Statement & Evidentiary Summary';
+/** The document's name, everywhere it is shown (PDF title, header, preview, buttons). */
+export const INCIDENT_SUMMARY_TITLE = 'Incident Summary in the Survivor’s Own Words';
+export const BRIEF_TITLE = `Confidential — ${INCIDENT_SUMMARY_TITLE}`;
+/** Required provenance statement (LEGAL_RESEARCH_MEMO §5). */
+export const PREPARED_BY_NOTE = 'Prepared by the survivor using Matra. Not legal advice. Not reviewed by an attorney unless indicated.';
 export const REDACTED = 'Withheld at the survivor’s request — available through the survivor’s advocate or counsel';
 
 const row = (label: string, value: string | undefined, extra: Partial<BriefRow> = {}): BriefRow => ({
@@ -46,7 +51,7 @@ function safeMethods(r: IntakeRecord): string {
 }
 
 /**
- * Pure function: the structured content of the Police Evidentiary Brief.
+ * Pure function: the structured content of the Incident Summary in the Survivor's Own Words.
  * Survivor-authored text is carried through byte-for-byte (never trimmed, rewritten or summarised).
  */
 export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): BriefSection[] {
@@ -76,6 +81,7 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
           'are reproduced verbatim: no software or third party has summarised, reordered, corrected or ' +
           'interpreted them. Headings and labels are the only text added.',
       },
+      { kind: 'note', tone: 'info', text: PREPARED_BY_NOTE },
       {
         kind: 'note',
         tone: 'warning',
@@ -100,6 +106,9 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
         row('Date of birth', has(s.dateOfBirth) ? formatDate(s.dateOfBirth) : undefined),
         row('Pronouns', s.pronouns),
         row('Preferred language', s.preferredLanguage),
+        ...(s.accessibility?.interpreter ? [row('Interpreter wanted', survivorAnswered(s.accessibility.interpreter))] : []),
+        ...(has(s.accessibility?.interpreterLanguage) ? [row('Interpreter language', s.accessibility!.interpreterLanguage)] : []),
+        ...(has(s.accessibility?.otherNeeds) ? [vrow('Accessibility / other needs', s.accessibility!.otherNeeds)] : []),
         redact ? row('Phone', REDACTED) : row('Phone', s.phone),
         redact ? row('Email', REDACTED) : row('Email', s.email),
         row('Safe contact methods', safeMethods(r)),
@@ -176,6 +185,12 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
     });
   }
 
+  // ── 5b. Force, strangulation, substances (asked after her free account) ──
+  const circ = circumstanceBlocks(r);
+  if (circ.length) {
+    out.push({ id: 'circumstances', title: 'Force, Strangulation & Substances — As Reported by the Survivor', blocks: circ });
+  }
+
   // ── 6. Person(s) responsible ──
   if (r.perpetrators.length) {
     const blocks: BriefBlock[] = [];
@@ -186,9 +201,15 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
         row('Relationship to survivor', p.relationship),
         row('Known to survivor', p.knownToSurvivor ? 'Yes' : 'No'),
         vrow('Physical description', p.physicalDescription),
+        ...(has(p.address) ? [vrow('Where they live', p.address)] : []),
+        ...(has(p.workplace) ? [vrow('Where they work or study', p.workplace)] : []),
+        ...(has(p.vehicle) ? [vrow('Vehicle', p.vehicle)] : []),
+        ...(has(p.whereabouts) ? [vrow('Where they might be now', p.whereabouts)] : []),
       ];
       for (const id of p.identifiers) {
         if (!has(id.value)) continue;
+        // The name is already shown above; don't print it twice as "Full name".
+        if (id.kind === 'full_name' && id.value === p.name) continue;
         const label = IDENTIFIER_LABELS[id.kind] + (has(id.platform) ? ` (${id.platform})` : '');
         rows.push({ label, value: id.value, mono: id.kind !== 'full_name' && id.kind !== 'other' });
       }
@@ -248,6 +269,9 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
         ...(m.soughtCare || has(m.facility) ? [row('Facility', m.facility)] : []),
         ...(m.soughtCare || has(m.date) ? [row('Date of care', formatDate(m.date))] : []),
         row('Forensic exam (SANE / evidence kit) completed', m.forensicExamCompleted === undefined ? NOT_PROVIDED : yesNo(m.forensicExamCompleted)),
+        ...(m.toxicologyTest ? [row('Toxicology (alcohol / drug) testing', survivorAnswered(m.toxicologyTest))] : []),
+        ...(m.fiveYearHoldKit ? [row('Kit held without a police report (anonymous / Five-Year Hold)', survivorAnswered(m.fiveYearHoldKit))] : []),
+        ...(m.kitReportedToPolice ? [row('Kit reported to police', survivorAnswered(m.kitReportedToPolice))] : []),
         vrow('Injuries', m.injuries),
       ],
     }],
@@ -261,11 +285,15 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
       blocks: [{
         kind: 'table',
         columns: [
-          { header: 'Agency', width: 0.34 }, { header: 'Date', width: 0.18 },
-          { header: 'Report no.', width: 0.18 }, { header: 'Outcome', width: 0.30 },
+          { header: 'Agency', width: 0.26 }, { header: 'Type', width: 0.14 }, { header: 'Date', width: 0.15 },
+          { header: 'Report no.', width: 0.18 }, { header: 'Outcome', width: 0.27 },
         ],
         rows: r.priorReports.map((p) => ({
-          cells: [orNP(p.agency), formatDate(p.date), orNP(p.reportNumber), orNP(p.outcome)],
+          cells: [
+            orNP(p.agency), p.agencyType ? AGENCY_TYPE_LABELS[p.agencyType] : NOT_PROVIDED, formatDate(p.date),
+            [p.reportNumber, has(p.prosecutorFileNumber) ? `Prosecutor file: ${p.prosecutorFileNumber}` : undefined].filter(has).join('; ') || NOT_PROVIDED,
+            orNP(p.outcome),
+          ],
         })),
       }],
     });
@@ -310,19 +338,44 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
     });
   }
 
+  // ── 11b. Physical evidence ──
+  const pe = r.physicalEvidence;
+  if (pe && (pe.kinds.length || has(pe.description))) {
+    out.push({
+      id: 'physicalEvidence',
+      title: 'Physical Evidence Kept by the Survivor',
+      blocks: [
+        {
+          kind: 'rows',
+          rows: [
+            row('Items', pe.kinds.map((k) => PHYSICAL_EVIDENCE_LABELS[k] ?? k).join('; ')),
+            vrow('Where and how they are kept', pe.description),
+          ],
+        },
+        { kind: 'note', tone: 'info', text: 'These items are in the survivor’s possession; they have not been examined. Items selected by the survivor from a list.' },
+      ],
+    });
+  }
+
   // ── 12. Safety ──
   const sf = r.safety;
+  const safeNow = immediateSafetyOf(sf);
   out.push({
     id: 'safety',
     title: 'Safety Concerns',
     blocks: [
-      ...(sf.inImmediateDanger
-        ? [{ kind: 'note', tone: 'warning', text: 'The survivor reported that they were in immediate danger when completing this intake.' } as BriefBlock]
+      ...(safeNow === 'not_safe' || safeNow === 'unsure'
+        ? [{
+            kind: 'note', tone: 'warning',
+            text: safeNow === 'not_safe'
+              ? 'When starting this intake, the survivor answered “No” to “Are you safe right now?”.'
+              : 'When starting this intake, the survivor answered “I’m not sure” to “Are you safe right now?”.',
+          } as BriefBlock]
         : []),
       {
         kind: 'rows',
         rows: [
-          row('In immediate danger', yesNo(sf.inImmediateDanger)),
+          row('Safe when starting the intake (“Are you safe right now?”)', immediateSafetyAnswer(safeNow)),
           row('Person responsible knows where the survivor lives or works', sf.perpetratorHasAccess === undefined ? NOT_PROVIDED : yesNo(sf.perpetratorHasAccess)),
           row('Interested in a protective order', goalLabel(sf.wantsProtectiveOrder)),
           row('Abuse ongoing', inc.isOngoing ? 'Yes' : 'No'),
@@ -367,6 +420,43 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
   });
 
   return out;
+}
+
+function circumstanceBlocks(r: IntakeRecord): BriefBlock[] {
+  const inc = r.incident;
+  const blocks: BriefBlock[] = [];
+  const rows: BriefRow[] = [];
+  if (inc.force && (inc.force.kinds.length || has(inc.force.description))) {
+    rows.push(row('Force, restraint, threats or weapon (selected by the survivor)', inc.force.kinds.map((k) => FORCE_LABELS[k] ?? k).join('; ')));
+    if (has(inc.force.description)) rows.push(vrow('Force — in the survivor’s own words', inc.force.description));
+  }
+  if (inc.strangulation) rows.push(row('Hands, arm or object on the neck / pressure on the throat', survivorAnswered(inc.strangulation)));
+  if (inc.substances && inc.substances.kinds.length) {
+    rows.push(row('Alcohol or drugs (selected by the survivor)', inc.substances.kinds.map((k) => SUBSTANCE_LABELS[k] ?? k).join('; ')));
+    if (inc.substances.suspectedIncapacitation)
+      rows.push(row('Times unable to move, speak or remember, or asleep / passed out', survivorAnswered(inc.substances.suspectedIncapacitation)));
+    if (has(inc.substances.description)) rows.push(vrow('Alcohol or drugs — in the survivor’s own words', inc.substances.description));
+  }
+  if (!rows.length) return blocks;
+  blocks.push({
+    kind: 'note', tone: 'info',
+    text: 'Asked only after the survivor’s free account, with “not sure” and skip always available. Selections are the survivor’s; descriptions are verbatim.',
+  });
+  blocks.push({ kind: 'rows', rows });
+  if (inc.strangulation === 'yes' || inc.strangulation === 'unsure') {
+    blocks.push({
+      kind: 'note', tone: 'warning',
+      text: 'Strangulation or pressure on the neck can cause internal injury with few or no visible signs, sometimes appearing hours or days later. ' +
+        'Medical evaluation is recommended. The survivor was advised to mention it to a medical provider.',
+    });
+  }
+  if (inc.substances?.kinds.length) {
+    blocks.push({
+      kind: 'note', tone: 'info',
+      text: 'Alcohol or drug involvement is recorded for medical and toxicology timing only. It does not indicate consent.',
+    });
+  }
+  return blocks;
 }
 
 function integrityBlocks(r: IntakeRecord, opts: BriefOptions): BriefBlock[] {

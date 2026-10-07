@@ -70,6 +70,47 @@ describe('IntakeChat', () => {
     expect(r.narrative.freeRecall).toBe('');
     expect(r.perpetrators).toEqual([]);
     expect(r.goals.policeReport).toBe('undecided');
+    expect(await screen.findByText('Your account is sealed.')).toBeInTheDocument();
+  });
+
+  it('shows the crisis screen for "I\'m not sure" too, and records her answer as unsure', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<IntakeChat onComplete={() => {}} />);
+    await user.click(screen.getByRole('button', { name: "I'm not sure" }));
+    expect(currentStepId(container)).toBe('safety.help');
+    expect(screen.getByRole('link', { name: /1-800-656-4673/ })).toBeInTheDocument();
+  });
+
+  it('waits for the shell to confirm before saying "sealed", and offers a retry on failure', async () => {
+    const user = userEvent.setup();
+    let finish!: (ok: boolean) => void;
+    const onComplete = vi.fn(
+      () => new Promise<void>((resolve, reject) => (finish = (ok) => (ok ? resolve() : reject(new Error('network down'))))),
+    );
+    const start: IntakeDraft = {
+      draftVersion: 1,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      stepId: 'review',
+      answers: { 'safety.now': 'unsure', 'story.freeRecall': 'my words' },
+      skipped: [],
+      visited: ['safety.now', 'review'],
+      reachedReview: true,
+    };
+    render(<IntakeChat initialDraft={start} onComplete={onComplete} />);
+    await user.click(screen.getByRole('button', { name: 'Seal my account' }));
+    expect(screen.getByText('Sealing your account…')).toBeInTheDocument();
+    expect(screen.queryByText('Your account is sealed.')).not.toBeInTheDocument();
+    expect(onComplete.mock.calls[0]).toBeDefined();
+    expect((onComplete.mock.calls[0] as unknown as [IntakeRecord])[0].safety.immediateSafety).toBe('unsure');
+
+    await act(async () => finish(false));
+    expect(screen.getByRole('alert')).toHaveTextContent(/couldn't seal your account just now.*network down/);
+    expect(screen.queryByText('Your account is sealed.')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onComplete).toHaveBeenCalledTimes(2);
+    await act(async () => finish(true));
     expect(screen.getByText('Your account is sealed.')).toBeInTheDocument();
   });
 
@@ -145,6 +186,17 @@ describe('IntakeChat', () => {
         case 'goals.police':
           await user.click(a.getByRole('button', { name: 'Yes' }));
           break;
+        case 'details.force':
+          await user.click(a.getByRole('button', { name: 'Threats, to me or someone else' }));
+          await user.click(a.getByRole('button', { name: 'Continue' }));
+          break;
+        case 'details.strangulation':
+          await user.click(a.getByRole('button', { name: "I'm not sure" }));
+          break;
+        case 'details.strangulationInfo':
+          expect(screen.getByText(/injuries inside the body that you cannot see/)).toBeInTheDocument();
+          await continueInfo(user, container);
+          break;
         case 'goals.attorney':
           await user.click(a.getByRole('button', { name: "I'm not sure" }));
           break;
@@ -170,6 +222,7 @@ describe('IntakeChat', () => {
     await user.click(screen.getByRole('button', { name: 'Seal my account' }));
     expect(onComplete).toHaveBeenCalledTimes(1);
     const r = onComplete.mock.calls[0][0];
+    expect(r.safety.immediateSafety).toBe('safe');
     expect(r.narrative.freeRecall).toBe(NARRATIVE);
     expect(r.narrative.sensory.sound).toBe('loud music');
     expect(r.narrative.sensory.sight).toBeUndefined();
@@ -181,6 +234,10 @@ describe('IntakeChat', () => {
     expect(r.perpetrators[1]).toMatchObject({ physicalDescription: 'tall, beard', escrowOptIn: false });
     expect(r.disclosures[0].toWhom).toBe('my roommate');
     expect(r.goals).toMatchObject({ policeReport: 'yes', attorney: 'undecided' });
+    expect(r.incident.force).toEqual({ kinds: ['threats'], description: undefined });
+    expect(r.incident.strangulation).toBe('unsure');
+    expect(seen).toContain('details.strangulationInfo');
+    expect(seen.indexOf('details.force')).toBeGreaterThan(seen.indexOf('story.freeRecall'));
     expect(drafts.length).toBeGreaterThan(0);
     expect(drafts.at(-1)!.answers['story.freeRecall']).toBe(NARRATIVE);
   }, 60_000);
@@ -224,7 +281,7 @@ describe('IntakeChat', () => {
       reachedReview: false,
     };
     const { container } = render(<IntakeChat initialDraft={start} onComplete={() => {}} />);
-    expect(screen.getByText('Part 2 of 15: About you')).toBeInTheDocument();
+    expect(screen.getByText('Part 2 of 16: About you')).toBeInTheDocument();
     expect(screen.getByText('Sam', { selector: 'div' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Back/ }));
     expect(currentStepId(container)).toBe('about.name');

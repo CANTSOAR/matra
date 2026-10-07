@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
-import { BriefPreview, downloadPdf, generatePoliceBrief, generateVccoDraft, type BriefOptions } from '../integration/briefAdapter';
+import {
+  BriefPreview,
+  downloadPdf,
+  generateIncidentSummary,
+  generateVccoDraft,
+  incidentSummaryFilename,
+  type BriefOptions,
+} from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { finals, loadVault } from '../lib/vault';
 
@@ -29,14 +36,14 @@ export function Brief() {
     };
   }
 
-  async function download(kind: 'police' | 'vcco') {
+  async function download(kind: 'summary' | 'vcco') {
     if (!record) return;
     setError(null);
     setBusy(kind);
     try {
       const date = new Date().toISOString().slice(0, 10);
-      if (kind === 'police') {
-        downloadPdf(await generatePoliceBrief(record, await opts()), `evidentiary-brief-${date}.pdf`);
+      if (kind === 'summary') {
+        downloadPdf(await generateIncidentSummary(record, await opts()), incidentSummaryFilename());
       } else {
         downloadPdf(await generateVccoDraft(record, { generatedAt: new Date() }), `nj-compensation-draft-${date}.pdf`);
       }
@@ -49,14 +56,14 @@ export function Brief() {
 
   return (
     <div className="stack-lg">
-      <PageTitle lead="A clear, organized summary of your sealed account that you can bring to police — if and when you decide to. Downloading it doesn’t send it anywhere.">
-        Police brief
+      <PageTitle lead="Your sealed account, organized in your own words, that you can bring to police, an advocate, or a lawyer — if and when you decide to. Downloading it doesn’t send it anywhere.">
+        Incident summary
       </PageTitle>
       {vault.loading && <Loading label="Opening your vault…" />}
       {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
       {!vault.loading && !vault.error && sealed.length === 0 && (
         <div className="card stack">
-          <p>You’ll be able to prepare a brief after you seal your account.</p>
+          <p>You’ll be able to prepare an incident summary after you seal your account.</p>
           <div>
             <Link className="btn btn-primary" to="/vault/story">
               Go to your account
@@ -89,11 +96,11 @@ export function Brief() {
             </div>
             <label className="check">
               <input type="checkbox" checked={redact} onChange={(e) => setRedact(e.target.checked)} />
-              <span>Hide my contact information (phone, email, address) in the brief</span>
+              <span>Hide my contact information (phone, email, address) in the summary</span>
             </label>
             <div className="row">
-              <button className="btn btn-primary" onClick={() => void download('police')} disabled={!!busy}>
-                {busy === 'police' ? 'Preparing…' : 'Download police brief (PDF)'}
+              <button className="btn btn-primary" onClick={() => void download('summary')} disabled={!!busy}>
+                {busy === 'summary' ? 'Preparing…' : 'Download incident summary (PDF)'}
               </button>
               <button className="btn" onClick={() => void download('vcco')} disabled={!!busy}>
                 {busy === 'vcco' ? 'Preparing…' : 'Download NJ compensation draft'}

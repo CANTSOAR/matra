@@ -28,6 +28,17 @@ npm run typecheck
 
 Open http://localhost:5173.
 
+Production build (the API server also serves the built web app, under a strict CSP):
+
+```sh
+npm run build
+NODE_ENV=production MATRA_PEPPER=$(openssl rand -hex 32) npm start   # http://localhost:4000
+npm run e2e          # browser suite against the dev stack
+npm run e2e:prod     # the same suite against the production build
+```
+
+Deploying a demo instance (Docker / Render): see [docs/DEPLOY.md](docs/DEPLOY.md).
+
 ### Demo accounts (created by `npm run seed`)
 
 | Username | Role | Passphrase |
@@ -46,6 +57,8 @@ All names and organizations are fictional and labelled "Demo —". For a guided 
 | `MATRA_DB_PATH` | SQLite database location (default `apps/server/data/matra.db`) |
 | `MATRA_PEPPER` | Server secret for escrow HMACs, at least 32 characters. **Required in production.** In development one is generated in `apps/server/data/pepper.key` |
 | `MATRA_CORS_ORIGINS` | Comma-separated allowed origins (rarely needed; the Vite dev server proxies `/api`) |
+| `MATRA_DEMO_BANNER` | `1` shows a "DEMO — do not enter real information" banner on every page (production serving) |
+| `MATRA_TRUST_PROXY` | Number of reverse-proxy hops to trust for client IPs (rate limiting), e.g. `1` on Render |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | `1` auto-verifies new attorney accounts. **Development only.** Otherwise use `npm run -w @matra/server verify-attorney -- <username>` |
 
 Don't deploy it for real use yet.
@@ -57,7 +70,7 @@ Don't deploy it for real use yet.
 | `packages/crypto` (`@matra/crypto`) | WebCrypto library for browser and Node: key derivation, record encryption, key wrapping for sharing, escrow identifiers, key fingerprints |
 | `packages/shared` (`@matra/shared`) | Shared types and API data contract |
 | `apps/server` (`@matra/server`) | Express + SQLite API. Stores ciphertext, a hash-chain ledger, shares and escrow entries. Seed and attorney-verification scripts |
-| `apps/web` (`@matra/web`) | React client: intake, vault, evidence upload with image metadata stripping, consent sharing, attorney portal, brief PDFs, Quick Exit |
+| `apps/web` (`@matra/web`) | React client: intake, vault, evidence upload with image metadata stripping, consent sharing, attorney portal, incident-summary and VCCO PDFs, data export, Quick Exit |
 | `docs/` | Product, security and legal documents. Start at [docs/README.md](docs/README.md) |
 | `docs/legal/` | Agreement and policy templates. **Not yet lawyer-reviewed** |
 | `compiled_resources/` | Citations and notes on the source material behind the research (third-party full texts are not committed) |
@@ -72,6 +85,7 @@ Don't deploy it for real use yet.
 | [docs/threat-model.md](docs/threat-model.md) | Engineering: known-weakness tracker (supplement to the whitepaper) |
 | [docs/PRD.md](docs/PRD.md) | Requirements, scope, pilot metrics |
 | [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | Presenter's 10-minute demo |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Deploying a demo instance (Docker, Render), production serving and CSP |
 | [docs/ATTORNEY_PARTNER_MOU_TEMPLATE.md](docs/ATTORNEY_PARTNER_MOU_TEMPLATE.md) | MOU template for legal-aid organizations and attorney partners |
 | [docs/legal/README.md](docs/legal/README.md) | Advisor, pilot-partner and attorney terms, trademark policy |
 

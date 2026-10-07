@@ -54,7 +54,7 @@ export function Welcome() {
           <ul style={{ paddingLeft: 18, margin: 0 }} className="stack">
             <li>A vault that locks everything on your device before it’s saved. We can’t read it.</li>
             <li>A tamper-evident seal and timestamp, so you can show your account hasn’t been changed.</li>
-            <li>A way to prepare a clear brief you can bring to police — if and when you choose.</li>
+            <li>A way to prepare an incident summary in your own words, to bring to police or an advocate — if and when you choose.</li>
             <li>A way to share with a verified pro-bono attorney, only when you say yes.</li>
           </ul>
         </section>

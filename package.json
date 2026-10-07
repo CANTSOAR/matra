@@ -3,17 +3,20 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "version": "0.1.0",
-  "description": "Matra — One-Touch Justice Pipeline (MVP)",
+  "description": "Matra \u2014 One-Touch Justice Pipeline (MVP)",
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @matra/server\" \"npm run dev -w @matra/web\"",
+    "build": "npm run build -w @matra/web",
+    "start": "npm run start -w @matra/server",
     "test": "npm test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "seed": "npm run seed -w @matra/server",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:prod": "playwright test -c playwright.prod.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

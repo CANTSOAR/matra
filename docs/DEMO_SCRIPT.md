@@ -34,6 +34,7 @@
 - Walk through a few questions. **Skip one** on purpose: *"Every question is skippable. There's no progress pressure."*
 - Show a sensory prompt ("What do you remember hearing?"). *"These are non-leading prompts, adapted from cognitive-interview research. We want advocates to review and own this script."*
 - Show the **disclosures** section. *"In New Jersey, who she told and when can matter a lot. That's the fresh-complaint doctrine. The app isn't a fresh complaint. The people she told might be witnesses to one. We help her remember who they are."*
+- After her own account, show the short **"A few more details"** part (force, pressure on the neck, alcohol or drugs). *"These closed questions only come after free recall, every one is skippable, and 'not sure' is always an answer. If she says yes or not sure to neck pressure, she gets a gentle note to tell a medical provider, because strangulation can injure without visible marks."*
 - *"There's no AI. Her words are stored exactly as typed."*
 
 ### 3. Quick Exit (2:30-3:00)
@@ -42,7 +43,7 @@
 - Log back in.
 
 ### 4. Seal and ledger (3:00-4:00)
-- Finish and **seal** the record. Show the ledger entry: sequence number, content hash, timestamp, previous hash.
+- Finish and **seal** the record. The intake says "Sealing…" and only says sealed once the server has confirmed it. Show the ledger entry: sequence number, content hash, timestamp, previous hash.
 - Open **Verify ledger** to show `ok`.
 - **Talking point:** *"This is an append-only hash chain. Any change to history breaks it. Today it runs on our server and isn't yet anchored to an outside timestamp authority. That's on the roadmap. So today it shows integrity, not independent proof of time."*
 
@@ -51,10 +52,14 @@
 - Show that the stored copy has its metadata stripped and has a SHA-256 hash.
 - **Talking point:** *"Location is removed before the file leaves her device. That protects her, but it also means the stored copy is a derivative. We tell her to keep the original and her phone. Non-image files aren't stripped, and we warn about that."*
 
-### 6. Incident Summary PDF and VCCO draft (5:00-6:00)
-- Generate the PDF. Point out the verbatim "her own words" sections, the disclosures, the evidence list with hashes, the ledger references, and the "not legal advice / not a sworn statement" notices.
+### 6. "Incident Summary in the Survivor's Own Words" and VCCO draft (5:00-6:00)
+- Open **Incident summary** in the menu and download it (`matra-incident-summary-<date>.pdf`).
+- If asked about the earlier "police brief": *"We renamed it. It's her account in her own words, prepared by her. It isn't legal work product and it isn't prepared for police."*
+- Point out "Survivor answered: …" lines. Her answers to closed questions are quoted as she gave them, including "I'm not sure". Point out the verbatim "her own words" sections, the disclosures, the evidence list with hashes, the ledger references, and the "not legal advice / not a sworn statement" notices.
 - Show the VCCO draft. *"It states the real rules: a police report within 9 months, filing within 5 years, and attorney reimbursement of $275 an hour up to $10,000 only if she's eligible."*
 - **Talking point:** *"It's generated on her device. We never see it. And nothing is ever sent to police automatically."*
+
+- Optional: on **Your vault**, **Download my data** produces one .zip decrypted on her device (records, evidence, manifest with hashes). It warns first that the file is not encrypted.
 
 ### 7. Share to an attorney (6:00-7:00)
 - Choose **`attorney.nj1`** from the verified list. Read the consent text aloud. Select the scope (record plus evidence). Share.
@@ -102,7 +107,7 @@ Yes, and that's a real trade-off. Next phase: private drafts stay on her device 
 Hashes support authentication. They don't overcome hearsay or confrontation objections. We'll need a named custodian, a documented procedure, and external timestamp anchoring before we'd suggest anyone rely on it in court.
 
 **"Is this the unauthorized practice of law?"**
-The software organizes her own words and gives information, not advice. It doesn't suggest charges, elements, or strategy. We're renaming "Police Evidentiary Brief" to an incident summary in her own words for that reason.
+The software organizes her own words and gives information, not advice. It doesn't suggest charges, elements, or strategy. That's why the document is called "Incident Summary in the Survivor's Own Words" (formerly "Police Evidentiary Brief"), with a footer that says it was prepared by the survivor, isn't legal advice, and wasn't reviewed by an attorney unless indicated.
 
 **"How do you make money? Do attorneys pay?"**
 No. Nonprofit, grant-funded. No referral fees and no fee sharing; NJ RPC 5.4, 7.2(c), and 7.3(d) forbid it. Counsel is reviewing whether our directory needs registration under RPC 7.3(e).
@@ -120,7 +125,7 @@ Cryptography can't stop coercion. Quick Exit, auto-lock, and safety planning hel
 Not yet. An independent audit is a gate before any real survivor uses it.
 
 **"Mandatory reporting? Minors? Campus?"**
-Adults only. New Jersey requires *anyone* to report suspected child abuse. For campuses, Matra stays independent of the school, so it never creates Title IX "actual knowledge" or Clery CSA reports. Schools would get de-identified aggregates at most.
+Adults only. Registration requires "I am 18 or older". Anyone who says they're under 18 sees a kind message with Childhelp (1-800-422-4453) and RAINN (800-656-4673), and nothing is saved. It's self-attestation, not verification. New Jersey requires *anyone* to report suspected child abuse. For campuses, Matra stays independent of the school, so it never creates Title IX "actual knowledge" or Clery CSA reports. Schools would get de-identified aggregates at most.
 
 **"How is this different from Callisto?"**
 Callisto pioneered encrypted matching with lawyer counselors and stronger cryptography (OPRF with key splitting), mostly for campuses. Our focus is the documentation-to-attorney pipeline in NJ and NY. Our matching is behind theirs and stays demo-only until it catches up.

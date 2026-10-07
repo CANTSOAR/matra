@@ -36,7 +36,7 @@ Full analysis: [Legal Research Memo](LEGAL_RESEARCH_MEMO.md) · [Security Whitep
 ### Pilot plan (corrected from the original blueprint)
 | Phase | Timing | What happens | Exit criteria |
 |---|---|---|---|
-| **1. Expert review** | Months 0-3 | Advocates review the intake script. Victims'-rights counsel reviews the brief, consent, warnings, and referral structure. Independent security audit. Nonprofit or fiscal-sponsor structure set up. Fictional data only. | Script sign-off. Audit findings fixed. Counsel memo on RPC 7.3 status. |
+| **1. Expert review** | Months 0-3 | Advocates review the intake script. Victims'-rights counsel reviews the incident summary, consent, warnings, and referral structure. Independent security audit. Nonprofit or fiscal-sponsor structure set up. Fictional data only. | Script sign-off. Audit findings fixed. Counsel memo on RPC 7.3 status. |
 | **2. Closed pilot, 1-2 NJ legal-aid partners** | Months 3-9 | Adults (18+) referred by partner advocates. Attorney-first option. Share expiry. **Escrow disabled.** | Safety gates met (0 plaintext incidents). Attorney response ≤3 business days median. Survivor "felt in control" ≥80%. |
 | **3. Expand** | Months 9-15 | Add NY partners and a campus confidential-advocate channel. Institution receives no individual data. External ledger anchoring. Recovery with an advocate. | Second audit. Partner renewal. |
 | **4. Matching (only if justified)** | Month 15+ | Counselor-mediated matching on OPRF/threshold cryptography, after independent review. | Ethics, security, and advocate approval. Published threat model. |

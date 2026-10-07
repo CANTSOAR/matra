@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 /** apps/server/data */
 export const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 
+/** apps/web/dist — the production build of the web app (`npm run build`). */
+export const WEB_DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'dist');
+
 export function resolveDbPath(): string {
   return process.env.MATRA_DB_PATH || path.join(DATA_DIR, 'matra.db');
 }

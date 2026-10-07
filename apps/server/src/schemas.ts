@@ -73,11 +73,12 @@ export const registerRequest = z
     publicKey: rsaPublicJwk,
     wrappedPrivateKey: envelope,
     attorneyProfile: attorneyProfileInput.optional(),
-    adultAffirmation: z.boolean().optional(),
+    /** Survivors must send `true` ("I am 18 or older"); attorneys may omit it. */
+    ageConfirmed18: z.literal(true).optional(),
   })
   .superRefine((r, ctx) => {
-    if (r.role === 'survivor' && r.adultAffirmation !== true)
-      ctx.addIssue({ code: 'custom', path: ['adultAffirmation'], message: 'You must confirm you are 18 or older.' });
+    if (r.role === 'survivor' && r.ageConfirmed18 !== true)
+      ctx.addIssue({ code: 'custom', path: ['ageConfirmed18'], message: 'You must confirm you are 18 or older.' });
     if (r.role === 'attorney' && !r.attorneyProfile)
       ctx.addIssue({ code: 'custom', path: ['attorneyProfile'], message: 'attorneyProfile is required for attorneys' });
     if (r.role === 'survivor' && r.attorneyProfile)

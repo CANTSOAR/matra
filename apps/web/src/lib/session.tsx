@@ -46,8 +46,8 @@ export interface RegisterInput {
   passphrase: string;
   role: Role;
   attorneyProfile?: RegisterRequest['attorneyProfile'];
-  /** Survivors must affirm they are 18+; the server rejects registration otherwise. */
-  adultAffirmed?: boolean;
+  /** Survivors must confirm "I am 18 or older"; the server rejects registration otherwise. */
+  ageConfirmed18?: boolean;
 }
 
 export class SessionError extends Error {
@@ -112,8 +112,8 @@ export function SessionProvider({
   }, []);
 
   const register = useCallback<SessionCtx['register']>(
-    async ({ username, passphrase, role, attorneyProfile, adultAffirmed }, onProgress) => {
-      if (role === 'survivor' && !adultAffirmed) throw new SessionError('Please confirm you are 18 or older.');
+    async ({ username, passphrase, role, attorneyProfile, ageConfirmed18 }, onProgress) => {
+      if (role === 'survivor' && !ageConfirmed18) throw new SessionError('Please confirm you are 18 or older.');
       const kdfSalt = newKdfSalt();
       onProgress?.('deriving');
       const { authKey, masterKey } = await deriveKeys(passphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);
@@ -129,7 +129,7 @@ export function SessionProvider({
         publicKey: identity.publicKey,
         wrappedPrivateKey: identity.wrappedPrivateKey,
         attorneyProfile,
-        ...(role === 'survivor' && { adultAffirmation: true }),
+        ...(role === 'survivor' && { ageConfirmed18: true as const }),
       });
       const s: Session = { token: res.token, user: res.user, masterKey, privateKey: identity.privateKey };
       adopt(s);

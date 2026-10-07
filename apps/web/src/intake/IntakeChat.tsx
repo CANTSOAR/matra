@@ -37,8 +37,12 @@ export interface IntakeChatProps {
   initialDraft?: IntakeDraft;
   /** Called with every change (typing is debounced). The shell encrypts + persists; this module never stores anything. */
   onDraftChange?: (d: IntakeDraft) => void;
-  /** Called once when she seals her account on the review screen. */
-  onComplete: (record: IntakeRecord) => void;
+  /**
+   * Called when she seals her account on the review screen. If it returns a Promise, the intake shows
+   * "Sealing…" until it resolves, and only then says the account is sealed; if it rejects, she sees a calm
+   * error with "Try again" and nothing she wrote is lost.
+   */
+  onComplete: (record: IntakeRecord) => void | Promise<void>;
   /** Called when she chooses to add evidence files. */
   onRequestEvidenceUpload?: () => void;
   /** "Leave this page now" on the safety screen. Default: replace this page with a neutral site. */
@@ -58,7 +62,8 @@ function defaultExit() {
 export function IntakeChat({ initialDraft, onDraftChange, onComplete, onRequestEvidenceUpload, onExit }: IntakeChatProps) {
   const [draft, setDraftState] = useState<IntakeDraft>(() => initialDraft ?? emptyDraft());
   const [breakOpen, setBreakOpen] = useState(false);
-  const [sealed, setSealed] = useState(false);
+  const [sealState, setSealState] = useState<{ phase: 'idle' | 'sealing' | 'sealed'; error?: string }>({ phase: 'idle' });
+  const sealed = sealState.phase === 'sealed';
 
   const draftRef = useRef(draft);
   const onDraftChangeRef = useRef(onDraftChange);
@@ -164,10 +169,21 @@ export function IntakeChat({ initialDraft, onDraftChange, onComplete, onRequestE
 
   // ───────────── sealing ─────────────
 
-  const seal = () => {
+  const sealingRef = useRef(false);
+  const seal = async () => {
+    if (sealingRef.current) return;
+    sealingRef.current = true;
     flush();
-    onComplete(draftToRecord(draftRef.current));
-    setSealed(true);
+    setSealState({ phase: 'sealing' });
+    try {
+      await onComplete(draftToRecord(draftRef.current));
+      setSealState({ phase: 'sealed' });
+    } catch (e) {
+      const detail = e instanceof Error && e.message ? e.message : undefined;
+      setSealState({ phase: 'idle', error: detail ? `${UI.review.sealError} (${detail})` : UI.review.sealError });
+    } finally {
+      sealingRef.current = false;
+    }
   };
 
   // ───────────── render ─────────────
@@ -271,7 +287,13 @@ export function IntakeChat({ initialDraft, onDraftChange, onComplete, onRequestE
 
         <div ref={answerRef} className="intake-answer-area" data-step-id={step.id} data-step-kind={step.kind}>
           {step.kind === 'review' ? (
-            <Review draft={draft} onEdit={(p) => goTo(firstStepOfPhase(draftRef.current, p))} onSeal={seal} />
+            <Review
+              draft={draft}
+              onEdit={(p) => goTo(firstStepOfPhase(draftRef.current, p))}
+              onSeal={() => void seal()}
+              sealing={sealState.phase === 'sealing'}
+              sealError={sealState.error}
+            />
           ) : step.kind === 'info' ? (
             <InfoActions
               step={step}
@@ -489,7 +511,19 @@ function StepInput({
   }
 }
 
-function Review({ draft, onEdit, onSeal }: { draft: IntakeDraft; onEdit: (p: (typeof PHASES)[number]['id']) => void; onSeal: () => void }) {
+function Review({
+  draft,
+  onEdit,
+  onSeal,
+  sealing,
+  sealError,
+}: {
+  draft: IntakeDraft;
+  onEdit: (p: (typeof PHASES)[number]['id']) => void;
+  onSeal: () => void;
+  sealing: boolean;
+  sealError?: string;
+}) {
   return (
     <section className="intake-review" aria-labelledby="intake-review-title">
       <h2 id="intake-review-title" className="intake-review-title" tabIndex={-1} data-intake-focus>
@@ -534,9 +568,20 @@ function Review({ draft, onEdit, onSeal }: { draft: IntakeDraft; onEdit: (p: (ty
       })}
       <div className="intake-seal">
         <p>{UI.review.sealExplain}</p>
-        <button type="button" className="intake-btn intake-btn-primary intake-btn-seal" onClick={onSeal}>
-          {UI.review.seal}
-        </button>
+        {sealError && (
+          <p className="intake-seal-error" role="alert">
+            {sealError}
+          </p>
+        )}
+        {sealing ? (
+          <p className="intake-seal-progress" role="status" aria-live="polite">
+            <strong>{UI.review.sealing}</strong> {UI.review.sealingBody}
+          </p>
+        ) : (
+          <button type="button" className="intake-btn intake-btn-primary intake-btn-seal" onClick={onSeal}>
+            {sealError ? UI.review.retry : UI.review.seal}
+          </button>
+        )}
       </div>
     </section>
   );

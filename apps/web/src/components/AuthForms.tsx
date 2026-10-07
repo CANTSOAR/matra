@@ -32,6 +32,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
   const [show, setShow] = useState(false);
   const [ack, setAck] = useState(false);
   const [adult, setAdult] = useState(false);
+  const [under18, setUnder18] = useState(false);
   const [suggestion, setSuggestion] = useState(() => generatePassphrase());
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,13 +72,24 @@ export function CreateAccountForm({ role }: { role: Role }) {
           acceptsProBono: proBono,
         };
       }
-      await register({ username, passphrase: pass, role, attorneyProfile, adultAffirmed: adult }, setProgress);
+      await register({ username, passphrase: pass, role, attorneyProfile, ageConfirmed18: adult }, setProgress);
       navigate(role === 'attorney' ? '/attorney/cases' : '/vault', { replace: true });
     } catch (err) {
       setError(friendlyError(err));
     } finally {
       setProgress(null);
     }
+  }
+
+  if (under18) {
+    return (
+      <Under18Notice
+        onBack={() => {
+          setUnder18(false);
+          setAdult(false);
+        }}
+      />
+    );
   }
 
   return (
@@ -177,15 +189,30 @@ export function CreateAccountForm({ role }: { role: Role }) {
 
       {role === 'survivor' && (
         <div className="card stack">
-          <h2>Adults only</h2>
+          <h2>Matra is for adults</h2>
           <p className="small muted">
-            Matra is a tool for adults. If you are worried a child or teenager is being abused, please contact the
-            appropriate authorities (in New Jersey, call 1-877-NJ-ABUSE) or 911 if someone is in danger right now.
+            Matra is built for people 18 and older. If you are worried a child or teenager is being hurt, the Childhelp
+            hotline (1-800-422-4453) can help, or call 911 if someone is in danger right now.
           </p>
           <label className="check">
             <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} />
-            <span>I am 18 or older, and I understand Matra is not for reporting child abuse.</span>
+            <span>I am 18 or older.</span>
           </label>
+          <div>
+            <button
+              type="button"
+              className="btn btn-quiet btn-small"
+              onClick={() => {
+                // Nothing typed here has been sent or stored; drop it from memory too.
+                setUsername('');
+                setPass('');
+                setConfirm('');
+                setUnder18(true);
+              }}
+            >
+              I’m under 18
+            </button>
+          </div>
         </div>
       )}
 
@@ -247,6 +274,46 @@ export function CreateAccountForm({ role }: { role: Role }) {
         <Link to={role === 'attorney' ? '/attorney/signin' : '/signin'}>I already have one</Link>
       </div>
     </form>
+  );
+}
+
+/** Shown instead of the registration form to anyone who says they are under 18. Nothing is saved or sent. */
+export function Under18Notice({ onBack }: { onBack: () => void }) {
+  return (
+    <section className="card stack" aria-labelledby="under18-title" role="region">
+      <h2 id="under18-title" tabIndex={-1} data-autofocus>
+        Thank you for telling us
+      </h2>
+      <p>
+        Matra is built for adults, so we can’t create a vault for you here. That isn’t because what happened to you
+        matters less. It matters, and you deserve help that is made for you.
+      </p>
+      <p>These free, private services help young people, any time of day or night:</p>
+      <ul className="stack" style={{ paddingLeft: 18, margin: 0 }}>
+        <li>
+          <strong>Childhelp National Child Abuse Hotline</strong> — call or text{' '}
+          <a href="tel:+18004224453" style={{ whiteSpace: 'nowrap' }}>1-800-422-4453</a>. You can talk to someone without giving your name.
+        </li>
+        <li>
+          <strong>RAINN National Sexual Assault Hotline</strong> — call <a href="tel:+18006564673">800-656-4673</a>, or
+          chat at{' '}
+          <a href="https://online.rainn.org" target="_blank" rel="noopener noreferrer">
+            online.rainn.org
+          </a>
+          .
+        </li>
+        <li>
+          If you are in danger right now, call <a href="tel:911">911</a>.
+        </li>
+      </ul>
+      <p>A school counselor, nurse, or another adult you trust can also help you take the next step.</p>
+      <p className="small muted">Nothing you typed on this page has been saved or sent anywhere.</p>
+      <div>
+        <button type="button" className="btn btn-small" onClick={onBack}>
+          Go back
+        </button>
+      </div>
+    </section>
   );
 }
 

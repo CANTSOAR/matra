@@ -35,7 +35,7 @@
  *  trauma-informed / FETI principles (open invitations, no "why" questions,
  *  sensory and peripheral detail), and self-paced "Seek Then Speak" style intake.
  */
-import type { IncidentType } from '@matra/shared';
+import type { ForceKind, IncidentType, PhysicalEvidenceKind, ReportAgencyType, SubstanceKind } from '@matra/shared';
 import type { IntakeDraft } from './draft';
 import { answerOf } from './draft';
 
@@ -48,6 +48,7 @@ export type PhaseId =
   | 'yourWords'
   | 'remembering'
   | 'beforeAfter'
+  | 'details'
   | 'person'
   | 'people'
   | 'medical'
@@ -71,6 +72,7 @@ export const PHASES: Phase[] = [
   { id: 'yourWords', title: 'In your words' },
   { id: 'remembering', title: 'What you remember' },
   { id: 'beforeAfter', title: 'Before and after' },
+  { id: 'details', title: 'A few more details' },
   { id: 'person', title: 'The person responsible' },
   { id: 'people', title: 'People who know' },
   { id: 'medical', title: 'Medical care' },
@@ -135,6 +137,10 @@ export const UI = {
     sealExplain:
       'Sealing locks this version of your account on this device. It is still only yours. You can add to it later, and this version will stay as it is.',
     seal: 'Seal my account',
+    sealing: 'Sealing your account…',
+    sealingBody: 'Locking it on this device and saving it to your vault. Please keep this page open.',
+    sealError: "We couldn't seal your account just now. Nothing is lost — your answers are still here.",
+    retry: 'Try again',
     sealedTitle: 'Your account is sealed.',
     sealedBody: [
       'It is locked and stored safely. Only you can open it.',
@@ -204,6 +210,43 @@ export const INCIDENT_TYPE_OPTIONS: Array<Option & { value: IncidentType }> = [
   { value: 'domestic_violence', label: 'Harm by a partner or family member' },
   { value: 'image_based_abuse', label: 'Private images shared or threatened' },
   { value: 'other', label: 'Something else' },
+];
+
+export const FORCE_OPTIONS: Array<Option & { value: ForceKind }> = [
+  { value: 'physical_force', label: 'Physical force, like pushing or holding down' },
+  { value: 'restraint', label: 'Being held, tied, or blocked from leaving' },
+  { value: 'threats', label: 'Threats, to me or someone else' },
+  { value: 'weapon', label: 'A weapon, or something used as one' },
+  { value: 'other', label: 'Something else' },
+];
+
+export const SUBSTANCE_OPTIONS: Array<Option & { value: SubstanceKind }> = [
+  { value: 'survivor_alcohol', label: 'I had been drinking' },
+  { value: 'survivor_drugs', label: 'I had taken drugs or medicine' },
+  { value: 'suspected_drugging', label: 'I think I may have been drugged' },
+  { value: 'other_person_substances', label: 'The other person had been drinking or using drugs' },
+  { value: 'unsure', label: "I'm not sure" },
+];
+
+export const PHYSICAL_EVIDENCE_OPTIONS: Array<Option & { value: PhysicalEvidenceKind }> = [
+  { value: 'clothing', label: 'Clothing' },
+  { value: 'bedding', label: 'Bedding or towels' },
+  { value: 'condom', label: 'A condom or wrapper' },
+  { value: 'containers', label: 'Cups, glasses, or bottles' },
+  { value: 'other', label: 'Something else' },
+];
+
+export const AGENCY_TYPE_OPTIONS: Array<Option & { value: ReportAgencyType }> = [
+  { value: 'police', label: 'Police or sheriff' },
+  { value: 'prosecutor', label: "Prosecutor's office" },
+  { value: 'campus', label: 'School or college' },
+  { value: 'employer', label: 'Job or employer' },
+  { value: 'other', label: 'Somewhere else' },
+];
+
+export const CLAIMANT_OPTIONS: Option[] = [
+  { value: 'self', label: 'Yes, for myself' },
+  { value: 'other', label: 'Someone else is applying for me' },
 ];
 
 export const CONTACT_OPTIONS: Option[] = [
@@ -380,6 +423,14 @@ const isNot = (id: string, value: string) => (d: IntakeDraft) => answerOf(d, id)
 const includesAny = (id: string, ...values: string[]) => (d: IntakeDraft) => {
   const a = answerOf(d, id);
   return Array.isArray(a) && a.some((v) => typeof v === 'string' && values.includes(v));
+};
+const answered = (id: string) => (d: IntakeDraft) => {
+  const a = answerOf(d, id);
+  return Array.isArray(a) ? a.length > 0 : typeof a === 'string' && a.trim() !== '';
+};
+const formFieldFilled = (id: string, key: string) => (d: IntakeDraft) => {
+  const a = answerOf(d, id);
+  return !!a && typeof a === 'object' && !Array.isArray(a) && !('mode' in a) && ((a as Record<string, string>)[key] ?? '').trim() !== '';
 };
 const PERSON_IDENTIFIER_KEYS = ['name', 'email', 'phone', 'handle', 'otherId'];
 const anyPersonHasIdentifier = (d: IntakeDraft) => {
@@ -730,6 +781,94 @@ export const STEPS: ScriptStep[] = [
     options: INCIDENT_TYPE_OPTIONS,
   },
 
+  // ── (e2) A few specific details — only AFTER her own account ──
+  {
+    id: 'details.intro',
+    phase: 'details',
+    kind: 'info',
+    say: [
+      'Next are a few short questions about specific things. A nurse, advocate, or lawyer might ask about them later.',
+      'Some of them may be hard to read. You can skip any question, or this whole part.',
+    ],
+    offerSkipSection: true,
+  },
+  {
+    id: 'details.force',
+    phase: 'details',
+    kind: 'multi',
+    say: ['Were any of these part of what happened?', 'Choose any that fit, or none.'],
+    label: 'Force, threats, or weapons',
+    hint: 'Choose any, or none.',
+    options: FORCE_OPTIONS,
+  },
+  {
+    id: 'details.forceWords',
+    phase: 'details',
+    kind: 'longtext',
+    showIf: answered('details.force'),
+    say: ['If you want, describe it in your own words.'],
+    label: 'Force, threats, or weapons — in your words',
+  },
+  {
+    id: 'details.strangulation',
+    phase: 'details',
+    kind: 'choice',
+    say: ['Did anyone put their hands, arm, or anything else around your neck, or press on your neck or throat?'],
+    label: 'Pressure on your neck or throat',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'details.strangulationInfo',
+    phase: 'details',
+    kind: 'info',
+    showIf: is('details.strangulation', 'yes', 'unsure'),
+    say: [
+      'Thank you for telling me.',
+      'Pressure on the neck can cause injuries inside the body that you cannot see. Sometimes signs show up hours or days later.',
+      'If you can, please mention it to a doctor or nurse, even if you feel okay.',
+    ],
+    showResources: true,
+  },
+  {
+    id: 'details.substances',
+    phase: 'details',
+    kind: 'multi',
+    say: [
+      "Some people were drinking or think they may have been drugged. Nothing you share here changes that it wasn't your fault.",
+      'Were alcohol, drugs, or medicine part of that day or night, for anyone? Choose any that fit, or none.',
+    ],
+    label: 'Alcohol or drugs',
+    hint: 'Choose any, or none.',
+    options: SUBSTANCE_OPTIONS,
+  },
+  {
+    id: 'details.incapacitated',
+    phase: 'details',
+    kind: 'choice',
+    showIf: answered('details.substances'),
+    say: ['Were there times you could not move, speak, or remember what was happening, or times you were asleep or passed out?'],
+    label: 'Times you could not move, speak, or remember',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'details.toxInfo',
+    phase: 'details',
+    kind: 'info',
+    showIf: includesAny('details.substances', 'suspected_drugging', 'unsure'),
+    say: [
+      'Something you may want to know: if this happened in the last few days, a hospital can test for drugs.',
+      'Some drugs leave the body quickly, so sooner is better. The hotline at 1-800-656-4673 can help you find a hospital.',
+    ],
+  },
+  {
+    id: 'details.substancesWords',
+    phase: 'details',
+    kind: 'longtext',
+    showIf: answered('details.substances'),
+    say: ['Is there anything you want to add about this, in your own words?'],
+    label: 'Alcohol or drugs — in your words',
+  },
+
   // ── (f) The person / people responsible ──
   {
     id: 'person.intro',
@@ -758,7 +897,11 @@ export const STEPS: ScriptStep[] = [
       { key: 'phone', label: 'Their phone number', type: 'tel' },
       { key: 'handle', label: 'Their social media name or handle', type: 'text', hint: 'For example: @name' },
       { key: 'platform', label: 'Which app or site?', type: 'select', options: PLATFORM_OPTIONS },
-      { key: 'otherId', label: 'Anything else that identifies them', type: 'text', hint: 'For example: a username, license plate, or where they work.' },
+      { key: 'otherId', label: 'Anything else that identifies them', type: 'text', hint: 'For example: a username or a nickname.' },
+      { key: 'address', label: 'Where they live, if you know', type: 'text' },
+      { key: 'workplace', label: 'Where they work or go to school', type: 'text' },
+      { key: 'vehicle', label: 'Their car or vehicle', type: 'text', hint: 'For example: color, make, or license plate.' },
+      { key: 'whereabouts', label: 'Where they might be now', type: 'text' },
     ],
   },
   {
@@ -857,6 +1000,24 @@ export const STEPS: ScriptStep[] = [
     options: YES_NO_UNSURE,
   },
   {
+    id: 'medical.kit',
+    phase: 'medical',
+    kind: 'form',
+    showIf: is('medical.exam', 'yes'),
+    say: ['If you know, a few details about the exam. "Not sure" is okay for any of them.'],
+    label: 'About the exam',
+    fields: [
+      { key: 'toxicology', label: 'Did they test for alcohol or drugs?', type: 'choice', options: YES_NO_UNSURE },
+      {
+        key: 'fiveYearHold',
+        label: 'Was the kit kept without a police report? (sometimes called an anonymous or "Five-Year Hold" kit)',
+        type: 'choice',
+        options: YES_NO_UNSURE,
+      },
+      { key: 'reported', label: 'Was the kit reported to police?', type: 'choice', options: YES_NO_UNSURE },
+    ],
+  },
+  {
     id: 'medical.examInfo',
     phase: 'medical',
     kind: 'info',
@@ -894,8 +1055,10 @@ export const STEPS: ScriptStep[] = [
     addLabel: 'Add another report',
     fields: [
       { key: 'agency', label: 'Who you reported to', type: 'text', hint: "For example: 'city police' or 'my school's Title IX office'." },
+      { key: 'agencyType', label: 'What kind of place was it?', type: 'select', options: AGENCY_TYPE_OPTIONS },
       { key: 'date', label: 'About when', type: 'text' },
       { key: 'reportNumber', label: 'Report or case number, if you have it', type: 'text' },
+      { key: 'prosecutorFileNumber', label: "Prosecutor's file number, if you have it", type: 'text' },
       { key: 'outcome', label: 'What happened after', type: 'longtext' },
     ],
   },
@@ -924,6 +1087,24 @@ export const STEPS: ScriptStep[] = [
     label: 'Add evidence files',
     uploadLabel: 'Add files',
     laterLabel: 'Maybe later',
+  },
+  {
+    id: 'evidence.physical',
+    phase: 'evidence',
+    kind: 'multi',
+    say: ['Do you still have any physical things from that day or night?', 'Choose any, or none. You do not need to have kept anything.'],
+    label: 'Physical things you kept',
+    hint: 'Choose any, or none.',
+    options: PHYSICAL_EVIDENCE_OPTIONS,
+  },
+  {
+    id: 'evidence.physicalNotes',
+    phase: 'evidence',
+    kind: 'longtext',
+    showIf: answered('evidence.physical'),
+    say: ['If you want, write down where they are now and how they are kept.'],
+    label: 'Where they are kept',
+    hint: 'A paper bag is best for clothing. Try not to wash anything you want to keep.',
   },
 
   // ── (k) Safety & protective order ──
@@ -987,6 +1168,26 @@ export const STEPS: ScriptStep[] = [
     label: 'Has health insurance',
     options: YES_NO_UNSURE,
   },
+  {
+    id: 'costs.insuranceCarrier',
+    phase: 'costs',
+    kind: 'text',
+    showIf: is('costs.insurance', 'yes'),
+    say: ['What is the name of your insurance company, if you know it?'],
+    label: 'Insurance company',
+  },
+  {
+    id: 'costs.work',
+    phase: 'costs',
+    kind: 'form',
+    showIf: formFieldFilled('costs.amounts', 'wages'),
+    say: ['You mentioned lost pay. If you want, add where you work and about which days you missed.'],
+    label: 'Work you missed',
+    fields: [
+      { key: 'employer', label: 'Where you work', type: 'text' },
+      { key: 'datesMissed', label: 'About which days you missed', type: 'text', hint: "For example: 'Aug 17 to Aug 30'." },
+    ],
+  },
 
   // ── (m) What she wants ──
   {
@@ -1024,12 +1225,97 @@ export const STEPS: ScriptStep[] = [
     options: YES_NO_UNSURE,
   },
   {
+    id: 'comp.intro',
+    phase: 'wishes',
+    kind: 'info',
+    showIf: is('goals.compensation', 'yes', 'unsure'),
+    say: [
+      'The compensation form asks for a few more details. They are only used for that form, not for your account.',
+      'You can skip any of them and add them later.',
+    ],
+    offerSkipSection: false,
+  },
+  {
+    id: 'comp.mailing',
+    phase: 'wishes',
+    kind: 'form',
+    showIf: is('goals.compensation', 'yes', 'unsure'),
+    say: ['What mailing address is safe for letters about compensation?'],
+    label: 'Safe mailing address',
+    fields: [
+      { key: 'street', label: 'Street address', type: 'text' },
+      { key: 'city', label: 'City or town', type: 'text' },
+      { key: 'state', label: 'State', type: 'select', options: US_STATES },
+      { key: 'zip', label: 'ZIP code', type: 'text' },
+    ],
+  },
+  {
+    id: 'comp.claimant',
+    phase: 'wishes',
+    kind: 'choice',
+    showIf: is('goals.compensation', 'yes', 'unsure'),
+    say: ['Are you applying for yourself?'],
+    label: 'Applying for yourself',
+    options: CLAIMANT_OPTIONS,
+  },
+  {
+    id: 'comp.claimantDetails',
+    phase: 'wishes',
+    kind: 'text',
+    showIf: (d) => is('goals.compensation', 'yes', 'unsure')(d) && is('comp.claimant', 'other')(d),
+    say: ['Who is applying for you, and how do you know them?'],
+    label: 'Person applying for you',
+  },
+  {
+    id: 'comp.altContact',
+    phase: 'wishes',
+    kind: 'form',
+    showIf: is('goals.compensation', 'yes', 'unsure'),
+    say: ['The form asks for one more person the office can contact if they cannot reach you. Only add someone you trust.'],
+    label: 'Another person to contact',
+    fields: [
+      { key: 'name', label: 'Their name', type: 'text' },
+      { key: 'relationship', label: 'How you know them', type: 'text' },
+      { key: 'phone', label: 'Their phone', type: 'tel' },
+      { key: 'email', label: 'Their email', type: 'email' },
+    ],
+  },
+  {
+    id: 'comp.goodCause',
+    phase: 'wishes',
+    kind: 'longtext',
+    showIf: is('goals.compensation', 'yes', 'unsure'),
+    say: [
+      'If it has been a while since this happened, the form asks about the timing of a police report or of this application.',
+      'Is there anything you want the compensation office to know about that? Many people wait. Any reason is okay to share.',
+    ],
+    label: 'About the timing',
+    hint: 'Only if it applies to you.',
+  },
+  {
     id: 'goals.protective',
     phase: 'wishes',
     kind: 'choice',
     say: ['Would you like help asking for a protective order?'],
     label: 'Help with a protective order',
     options: YES_NO_UNSURE,
+  },
+  {
+    id: 'wishes.access',
+    phase: 'wishes',
+    kind: 'form',
+    say: ['If you talk with someone later, like an advocate or a lawyer, is there anything that would help?'],
+    label: 'Interpreter or other help',
+    fields: [
+      { key: 'interpreter', label: 'Would you like an interpreter?', type: 'choice', options: YES_NO_UNSURE },
+      { key: 'language', label: 'Which language?', type: 'text' },
+      {
+        key: 'otherNeeds',
+        label: 'Anything else that would help',
+        type: 'longtext',
+        hint: 'For example: wheelchair access, sign language, large print, or having an advocate with you.',
+      },
+    ],
   },
 
   // ── (n) Review ──

@@ -44,6 +44,7 @@ export const sampleRecord: IntakeRecord = {
     safeContactNotes: 'Text first. Please call only after 6pm on weekdays. Do not leave a voicemail — my roommate sometimes checks my phone.',
     residenceState: 'NJ',
     residenceCounty: 'Middlesex',
+    accessibility: { interpreter: 'no', otherNeeds: 'I would like an advocate with me if I meet with anyone in person.' },
   },
   incident: {
     dateStart: '2026-08-14',
@@ -54,6 +55,13 @@ export const sampleRecord: IntakeRecord = {
     jurisdiction: { state: 'NJ', county: 'Middlesex', city: 'New Brunswick' },
     incidentTypes: ['sexual_assault'],
     isOngoing: false,
+    force: { kinds: ['physical_force', 'restraint'], description: 'He pushed me onto the couch and held both of my wrists down with one hand.' },
+    strangulation: 'no',
+    substances: {
+      kinds: ['survivor_alcohol'],
+      suspectedIncapacitation: 'no',
+      description: 'I had two glasses of wine at dinner over about three hours.',
+    },
   },
   narrative: {
     freeRecall: NARRATIVE,
@@ -81,6 +89,8 @@ export const sampleRecord: IntakeRecord = {
         { kind: 'social_handle', platform: 'Instagram', value: '@derek.lawson.demo' },
       ],
       escrowOptIn: true,
+      workplace: 'Same marketing agency, New Brunswick office (fictional)',
+      vehicle: 'Dark gray sedan',
     },
   ],
   witnesses: [
@@ -113,12 +123,16 @@ export const sampleRecord: IntakeRecord = {
     facility: 'Raritan Valley General Hospital Emergency Department (fictional)',
     date: '2026-08-15',
     forensicExamCompleted: true,
+    toxicologyTest: 'no',
+    fiveYearHoldKit: 'yes',
+    kitReportedToPolice: 'no',
     injuries: 'Bruising on both wrists. The nurse photographed them.',
   },
   priorReports: [
     {
       id: 'r1',
       agency: 'Agency HR department (internal complaint)',
+      agencyType: 'employer',
       date: '2026-08-24',
       reportNumber: 'HR-2026-0311',
       outcome: 'Open — HR said they are "looking into it"',
@@ -146,8 +160,9 @@ export const sampleRecord: IntakeRecord = {
       description: 'Receipt for my ride to the hospital', capturedAt: '2026-08-15', metadataStripped: false,
     },
   ],
+  physicalEvidence: { kinds: ['clothing'], description: 'The clothes I wore that night are in a paper bag in my closet. I have not washed them.' },
   safety: {
-    inImmediateDanger: false,
+    immediateSafety: 'safe',
     perpetratorHasAccess: true,
     wantsProtectiveOrder: 'unsure',
     notes: 'He knows where I live because he drove me home. We work on the same floor.',
@@ -158,6 +173,14 @@ export const sampleRecord: IntakeRecord = {
     lostWages: 'About $2,600 so far (unpaid leave since August 21)',
     otherCosts: '$38 rideshare to the hospital; $210 to change my locks',
     hasInsurance: 'yes',
+  },
+  compensation: {
+    mailingAddress: { street: 'PO Box 0000 (fictional)', city: 'New Brunswick', state: 'NJ', zip: '08901' },
+    claimant: 'self',
+    alternateContact: { name: 'Ada Okafor', relationship: 'Sister', phone: '(732) 555-0177' },
+    insuranceCarrier: 'Example Health Plan (fictional)',
+    employer: 'Example Marketing Agency (fictional)',
+    workDatesMissed: 'August 17–18, and every workday since August 21',
   },
   goals: { policeReport: 'undecided', attorney: 'yes', compensation: 'yes', protectiveOrder: 'undecided' },
 };
@@ -175,7 +198,7 @@ export const minimalRecord: IntakeRecord = {
   medical: { soughtCare: false },
   priorReports: [],
   evidence: [],
-  safety: { inImmediateDanger: false },
+  safety: { immediateSafety: undefined },
   financialImpact: {},
   goals: { policeReport: 'undecided', attorney: 'undecided', compensation: 'undecided', protectiveOrder: 'undecided' },
 };

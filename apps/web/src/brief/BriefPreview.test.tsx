@@ -6,7 +6,7 @@ import { sampleBriefOptions, sampleRecord } from './fixtures';
 describe('BriefPreview', () => {
   it('renders the narrative verbatim and all sections', () => {
     const { container } = render(<BriefPreview record={sampleRecord} opts={sampleBriefOptions} />);
-    expect(screen.getByText('Victim Statement & Evidentiary Summary')).toBeInTheDocument();
+    expect(screen.getByText('Incident Summary in the Survivor’s Own Words')).toBeInTheDocument();
     const quotes = container.querySelectorAll('.brief-verbatim-text');
     expect(Array.from(quotes).some((q) => q.textContent === sampleRecord.narrative.freeRecall)).toBe(true);
     expect(container.querySelector('.brief-section--integrity')).not.toBeNull();

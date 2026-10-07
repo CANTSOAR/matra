@@ -42,7 +42,7 @@ export async function registerUser(
   app: express.Express,
   username: string,
   role: Role = 'survivor',
-  opts: { verify?: boolean; profile?: RegisterRequest['attorneyProfile']; adultAffirmation?: boolean | null } = {},
+  opts: { verify?: boolean; profile?: RegisterRequest['attorneyProfile']; ageConfirmed18?: boolean | null } = {},
 ): Promise<TestUser> {
   const passphrase = `pass-${username}`;
   const kdfSalt = newKdfSalt();
@@ -56,7 +56,7 @@ export async function registerUser(
     kdfIterations: TEST_ITERATIONS,
     publicKey: id.publicKey,
     wrappedPrivateKey: id.wrappedPrivateKey,
-    ...(role === 'survivor' && opts.adultAffirmation !== null && { adultAffirmation: opts.adultAffirmation ?? true }),
+    ...(role === 'survivor' && opts.ageConfirmed18 !== null && { ageConfirmed18: (opts.ageConfirmed18 ?? true) as true }),
     ...(role === 'attorney' && { attorneyProfile: opts.profile ?? defaultProfile }),
   };
   const res = await request(app).post('/api/auth/register').send(body);

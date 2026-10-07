@@ -1,0 +1,15 @@
+.git
+**/node_modules
+**/dist
+**/*.db
+**/*.db-*
+apps/server/data
+e2e
+test-results
+playwright-report
+compiled_resources
+docs
+reasons.txt
+.env
+.env.*
+**/.DS_Store

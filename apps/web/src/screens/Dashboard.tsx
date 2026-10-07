@@ -3,14 +3,17 @@ import { Link } from 'react-router-dom';
 import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { escrowLabel, finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes } from '../lib/vault';
+import { escrowLabel, finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { buildDataExport, downloadBytes } from '../lib/export';
 
 const AUDIT_TEXT: Record<string, string> = {
   'account.created': 'Vault created',
   'auth.login': 'Signed in',
   'auth.logout': 'Signed out',
   'auth.login_failed': 'Someone tried to sign in with the wrong passphrase',
-  'record.created': 'You sealed a record',
+  // The server can't tell a draft save from a seal (it only sees ciphertext) — see describeAudit for how the
+  // client refines this using records it can decrypt.
+  'record.created': 'You saved to your vault',
   'blob.uploaded': 'Evidence added to your vault',
   'escrow.created': 'You sealed a name in escrow',
   'share.created': 'You shared your file with an attorney',
@@ -24,7 +27,17 @@ const AUDIT_TEXT: Record<string, string> = {
   'share.revoked_by_survivor': 'A client revoked your access',
 };
 
-export function describeAudit(e: AuditEvent): string {
+/**
+ * Human label for an audit event. `kindBySeq` maps ledger sequence numbers of records she can decrypt to what
+ * they are; it lets the client say "sealed" vs "draft" without the server ever knowing the difference.
+ */
+export function describeAudit(e: AuditEvent, kindBySeq?: Map<number, OpenedRecord['payload']['kind']>): string {
+  if (e.action === 'record.created' && kindBySeq) {
+    const seq = Number(/ledger #(\d+)/.exec(e.detail ?? '')?.[1]);
+    const kind = Number.isFinite(seq) ? kindBySeq.get(seq) : undefined;
+    if (kind === 'final') return 'You sealed your account';
+    if (kind === 'draft') return 'You saved a draft to your vault';
+  }
   if (AUDIT_TEXT[e.action]) return AUDIT_TEXT[e.action];
   const a = e.action.toLowerCase();
   if (/bundle|opened|viewed|access(ed)?$/.test(a)) return 'An attorney opened your shared file';
@@ -33,7 +46,7 @@ export function describeAudit(e: AuditEvent): string {
   if (/share/.test(a)) return 'You shared your file with an attorney';
   if (/escrow/.test(a)) return 'You sealed a name in escrow';
   if (/blob|evidence/.test(a)) return 'Evidence added to your vault';
-  if (/record/.test(a)) return 'You sealed a record';
+  if (/record/.test(a)) return 'You saved to your vault';
   if (/register|signup|account\.create/.test(a)) return 'Vault created';
   if (/login|signin/.test(a)) return 'Signed in';
   if (/logout/.test(a)) return 'Signed out';
@@ -64,6 +77,7 @@ export function Dashboard() {
   const latestFinal = latestOf(records, 'final');
   const evidenceMeta = mergeEvidence(savedDraft?.payload.evidence, latestFinal?.payload.record?.evidence, working.data?.evidence);
   const metaByBlob = new Map(evidenceMeta.filter((e) => e.blobId).map((e) => [e.blobId!, e]));
+  const kindBySeq = new Map(records.filter((r) => r.ledgerEntry).map((r) => [r.ledgerEntry!.seq, r.payload.kind]));
 
   return (
     <div className="stack-lg">
@@ -191,6 +205,8 @@ export function Dashboard() {
         )}
       </section>
 
+      <ExportCard />
+
       {/* ── activity ── */}
       <section className="card stack" aria-labelledby="activity">
         <h2 id="activity">Activity</h2>
@@ -204,7 +220,7 @@ export function Dashboard() {
               .slice(0, 25)
               .map((e) => (
                 <li key={e.id}>
-                  <span>{describeAudit(e)}</span>
+                  <span>{describeAudit(e, kindBySeq)}</span>
                   <span className="small muted">{formatDate(e.at)}</span>
                 </li>
               ))}
@@ -212,6 +228,68 @@ export function Dashboard() {
         )}
       </section>
     </div>
+  );
+}
+
+/** "Download my data": decrypts everything on this device into one .zip, after a clear warning. */
+function ExportCard() {
+  const { api, session } = useRequiredSession();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    try {
+      const out = await buildDataExport(api, session.masterKey, session.user.username);
+      downloadBytes(out.zip, out.fileName, 'application/zip');
+      setDone(
+        `Downloaded ${out.fileName}: ${out.recordCount} saved version(s) and ${out.evidenceCount} evidence file(s).` +
+          (out.problems.length ? ` ${out.problems.length} file(s) had a problem — see evidence/manifest.json.` : ''),
+      );
+      setConfirming(false);
+    } catch (e) {
+      setError(friendlyError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="card stack" aria-labelledby="your-data">
+      <div className="section-title">
+        <h2 id="your-data">Your data</h2>
+        {!confirming && (
+          <button className="btn btn-small" type="button" onClick={() => setConfirming(true)}>
+            Download my data
+          </button>
+        )}
+      </div>
+      <p className="small muted">
+        Get a copy of everything in your vault — every version of your account, your drafts, and your evidence files — as
+        one .zip file. It is unlocked on this device; nothing extra is sent to our server.
+      </p>
+      {confirming && (
+        <div className="card warn stack" role="note">
+          <p>
+            <strong>The downloaded file is not encrypted.</strong> Anyone who can open this device, or the file, can read
+            everything in it. If someone else uses this device, consider downloading it somewhere safer, and delete it
+            (and empty the trash) when you’re done.
+          </p>
+          <div className="row">
+            <button className="btn btn-primary btn-small" type="button" onClick={() => void run()} disabled={busy}>
+              {busy ? 'Unlocking and packaging…' : 'I understand — download'}
+            </button>
+            <button className="btn btn-small" type="button" onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {done && <p role="status">{done}</p>}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </section>
   );
 }
 

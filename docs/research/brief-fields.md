@@ -108,7 +108,7 @@ Overall **$25,000** per claim (+ up to $35,000 supplemental for catastrophic inj
 | 9. Medical / forensic | | `medical.{soughtCare,facility,date,forensicExamCompleted,injuries}` | |
 | 10. Prior reports | | `priorReports[].{agency,date,reportNumber,outcome}` | |
 | 11. Evidence inventory | | `evidence[].{fileName,kind,description,capturedAt,sizeBytes,sha256,metadataStripped,mimeType}` | |
-| 12. Safety | | `safety.{inImmediateDanger,perpetratorHasAccess,wantsProtectiveOrder,notes}`, `incident.isOngoing` | |
+| 12. Safety | | `safety.{immediateSafety,perpetratorHasAccess,wantsProtectiveOrder,notes}`, `incident.isOngoing` | |
 | 13. Survivor's stated goals | | `goals.*` | |
 | 14. Integrity & chain of custody | | `opts.recordId`, `opts.recordContentHash`, `opts.ledgerEntry.{seq,id,type,subjectId,contentHash,timestamp,prevHash,entryHash}` | |
 | 15. Attestation | | — (blank signature lines) | |

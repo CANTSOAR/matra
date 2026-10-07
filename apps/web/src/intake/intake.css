@@ -501,6 +501,15 @@
 .intake-seal p {
   margin-top: 0;
 }
+.intake-seal-error {
+  border-left: 4px solid #b4532a;
+  padding: 8px 12px;
+  background: color-mix(in srgb, #b4532a 8%, var(--_surface));
+  border-radius: 6px;
+}
+.intake-seal-progress {
+  margin-bottom: 0;
+}
 .intake-sealed {
   display: flex;
   flex-direction: column;

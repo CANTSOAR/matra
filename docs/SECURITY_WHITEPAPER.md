@@ -121,7 +121,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 **Before any real-data pilot (blocking)**
 1. **Escrow redesign:** ~~hide match status from users~~ (**done**: survivors always see "sealed"; matches are released only as counts to the verified attorney with an active share; no `escrow.matched` ledger entries). Still to do: a vetted counselor who can reach both parties, account verification, and rate limiting. Evaluate an **OPRF** (RFC 9497) with a **threshold or federated key**, so that no single party, including Matra, can test identifiers offline (Callisto, Rajan et al. 2018). Until then, keep escrow **demo-only**.
 2. **Independent security audit** of the crypto library, server, and web client. Commission a penetration test.
-3. **Client integrity:** published build hashes, SRI, a strict CSP, and an attorney key-fingerprint check in the UI.
+3. **Client integrity:** published build hashes, SRI, a strict CSP (**done** for production serving: same-origin only, no inline script or eval; see DEPLOY.md), and an attorney key-fingerprint check in the UI.
 4. **Share expiry** (VAWA "reasonably time-limited" consent), MFA or passkeys for attorneys, and a documented attorney-verification procedure.
 5. **Metadata minimization:** encrypt the survivor alias, pad sizes, set log retention, and truncate IPs.
 6. **Incident response plan** and breach-notification procedure (N.J.S.A. 56:8-163; NY GBL 899-aa).

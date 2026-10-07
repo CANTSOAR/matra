@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { IntakeRecord } from '@matra/shared';
 import type { BriefBlock, BriefOptions, BriefSection } from './types';
-import { briefSections } from './sections';
+import { INCIDENT_SUMMARY_TITLE, briefSections } from './sections';
 import { NOT_PROVIDED } from './format';
 import './brief.css';
 
@@ -13,16 +13,16 @@ export interface BriefPreviewProps {
   title?: string;
 }
 
-/** On-screen version of the Police Evidentiary Brief. Same content as the PDF; text is shown exactly as entered. */
+/** On-screen version of the Incident Summary in the Survivor's Own Words. Same content as the PDF; text is shown exactly as entered. */
 export function BriefPreview({ record, opts, sections, title }: BriefPreviewProps) {
   const secs = useMemo(() => sections ?? briefSections(record, opts ?? {}), [record, opts, sections]);
   let n = 0;
   return (
-    <article className="brief-doc" aria-label={title ?? 'Victim Statement and Evidentiary Summary'}>
+    <article className="brief-doc" aria-label={title ?? INCIDENT_SUMMARY_TITLE}>
       <header className="brief-header">
         <div className="brief-kicker">{sections ? 'Prepared with Matra' : 'Prepared with Matra · At the direction of the survivor'}</div>
         <div className="brief-tag">{sections ? 'Draft' : 'Confidential'}</div>
-        <h1 className="brief-title">{title ?? 'Victim Statement & Evidentiary Summary'}</h1>
+        <h1 className="brief-title">{title ?? INCIDENT_SUMMARY_TITLE}</h1>
         {!sections && <p className="brief-subtitle">Not a sworn statement unless signed by the survivor.</p>}
       </header>
       {secs.map((sec, i) => {

@@ -155,6 +155,19 @@ a {
   }
 }
 
+/* ───────── demo instance banner (MATRA_DEMO_BANNER=1) ───────── */
+.demo-banner {
+  background: #7a1f1f;
+  color: #ffffff;
+  padding: 10px 16px;
+  padding-right: 200px; /* clear of Quick exit */
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+@media (max-width: 480px) {
+  .demo-banner { padding-right: 112px; font-size: 0.875rem; }
+}
+
 /* ───────── layout ───────── */
 .app-header {
   display: flex;

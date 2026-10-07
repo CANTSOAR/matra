@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import type { IntakeRecord } from '@matra/shared';
-import { briefSections, generatePoliceBrief, generateVccoDraft, vccoSections } from './index';
+import { briefSections, generateIncidentSummary, generatePoliceBrief, generateVccoDraft, incidentSummaryFilename, vccoSections } from './index';
 import type { BriefSection } from './types';
 import { minimalRecord, sampleBriefOptions, sampleRecord } from './fixtures';
 import { makeSanitizer, wrapText } from './pdf/text';
@@ -66,6 +66,13 @@ describe('briefSections', () => {
       r.priorReports[0].agency, r.priorReports[0].reportNumber, r.priorReports[0].outcome,
       ...r.evidence.flatMap((e) => [e.fileName, e.sha256, e.description]), '2.7 MB',
       r.safety.notes,
+      r.incident.force!.description, 'Physical force', 'Held, restrained or blocked from leaving',
+      r.incident.substances!.description, 'Survivor had been drinking',
+      r.perpetrators[0].workplace, r.perpetrators[0].vehicle,
+      r.physicalEvidence!.description, 'Clothing', 'Employer',
+      r.survivor.accessibility!.otherNeeds,
+      'Survivor answered: Yes, I’m safe',
+      'Prepared by the survivor using Matra. Not legal advice. Not reviewed by an attorney unless indicated.',
       sampleBriefOptions.recordId, sampleBriefOptions.recordContentHash, sampleBriefOptions.preparedFor,
       sampleBriefOptions.ledgerEntry.entryHash, sampleBriefOptions.ledgerEntry.prevHash, String(sampleBriefOptions.ledgerEntry.seq),
       sampleBriefOptions.ledgerEntry.timestamp,
@@ -82,6 +89,48 @@ describe('briefSections', () => {
     expect(v && v.kind === 'verbatim' && v.text).toBe(weird);
     const v2 = briefSections(sampleRecord).find((s) => s.id === 'narrative')!.blocks.find((b) => b.kind === 'verbatim');
     expect(v2 && v2.kind === 'verbatim' && v2.text).toBe(sampleRecord.narrative.freeRecall);
+  });
+
+  it('never prints compensation-only details (mailing address, alternate contact, employer)', () => {
+    const t = joined(briefSections(sampleRecord, sampleBriefOptions));
+    expect(t).not.toContain(sampleRecord.compensation!.mailingAddress!.street!);
+    expect(t).not.toContain(sampleRecord.compensation!.alternateContact!.phone!);
+    expect(t).not.toContain(sampleRecord.compensation!.insuranceCarrier!);
+  });
+
+  it('prints her safety answer as given, with a warning for "No" and "I’m not sure"', () => {
+    const at = (immediateSafety: IntakeRecord['safety']['immediateSafety']) =>
+      joined(briefSections({ ...sampleRecord, safety: { ...sampleRecord.safety, immediateSafety } }));
+    expect(at('unsure')).toContain('Survivor answered: I’m not sure');
+    expect(at('unsure')).toContain('answered “I’m not sure” to “Are you safe right now?”');
+    expect(at('not_safe')).toContain('Survivor answered: No');
+    expect(at('not_safe')).toContain('answered “No” to “Are you safe right now?”');
+    expect(at('safe')).not.toContain('to “Are you safe right now?”.');
+    expect(at(undefined)).not.toContain('Survivor answered: Yes, I’m safe');
+    // records sealed before immediateSafety existed
+    const legacy = { ...sampleRecord, safety: { inImmediateDanger: true } as unknown as IntakeRecord['safety'] };
+    expect(joined(briefSections(legacy))).toContain('Survivor answered: No');
+  });
+
+  it('adds the strangulation medical note only for "yes" / "not sure"', () => {
+    const note = 'can cause internal injury';
+    const w = (strangulation: IntakeRecord['incident']['strangulation']) =>
+      joined(briefSections({ ...sampleRecord, incident: { ...sampleRecord.incident, strangulation } }));
+    expect(w('yes')).toContain(note);
+    expect(w('unsure')).toContain(note);
+    expect(w('unsure')).toContain('Survivor answered: I’m not sure');
+    expect(w('no')).not.toContain(note);
+  });
+
+  it('does not print the name twice for the person responsible', () => {
+    const rec: IntakeRecord = {
+      ...sampleRecord,
+      perpetrators: [{ ...sampleRecord.perpetrators[0], name: 'J. Doe', identifiers: [{ kind: 'full_name', value: 'J. Doe' }, { kind: 'email', value: 'j@example.com' }] }],
+    };
+    const sec = briefSections(rec).find((s) => s.id === 'perpetrators')!;
+    const rows = sec.blocks.flatMap((b) => (b.kind === 'rows' ? b.rows : []));
+    expect(rows.filter((r) => r.value === 'J. Doe')).toHaveLength(1);
+    expect(rows.map((r) => r.label)).not.toContain('Full name');
   });
 
   it('never mentions escrow matching', () => {
@@ -156,6 +205,11 @@ describe('PDF generation', () => {
     expect(await pageCount(bytes)).toBeGreaterThan(30);
   }, 60_000);
 
+  it('exposes the incident-summary alias and filename', async () => {
+    expect(generateIncidentSummary).toBe(generatePoliceBrief);
+    expect(incidentSummaryFilename(new Date('2026-10-07T12:00:00Z'))).toBe('matra-incident-summary-2026-10-07.pdf');
+  });
+
   it('generates the NJ VCCO draft for sample and minimal records', async () => {
     for (const rec of [sampleRecord, minimalRecord]) {
       const bytes = await generateVccoDraft(rec, { generatedAt: new Date('2026-10-06T12:00:00Z') });
@@ -180,6 +234,37 @@ describe('VCCO worksheet content', () => {
     expect(t).toContain('May 14, 2027');
     expect(t).toContain('$275/hour');
   });
+  it('uses the agency type she chose, not keywords in the agency name', () => {
+    const withPolice: IntakeRecord = {
+      ...sampleRecord,
+      priorReports: [
+        { id: 'a', agency: 'The office down the hall', agencyType: 'police', date: '2026-09-01', reportNumber: 'C-1', prosecutorFileNumber: 'PF-9' },
+        { id: 'b', agency: 'Campus police (Title IX)', agencyType: 'campus' },
+      ],
+    };
+    const t = joined(vccoSections(withPolice, at));
+    expect(t).toContain('A report to law enforcement is recorded');
+    expect(t).toContain('PF-9');
+    expect(t).toContain('Yes (based on the dates in your intake)');
+    expect(t).toContain('Campus police (Title IX)'); // listed as "other report", despite the word "police"
+    const untyped: IntakeRecord = { ...sampleRecord, priorReports: [{ id: 'c', agency: 'City Police Dept' }] };
+    const u = joined(vccoSections(untyped, at));
+    expect(u).toContain('not one to police');
+    expect(u).toContain('Confirm whether these were to police or a prosecutor: City Police Dept');
+  });
+
+  it('fills compensation-only details: mailing address, claimant, alternate contact, insurer, employer, good cause', () => {
+    const rec: IntakeRecord = { ...sampleRecord, compensation: { ...sampleRecord.compensation, goodCauseExplanation: 'I was not told about this help.' } };
+    const t = joined(vccoSections(rec, at));
+    expect(t).toContain('PO Box 0000 (fictional), New Brunswick, NJ 08901');
+    expect(t).toContain('Yes — skip Section 2');
+    expect(t).toContain('Ada Okafor · (Sister) · (732) 555-0177');
+    expect(t).toContain('Example Health Plan (fictional)');
+    expect(t).toContain('Example Marketing Agency (fictional)');
+    expect(t).toContain('August 17–18, and every workday since August 21');
+    expect(t).toContain('I was not told about this help.');
+  });
+
   it('pre-fills known answers and marks unknown ones as needed', () => {
     const secs = vccoSections(sampleRecord, at);
     const s1 = secs.find((s) => s.id === 's1')!;

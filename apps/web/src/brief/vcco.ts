@@ -37,9 +37,13 @@ const CRIME_TYPE: Partial<Record<IncidentType, string>> = {
   dating_violence: 'Domestic violence',
 };
 
-/** Heuristic: was a prior report made to a law enforcement agency? (agency type is not yet captured in intake) */
-const LE_RE = /police|sheriff|prosecutor|law enforcement|trooper|\bPD\b|public safety|\bFBI\b/i;
-const lawEnforcementReports = (r: IntakeRecord) => r.priorReports.filter((p) => LE_RE.test(p.agency ?? ''));
+/**
+ * Reports made to law enforcement, by the agency type the survivor chose (police or prosecutor).
+ * No keyword guessing: a report whose type was not given is listed separately for her to confirm.
+ */
+const isLawEnforcement = (p: IntakeRecord['priorReports'][number]) => p.agencyType === 'police' || p.agencyType === 'prosecutor';
+const lawEnforcementReports = (r: IntakeRecord) => r.priorReports.filter(isLawEnforcement);
+const untypedReports = (r: IntakeRecord) => r.priorReports.filter((p) => !p.agencyType);
 
 function addMonthsUTC(d: Date, months: number): Date {
   const r = new Date(d.getTime());
@@ -56,6 +60,12 @@ export function vccoSections(record: IntakeRecord, generatedAt: Date): BriefSect
   const s = r.survivor;
   const inc = r.incident;
   const fi = r.financialImpact;
+  const comp = r.compensation ?? {};
+  const mail = comp.mailingAddress;
+  const mailing = mail
+    ? [mail.street, [mail.city, [mail.state, mail.zip].filter(has).join(' ')].filter(has).join(', ')].filter(has).join(', ')
+    : '';
+  const alt = comp.alternateContact;
   const out: BriefSection[] = [];
 
   // ── About ──
@@ -104,7 +114,7 @@ export function vccoSections(record: IntakeRecord, generatedAt: Date): BriefSect
         filled('Date of birth', has(s.dateOfBirth) ? formatDate(s.dateOfBirth) : undefined),
         info('Under 18', dob ? (ageOn(dob, generatedAt) < 18 ? 'Yes — a parent/guardian must sign' : 'No') : NOT_PROVIDED),
         need('Deceased / incompetent / disabled', 'Check if applicable'),
-        need('Home mailing address, city, zip code'),
+        filled('Home mailing address, city, zip code', mailing || undefined),
         filled('County, state', resid || undefined),
         filled('Phone (home / work / cell)', s.phone, 'Needed — and say which type'),
         filled('Email', s.email),
@@ -118,20 +128,41 @@ export function vccoSections(record: IntakeRecord, generatedAt: Date): BriefSect
     id: 's2', title: 'Section 2 — Claimant Information',
     blocks: [
       { kind: 'note', tone: 'info', text: 'Skip this section if you (the victim) are applying for yourself. A parent, guardian or spouse completes it when applying for a minor or incapacitated victim.' },
-      { kind: 'rows', rows: [need('Are you applying for yourself?', 'Needed — confirm (if yes, skip Section 2)')] },
+      {
+        kind: 'rows',
+        rows: comp.claimant === 'self'
+          ? [info('Are you applying for yourself?', 'Yes — skip Section 2')]
+          : comp.claimant === 'other'
+          ? [
+              info('Are you applying for yourself?', 'No — someone else is the claimant'),
+              has(comp.claimantDetails)
+                ? { label: 'Claimant (from your intake)', value: comp.claimantDetails!, verbatim: true }
+                : need('Claimant name and relationship'),
+              need('Claimant address, phone, email'),
+            ]
+          : [need('Are you applying for yourself?', 'Needed — confirm (if yes, skip Section 2)')],
+      },
     ],
   });
+  const altLine = alt ? [alt.name, alt.relationship && `(${alt.relationship})`, alt.phone, alt.email].filter(has).join(' · ') : '';
   out.push({
     id: 's3', title: 'Section 3 — Additional Contact',
     blocks: [
-      { kind: 'rows', rows: [need('Someone VCCO may contact if they cannot reach you', 'Needed — name, relationship, phone, email')] },
+      {
+        kind: 'rows',
+        rows: [
+          filled('Someone VCCO may contact if they cannot reach you', altLine || undefined, 'Needed — name, relationship, phone, email'),
+          ...(altLine && (!has(alt?.phone) && !has(alt?.email)) ? [need('Their phone or email')] : []),
+        ],
+      },
       ...(has(s.safeContactNotes) ? [{ kind: 'rows', rows: [{ label: 'Your safe-contact notes (from intake)', value: s.safeContactNotes!, verbatim: true }] } as BriefBlock] : []),
     ],
   });
 
   // ── Section 4 ──
   const reports = lawEnforcementReports(r);
-  const otherReports = r.priorReports.filter((p) => !reports.includes(p));
+  const otherReports = r.priorReports.filter((p) => !reports.includes(p) && p.agencyType);
+  const unknownType = untypedReports(r);
   const crimeTypes = [...new Set(inc.incidentTypes.map((t) => CRIME_TYPE[t]).filter(Boolean) as string[])];
   const unmapped = inc.incidentTypes.filter((t) => !CRIME_TYPE[t]);
   const loc = has(inc.locationAddress)
@@ -148,11 +179,14 @@ export function vccoSections(record: IntakeRecord, generatedAt: Date): BriefSect
           filled('Date reported to police', reports.find((p) => has(p.date))?.date ? formatDate(reports.find((p) => has(p.date))!.date) : undefined,
             'Needed — no police report recorded in your intake'),
           ...(otherReports.length ? [{ label: 'Other reports (not to law enforcement)', value: otherReports.map((p) => `${p.agency}${p.date ? ` (${formatDate(p.date)})` : ''}`).join('; ') }] : []),
+          ...(unknownType.length
+            ? [need('Reports with no agency type given', `Confirm whether these were to police or a prosecutor: ${unknownType.map((p) => p.agency || 'unnamed report').join('; ')}`)]
+            : []),
           need('Name as it appears on the incident report'),
           filled('Law enforcement agency', reports.map((p) => p.agency).filter(has).join('; ') || undefined, reports.length ? NEED : 'The police department you report to'),
           filled('Location / address of crime', loc || undefined, 'Needed — address, city, county, state, zip'),
           filled('Police complaint number', reports.map((p) => p.reportNumber).filter(has).join('; ') || undefined, reports.length ? NEED : 'From the police report, once you have one'),
-          need('Prosecutor’s file number', 'If known'),
+          filled('Prosecutor’s file number', r.priorReports.map((p) => p.prosecutorFileNumber).filter(has).join('; ') || undefined, 'If known'),
           filled('Type of crime (check box)', crimeTypes.join(', ') || undefined, 'Needed — choose from the form’s list'),
           ...(unmapped.length ? [need('Other harm you described', `Check whether the form lists it: ${unmapped.join(', ').replace(/_/g, ' ')}`)] : []),
           need('Brief description of incident and injuries', 'Needed — a short description in your own words (1–3 sentences is enough)'),
@@ -199,7 +233,9 @@ export function vccoSections(record: IntakeRecord, generatedAt: Date): BriefSect
       kind: 'rows',
       rows: [
         filled('Do you have insurance?', fi.hasInsurance ? goalLabel(fi.hasInsurance) : undefined),
-        need('Medical / secondary / dental / auto / homeowner’s or renter’s insurance', 'Needed — carrier and policy number for each'),
+        ...(has(comp.insuranceCarrier) ? [{ label: 'Insurance carrier (from your intake)', value: comp.insuranceCarrier! }] : []),
+        need('Medical / secondary / dental / auto / homeowner’s or renter’s insurance',
+          has(comp.insuranceCarrier) ? 'Needed — policy number, and any other insurance you have' : 'Needed — carrier and policy number for each'),
         need('Charity care applied for?', 'Needed — if uninsured, apply for charity care at the hospital that treated you'),
       ],
     }],
@@ -226,11 +262,13 @@ export function vccoSections(record: IntakeRecord, generatedAt: Date): BriefSect
     id: 's8', title: 'Section 8 — Lost Wages / Support',
     blocks: [{
       kind: 'rows',
-      rows: has(fi.lostWages)
+      rows: has(fi.lostWages) || has(comp.employer) || has(comp.workDatesMissed)
         ? [
-            { label: 'Lost wages (from your intake)', value: fi.lostWages! },
-            need('Employer name, address, phone, fax'),
-            need('Dates absent from work'),
+            filled('Lost wages (from your intake)', fi.lostWages, 'Needed — amount, if any'),
+            ...(has(comp.employer)
+              ? [{ label: 'Employer (from your intake)', value: comp.employer! }, need('Employer address, phone, fax')]
+              : [need('Employer name, address, phone, fax')]),
+            filled('Dates absent from work', comp.workDatesMissed),
             need('On the job when it happened? Workers’ comp? State disability / Family Leave applied for?'),
             info('Documents', 'Pay stubs from the week before the crime and the week you returned; doctor’s letter stating period of disability.'),
           ]
@@ -275,9 +313,11 @@ export function vccoSections(record: IntakeRecord, generatedAt: Date): BriefSect
     id: 's16', title: 'Section 16 — Additional Details / Good Cause',
     blocks: [{
       kind: 'rows',
-      rows: [need('Reasons for a late police report or late filing, if any', deadlines.goodCauseNeeded
-        ? 'Needed — explain the “good cause” for the delay (e.g. you were not told about VCCO benefits)'
-        : 'Only if you reported after 9 months or file after 5 years')],
+      rows: has(comp.goodCauseExplanation)
+        ? [{ label: 'Reasons for a late police report or late filing (your words)', value: comp.goodCauseExplanation!, verbatim: true }]
+        : [need('Reasons for a late police report or late filing, if any', deadlines.goodCauseNeeded
+          ? 'Needed — explain the “good cause” for the delay (e.g. you were not told about VCCO benefits)'
+          : 'Only if you reported after 9 months or file after 5 years')],
     }],
   });
 
@@ -360,7 +400,7 @@ function eligibility(r: IntakeRecord, now: Date) {
     const dl = incDate ? addMonthsUTC(incDate, 9) : null;
     items.push({
       status: 'warning',
-      text: (r.priorReports.length ? 'Your intake lists a report, but not one to police. ' : 'No police report is recorded. ') + 'Under current New Jersey law the crime must be reported to police or another law ' +
+      text: (r.priorReports.length ? 'Your intake lists a report, but not one to police or a prosecutor. ' : 'No police report is recorded. ') + 'Under current New Jersey law the crime must be reported to police or another law ' +
         'enforcement agency within 9 months of when it happened (or was reasonably discovered)' +
         (dl ? ` — for the date you gave, by ${formatDateUTC(dl)}` : '') +
         '. A forensic exam with a “Five-Year Hold Kit” alone does not currently meet this requirement. Bills pending in ' +

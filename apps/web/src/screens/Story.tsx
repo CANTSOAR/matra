@@ -22,7 +22,6 @@ export function Story() {
   const saveTimer = useRef<number | undefined>(undefined);
   const [saveState, setSaveState] = useState<{ busy: boolean; msg?: string; error?: string }>({ busy: false });
   const [sealing, setSealing] = useState<string | null>(null);
-  const [sealError, setSealError] = useState<string | null>(null);
   const [sealed, setSealed] = useState<{ entry: LedgerEntry; contentHash: string; escrowNote?: string } | null>(null);
 
   // Load: in-memory working draft first; else the latest draft saved in the vault.
@@ -89,9 +88,12 @@ export function Story() {
     navigate('/vault/evidence', { state: { from: 'story' } });
   }
 
-  async function onComplete(intake: IntakeRecord) {
-    if (!boot) return;
-    setSealError(null);
+  /**
+   * Resolves only once the server has confirmed the sealed record (so the intake never says "sealed" early).
+   * Rejects with a friendly message on failure; the intake then offers "Try again" with her answers intact.
+   */
+  async function onComplete(intake: IntakeRecord): Promise<void> {
+    if (!boot) throw new Error('Your vault is still opening.');
     window.clearTimeout(saveTimer.current);
     try {
       const record: IntakeRecord = {
@@ -120,7 +122,7 @@ export function Story() {
       workingRef.current = null;
       setSealed({ entry: res.ledgerEntry, contentHash: res.record.contentHash, escrowNote });
     } catch (e) {
-      setSealError(friendlyError(e));
+      throw new Error(friendlyError(e));
     } finally {
       setSealing(null);
     }
@@ -144,7 +146,7 @@ export function Story() {
         <div className="card stack">
           <h2>What you can do next — only if and when you want</h2>
           <div className="row">
-            <Link className="btn" to="/vault/brief">Prepare a police brief</Link>
+            <Link className="btn" to="/vault/brief">Prepare an incident summary</Link>
             <Link className="btn" to="/vault/share">Share with a verified attorney</Link>
             <Link className="btn btn-quiet" to="/vault">Back to your vault</Link>
           </div>
@@ -174,7 +176,7 @@ export function Story() {
           <IntakeChat
             initialDraft={boot.working.draft ?? undefined}
             onDraftChange={onDraftChange}
-            onComplete={(r) => void onComplete(r)}
+            onComplete={onComplete}
             onRequestEvidenceUpload={() => void onEvidenceRequest()}
           />
           <div className="card stack">
@@ -194,7 +196,6 @@ export function Story() {
             {saveState.error && <ErrorNote>{saveState.error}</ErrorNote>}
           </div>
           {sealing && <Loading label={sealing} />}
-          {sealError && <ErrorNote>{sealError} Your draft is still here.</ErrorNote>}
         </>
       )}
     </div>

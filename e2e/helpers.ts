@@ -165,7 +165,7 @@ export async function runIntake(page: Page, plan: Record<string, Act>, before: R
 
 export async function sealFromReview(page: Page) {
   await page.getByRole('button', { name: 'Seal my account' }).click();
-  // (the intake's own "Your account is sealed." shows first; wait for the shell's confirmation with the ledger entry)
+  // the intake shows "Sealing…" until the server confirms; then the shell shows its confirmation with the ledger entry
   await expect(page.getByRole('heading', { name: 'Your account is sealed', exact: true })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/ledger entry #\d+/)).toBeVisible();
 }

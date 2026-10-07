@@ -15,6 +15,8 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import { createHmac } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { z } from 'zod';
 import type {
   AttorneyProfile,
@@ -65,7 +67,36 @@ export interface CreateAppOptions {
   autoVerifyAttorneys?: boolean;
   /** Log method, path, status, duration (never bodies or query strings). */
   logRequests?: boolean;
+  /**
+   * Production: serve the built web app (apps/web/dist) from this directory, same origin as the API, with a
+   * strict Content-Security-Policy and an SPA fallback to index.html.
+   */
+  webDir?: string;
+  /** Inject a "DEMO — do not enter real information" banner into the served app (env MATRA_DEMO_BANNER=1). */
+  demoBanner?: boolean;
+  /** Number of reverse-proxy hops to trust for the client IP (rate limiting). Render / Fly: 1. */
+  trustProxy?: number;
 }
+
+/**
+ * CSP for the web app itself. Everything is same-origin: no inline scripts, no eval, no third-party anything.
+ * img/media allow blob: for the in-memory previews of decrypted evidence; data: only for the inline favicon.
+ * (React `style` props are applied through the CSSOM, which style-src does not restrict.)
+ */
+export const WEB_CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
 
 export class HttpError extends Error {
   constructor(
@@ -252,6 +283,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.locals.db = db;
   app.disable('x-powered-by');
   app.set('etag', false);
+  if (opts.trustProxy) app.set('trust proxy', opts.trustProxy);
 
   // Security headers (set manually; no helmet dependency).
   app.use((_req, res, next) => {
@@ -351,8 +383,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const now = new Date().toISOString();
     db.transaction(() => {
       db.prepare(
-        `INSERT INTO users (id, username, role, auth_hash, auth_salt, kdf_salt, kdf_iterations, public_key, wrapped_private_key, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO users (id, username, role, auth_hash, auth_salt, kdf_salt, kdf_iterations, public_key, wrapped_private_key, created_at,
+                            age_confirmed_18, age_confirmed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         body.username,
@@ -364,6 +397,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
         JSON.stringify(body.publicKey),
         canonicalEnvelope(body.wrappedPrivateKey),
         now,
+        body.ageConfirmed18 === true ? 1 : 0,
+        body.ageConfirmed18 === true ? now : null,
       );
       if (body.role === 'attorney' && body.attorneyProfile) {
         const p = body.attorneyProfile;
@@ -445,7 +480,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ledgerEntry.timestamp,
         ledgerEntry.id,
       );
-      audit(me.id, 'record.created', `Encrypted record sealed (ledger #${ledgerEntry.seq})`);
+      audit(me.id, 'record.created', `Encrypted record saved (ledger #${ledgerEntry.seq})`);
     })();
     res.status(201).json({ record: toRecordMeta(q.recordById.get(id) as RecordRow), ledgerEntry });
   });
@@ -833,6 +868,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.status(404).json({ error: 'Not found', code: 'not_found' });
   });
 
+  if (opts.webDir) mountWebApp(app, opts.webDir, !!opts.demoBanner);
+
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code });
     const e = err as { type?: string; status?: number; message?: string };
@@ -848,6 +885,49 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   return app;
+}
+
+/**
+ * Serve the built SPA. Hashed files under /assets are immutable; index.html is never cached. Any other GET without a
+ * file extension falls back to index.html (the app uses an in-memory router, so this is only for reloads / deep links).
+ */
+function mountWebApp(app: express.Express, webDir: string, demoBanner: boolean) {
+  const root = path.resolve(webDir);
+  const indexFile = path.join(root, 'index.html');
+  if (!fs.existsSync(indexFile)) throw new Error(`webDir has no index.html: ${root} (run \`npm run build\` first)`);
+  let indexHtml = fs.readFileSync(indexFile, 'utf8');
+  // A meta tag rather than inline script: the CSP forbids inline scripts. The app reads it at startup.
+  if (demoBanner) indexHtml = indexHtml.replace(/<head>/i, '<head>\n    <meta name="matra-demo-banner" content="1" />');
+
+  const webHeaders = (res: Response) => {
+    res.set('Content-Security-Policy', WEB_CSP);
+    res.set('Cross-Origin-Opener-Policy', 'same-origin');
+    res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()');
+  };
+  const sendIndex = (_req: Request, res: Response) => {
+    webHeaders(res);
+    res.set('Cache-Control', 'no-store');
+    res.type('html').send(indexHtml);
+  };
+  app.get(['/', '/index.html'], sendIndex);
+  app.use(
+    express.static(root, {
+      index: false,
+      etag: false,
+      lastModified: false,
+      dotfiles: 'ignore',
+      fallthrough: true,
+      setHeaders: (res, file) => {
+        webHeaders(res);
+        const rel = path.relative(root, file).split(path.sep).join('/');
+        res.set('Cache-Control', rel.startsWith('assets/') ? 'public, max-age=31536000, immutable' : 'no-store');
+      },
+    }),
+  );
+  app.use((req, res, next) => {
+    if ((req.method !== 'GET' && req.method !== 'HEAD') || path.extname(req.path)) return next();
+    sendIndex(req, res);
+  });
 }
 
 /** Access the underlying database of an app created by createApp (tests, seed, admin scripts). */

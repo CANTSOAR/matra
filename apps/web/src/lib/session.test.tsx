@@ -16,7 +16,7 @@ describe('session', () => {
     render(<Harness fetchImpl={fetchImpl} />);
 
     await act(async () => {
-      await current!.register({ username: 'bluebird-42', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', adultAffirmed: true });
+      await current!.register({ username: 'bluebird-42', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
     });
     expect(screen.getByTestId('state')).toHaveTextContent('in:bluebird-42');
     await act(async () => {

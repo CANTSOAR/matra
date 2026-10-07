@@ -4,6 +4,26 @@ import type { Role } from '@matra/shared';
 import { NEUTRAL_TITLE, QuickExitButton } from '../lib/quickExit';
 import { useSession } from '../lib/session';
 
+/**
+ * Demo instances show a permanent banner. The production server adds <meta name="matra-demo-banner" content="1">
+ * when MATRA_DEMO_BANNER=1 (a meta tag, because the CSP forbids inline scripts); VITE_MATRA_DEMO_BANNER=1 does the
+ * same for a dev build.
+ */
+export function isDemoInstance(): boolean {
+  if (import.meta.env.VITE_MATRA_DEMO_BANNER === '1') return true;
+  return typeof document !== 'undefined' && document.querySelector('meta[name="matra-demo-banner"]')?.getAttribute('content') === '1';
+}
+
+export function DemoBanner() {
+  if (!isDemoInstance()) return null;
+  return (
+    <div className="demo-banner" role="note" aria-label="Demo notice">
+      <strong>DEMO — do not enter real information.</strong> This is a demonstration server for partners and funders.
+      Use made-up details only; anything entered here may be deleted at any time.
+    </div>
+  );
+}
+
 /** Moves focus to the page heading on navigation (screen-reader friendly SPA nav). */
 function useFocusOnNavigate() {
   const loc = useLocation();
@@ -35,6 +55,7 @@ export function Layout() {
         Skip to content
       </a>
       <QuickExitButton />
+      <DemoBanner />
       <header className="app-header">
         <Link className="brand" to={role === 'attorney' ? '/attorney/cases' : session ? '/vault' : '/'}>
           <span className="brand-mark" aria-hidden="true" />
@@ -45,7 +66,7 @@ export function Layout() {
             <NavLink to="/vault" end>Your vault</NavLink>
             <NavLink to="/vault/story">Your account</NavLink>
             <NavLink to="/vault/evidence">Evidence</NavLink>
-            <NavLink to="/vault/brief">Brief</NavLink>
+            <NavLink to="/vault/brief">Incident summary</NavLink>
             <NavLink to="/vault/share">Legal shield</NavLink>
           </nav>
         )}

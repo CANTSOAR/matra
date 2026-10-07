@@ -18,9 +18,9 @@ describe.skipIf(env.RENDER_BRIEF_SAMPLES !== '1')('render sample PDFs', () => {
       ...sampleRecord,
       narrative: { ...sampleRecord.narrative, additionalDetails: sampleRecord.narrative.additionalDetails + ' He signed it “D” 😊 — Он знал.' },
     };
-    await fs.writeFile(`${DIR}/police-brief-sample.pdf`, await generatePoliceBrief(sampleRecord, sampleBriefOptions));
-    await fs.writeFile(`${DIR}/police-brief-sample-redacted-unicode.pdf`, await generatePoliceBrief(multi, { ...sampleBriefOptions, redactContactInfo: true }));
-    await fs.writeFile(`${DIR}/police-brief-minimal.pdf`, await generatePoliceBrief(minimalRecord, { generatedAt: sampleBriefOptions.generatedAt }));
+    await fs.writeFile(`${DIR}/incident-summary-sample.pdf`, await generatePoliceBrief(sampleRecord, sampleBriefOptions));
+    await fs.writeFile(`${DIR}/incident-summary-sample-redacted-unicode.pdf`, await generatePoliceBrief(multi, { ...sampleBriefOptions, redactContactInfo: true }));
+    await fs.writeFile(`${DIR}/incident-summary-minimal.pdf`, await generatePoliceBrief(minimalRecord, { generatedAt: sampleBriefOptions.generatedAt }));
     await fs.writeFile(`${DIR}/vcco-draft-sample.pdf`, await generateVccoDraft(sampleRecord, { generatedAt: sampleBriefOptions.generatedAt }));
     await fs.writeFile(`${DIR}/vcco-draft-minimal.pdf`, await generateVccoDraft(minimalRecord, { generatedAt: sampleBriefOptions.generatedAt }));
   });

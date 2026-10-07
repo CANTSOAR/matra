@@ -82,6 +82,17 @@ const FULL_PLAN: Record<string, Act> = {
   'recall.smell': type('The hallway smelled like cologne.'),
   'context.before': type('I was at the party with my roommate M.'),
   'context.after': type('I got home and went to sleep. I texted M. the next morning.'),
+  'details.force': async (page) => {
+    await page.locator('.intake-answer-area').getByRole('button', { name: 'Being held, tied, or blocked from leaving' }).click();
+    await primary(page);
+  },
+  'details.forceWords': type('He stood in the doorway so I could not leave.'),
+  'details.strangulation': click("I'm not sure"),
+  'details.substances': async (page) => {
+    await page.locator('.intake-answer-area').getByRole('button', { name: 'I had been drinking' }).click();
+    await primary(page);
+  },
+  'details.incapacitated': click('No'),
   'person.list': PERSON('@demo_handle_123'),
   'person.escrow': sealYes,
   'people.told': fields({
@@ -91,13 +102,20 @@ const FULL_PLAN: Record<string, Act> = {
     'What you remember saying': 'something bad happened last night',
   }),
   'medical.care': click('No'),
-  'prior.any': click('No'),
+  'prior.any': click('Yes'),
+  'prior.list': fields({
+    'Who you reported to': 'HR at my job',
+    'What kind of place was it?': { select: 'employer' },
+    'About when': 'a week later',
+  }),
   'safety.access': click('Yes'),
   'safety.protective': click("I'm not sure"),
   'costs.intro': click('Skip this part'),
   'goals.police': click("I'm not sure"),
   'goals.attorney': click('Yes'),
   'goals.compensation': click('Yes'),
+  'comp.mailing': fields({ 'City or town': 'New Brunswick', State: { select: 'NJ' }, 'ZIP code': '08901' }),
+  'comp.claimant': click('Yes, for myself'),
   'goals.protective': click("I'm not sure"),
   // deliberately skipped: legal name, date of birth, address, touch/taste, words said, witnesses, injuries, safety notes
   'about.legalName': skip,
@@ -109,10 +127,21 @@ async function openStory(page: Page) {
   await expect(page.locator('.intake-answer-area')).toBeVisible({ timeout: 60_000 });
 }
 
-test('1. survivor registers, completes intake (skips + a break), seals; dashboard shows ledger + verified', async ({ page }) => {
+test('1. survivor registers (18+ gate), completes intake (skips + a break), seals; dashboard shows ledger + verified', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Tell it once/ })).toBeVisible();
   await shot(page, '01-welcome');
+
+  // Under 18: a kind message with age-appropriate help; nothing is sent to the server.
+  await page.getByRole('link', { name: 'Get started' }).click();
+  const registerCalls: string[] = [];
+  page.on('request', (r) => r.url().includes('/api/auth/register') && registerCalls.push(r.url()));
+  await page.getByRole('button', { name: 'I’m under 18' }).click();
+  await expect(page.getByRole('heading', { name: 'Thank you for telling us' })).toBeVisible();
+  await expect(page.getByRole('link', { name: '1-800-422-4453' })).toHaveAttribute('href', 'tel:+18004224453');
+  await shot(page, '01b-under-18', { mobile: false });
+  await page.getByRole('button', { name: 'Go back' }).click();
+  expect(registerCalls).toEqual([]);
 
   await registerSurvivor(page, ALIAS_A);
   await shot(page, '02-dashboard-empty', { mobile: false });
@@ -142,6 +171,8 @@ test('1. survivor registers, completes intake (skips + a break), seals; dashboar
   await sealFromReview(page);
   await expect(page.getByText(/ledger entry #\d+/)).toBeVisible();
   await shot(page, '06-sealed', { mobile: false });
+  expect(seen).toEqual(expect.arrayContaining(['details.strangulationInfo', 'comp.mailing', 'wishes.access']));
+  expect(seen.indexOf('details.force')).toBeGreaterThan(seen.indexOf('story.freeRecall'));
 
   await nav(page, 'Your vault');
   const acct = page.locator('section', { has: page.getByRole('heading', { name: 'Your account of what happened' }) });
@@ -152,6 +183,9 @@ test('1. survivor registers, completes intake (skips + a break), seals; dashboar
   // phone + handle; a bare initial ("R.") is too weak to seal
   await expect(escrow.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
   await expect(escrow.getByText('R. · social media handle (instagram)')).toBeVisible();
+  // the client labels the seal (it can decrypt its own records); the server only knows "saved"
+  const activity = page.locator('section', { has: page.getByRole('heading', { name: 'Activity' }) });
+  await expect(activity.getByText('You sealed your account')).toBeVisible();
   await shot(page, '07-dashboard');
 });
 
@@ -199,17 +233,25 @@ test('2. evidence: JPEG GPS is stripped and hashed; PDF warns metadata kept; re-
   await expect(acct.getByText(/2 evidence item\(s\)/).first()).toBeVisible();
 });
 
-test('3. brief: preview shows her words verbatim; police brief + VCCO draft download as PDFs', async ({ page }) => {
+test('3. incident summary: her words verbatim; summary + VCCO draft download as PDFs; "Download my data" zip', async ({ page }) => {
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
-  await nav(page, 'Brief');
+  await nav(page, 'Incident summary');
   const preview = page.locator('.brief-doc');
   await expect(preview).toBeVisible({ timeout: 60_000 });
+  await expect(preview.getByRole('heading', { name: 'Incident Summary in the Survivor’s Own Words' })).toBeVisible();
   const quotes = await preview.locator('.brief-verbatim-text').allTextContents();
   expect(quotes).toContain(NARRATIVE);
+  // her answers are printed as she gave them
+  await expect(preview.getByText('Survivor answered: Yes, I’m safe')).toBeVisible();
+  await expect(preview.getByText('Survivor answered: I’m not sure').first()).toBeVisible();
+  await expect(preview.getByText(/can cause internal injury/)).toBeVisible();
+  await expect(preview.getByText('He stood in the doorway so I could not leave.')).toBeVisible();
+  // compensation-only details never appear in the summary
+  await expect(preview.getByText('08901')).toHaveCount(0);
   await shot(page, '09-brief-preview');
 
   for (const [button, prefix] of [
-    ['Download police brief (PDF)', 'evidentiary-brief-'],
+    ['Download incident summary (PDF)', 'matra-incident-summary-'],
     ['Download NJ compensation draft', 'nj-compensation-draft-'],
   ] as const) {
     const dl = page.waitForEvent('download');
@@ -220,6 +262,22 @@ test('3. brief: preview shows her words verbatim; police brief + VCCO draft down
     expect(buf.length).toBeGreaterThan(1000);
     expect(buf.subarray(0, 5).toString()).toBe('%PDF-');
   }
+
+  // Download my data: warned first, then one .zip decrypted on the device
+  await nav(page, 'Your vault');
+  const data = page.locator('section', { has: page.getByRole('heading', { name: 'Your data' }) });
+  await data.getByRole('button', { name: 'Download my data' }).click();
+  await expect(data.getByText('The downloaded file is not encrypted.')).toBeVisible();
+  const dl = page.waitForEvent('download');
+  await data.getByRole('button', { name: 'I understand — download' }).click();
+  const zip = await dl;
+  expect(zip.suggestedFilename()).toMatch(/^matra-my-data-\d{4}-\d{2}-\d{2}\.zip$/);
+  const zbuf = fs.readFileSync((await zip.path())!);
+  expect(zbuf.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  expect(zbuf.includes(Buffer.from('records.json'))).toBe(true);
+  expect(zbuf.includes(Buffer.from('hallway.jpg'))).toBe(true);
+  expect(zbuf.includes(Buffer.from('He said he'))).toBe(true); // her words, decrypted
+  await expect(data.getByText(/Downloaded matra-my-data-.*2 evidence file\(s\)/)).toBeVisible();
 });
 
 test('4. share with attorney → attorney decrypts + verifies → survivor sees access → revoke → attorney blocked', async ({ page }) => {

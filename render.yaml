@@ -1,0 +1,29 @@
+# Render Blueprint for a Matra DEMO instance (fictional data only). See docs/DEPLOY.md.
+services:
+  - type: web
+    name: matra-demo
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter # persistent disks need a paid instance type
+    region: virginia
+    autoDeploy: false
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # HMAC key for escrow hashes / fake prelogin salts. Generated once by Render; never change it after
+      # accounts exist (it would break escrow matching). Keep it out of git.
+      - key: MATRA_PEPPER
+        generateValue: true
+      # "DEMO — do not enter real information" banner on every page. Leave on for any demo instance.
+      - key: MATRA_DEMO_BANNER
+        value: "1"
+      # Render terminates TLS in one proxy hop; needed for per-IP rate limiting.
+      - key: MATRA_TRUST_PROXY
+        value: "1"
+      - key: MATRA_DB_PATH
+        value: /app/apps/server/data/matra.db
+    disk:
+      name: matra-data
+      mountPath: /app/apps/server/data
+      sizeGB: 1

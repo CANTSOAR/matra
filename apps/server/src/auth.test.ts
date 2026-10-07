@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { deriveKeys, DEFAULT_KDF_ITERATIONS } from '@matra/crypto';
+import { getDb } from './app.js';
 import { makeApp, registerUser, TEST_ITERATIONS } from './test-helpers.js';
 
 describe('auth', () => {
@@ -84,14 +85,25 @@ describe('auth', () => {
     expect(badJson.body.code).toBe('invalid_json');
   });
 
-  it('survivor registration requires an explicit 18+ affirmation', async () => {
+  it('survivor registration requires ageConfirmed18: true, stored with a timestamp', async () => {
     const { app } = makeApp();
-    await expect(registerUser(app, 'no.field', 'survivor', { adultAffirmation: null })).rejects.toThrow(/400/);
-    await expect(registerUser(app, 'says.false', 'survivor', { adultAffirmation: false })).rejects.toThrow(/400/);
-    const ok = await registerUser(app, 'adult.one', 'survivor', { adultAffirmation: true });
+    await expect(registerUser(app, 'no.field', 'survivor', { ageConfirmed18: null })).rejects.toThrow(/400/);
+    await expect(registerUser(app, 'says.false', 'survivor', { ageConfirmed18: false })).rejects.toThrow(/400/);
+    const before = new Date().toISOString();
+    const ok = await registerUser(app, 'adult.one', 'survivor', { ageConfirmed18: true });
     expect(ok.user.role).toBe('survivor');
+    const row = getDb(app).prepare('SELECT age_confirmed_18, age_confirmed_at FROM users WHERE username = ?').get('adult.one') as {
+      age_confirmed_18: number;
+      age_confirmed_at: string;
+    };
+    expect(row.age_confirmed_18).toBe(1);
+    expect(row.age_confirmed_at >= before).toBe(true);
+    // nothing is stored for a refused (under-18 / unconfirmed) registration
+    expect(getDb(app).prepare('SELECT 1 FROM users WHERE username IN (?, ?)').all('no.field', 'says.false')).toEqual([]);
     // attorneys are not asked
     await registerUser(app, 'lawyer.one', 'attorney');
+    const atty = getDb(app).prepare('SELECT age_confirmed_18 FROM users WHERE username = ?').get('lawyer.one') as { age_confirmed_18: number };
+    expect(atty.age_confirmed_18).toBe(0);
   });
 
   it('attorney requires profile, starts unverified, appears only once verified', async () => {

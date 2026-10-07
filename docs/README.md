@@ -12,6 +12,7 @@ Matra is a survivor-controlled, zero-knowledge documentation tool with a consent
 | [PRD.md](PRD.md) | Team, partners | Personas, user stories, functional and non-functional requirements, out of scope, pilot metrics, open questions |
 | [ATTORNEY_PARTNER_MOU_TEMPLATE.md](ATTORNEY_PARTNER_MOU_TEMPLATE.md) | Partner orgs, counsel | Draft MOU covering verification, response times, conflicts, confidentiality, no fee sharing, data handling, termination (template; counsel review required) |
 | [DEMO_SCRIPT.md](DEMO_SCRIPT.md) | Presenter | 10-minute live demo with talking points and honest answers to hard questions |
+| [DEPLOY.md](DEPLOY.md) | Engineering | Deploying a demo instance (Docker, Render), the DEMO banner, production CSP |
 | [research/brief-fields.md](research/brief-fields.md) | Engineering, counsel | Source research behind the incident-summary PDF and NJ VCCO draft fields |
 | [research/outreach-and-governance-playbook.md](research/outreach-and-governance-playbook.md) | Founder | Advisor outreach and governance |
 | [threat-model.md](threat-model.md) | Engineering | Known-weakness tracker (W1 to W12); a supplement to the Security Whitepaper, which is primary |

@@ -1,4 +1,7 @@
-import type { IncidentType, EvidenceKind, IdentifierKind, Disclosure } from '@matra/shared';
+import type {
+  Disclosure, EvidenceKind, ForceKind, IdentifierKind, IncidentType, IntakeRecord, PhysicalEvidenceKind,
+  ReportAgencyType, SubstanceKind, TriAnswer,
+} from '@matra/shared';
 
 export const NOT_PROVIDED = 'Not provided';
 
@@ -122,6 +125,67 @@ export function goalLabel(v: 'yes' | 'no' | 'undecided' | 'unsure' | undefined):
     case 'no': return 'No';
     case 'undecided': return 'Undecided';
     case 'unsure': return 'Unsure';
+    default: return NOT_PROVIDED;
+  }
+}
+
+export const FORCE_LABELS: Record<ForceKind, string> = {
+  physical_force: 'Physical force',
+  restraint: 'Held, restrained or blocked from leaving',
+  threats: 'Threats',
+  weapon: 'Weapon or object used as a weapon',
+  other: 'Other',
+};
+
+export const SUBSTANCE_LABELS: Record<SubstanceKind, string> = {
+  survivor_alcohol: 'Survivor had been drinking',
+  survivor_drugs: 'Survivor had taken drugs or medicine',
+  suspected_drugging: 'Survivor believes they may have been drugged',
+  other_person_substances: 'Person responsible had been drinking or using drugs',
+  unsure: 'Survivor is not sure',
+};
+
+export const PHYSICAL_EVIDENCE_LABELS: Record<PhysicalEvidenceKind, string> = {
+  clothing: 'Clothing',
+  bedding: 'Bedding or towels',
+  condom: 'Condom or wrapper',
+  containers: 'Cups, glasses or bottles',
+  other: 'Other items',
+};
+
+export const AGENCY_TYPE_LABELS: Record<ReportAgencyType, string> = {
+  police: 'Police / sheriff',
+  prosecutor: 'Prosecutor’s office',
+  campus: 'School or college',
+  employer: 'Employer',
+  other: 'Other',
+};
+
+/** The survivor's own answer to a yes / no / not-sure question, quoted as she chose it. */
+export function survivorAnswered(v: TriAnswer | undefined): string {
+  switch (v) {
+    case 'yes': return 'Survivor answered: Yes';
+    case 'no': return 'Survivor answered: No';
+    case 'unsure': return 'Survivor answered: I’m not sure';
+    default: return NOT_PROVIDED;
+  }
+}
+
+/**
+ * Her answer to "Are you safe right now?". Records sealed before `immediateSafety` existed carried a boolean
+ * `inImmediateDanger` (true only for "No"); those are read back conservatively.
+ */
+export function immediateSafetyOf(safety: IntakeRecord['safety']): 'safe' | 'not_safe' | 'unsure' | undefined {
+  if (safety.immediateSafety) return safety.immediateSafety;
+  const legacy = (safety as { inImmediateDanger?: unknown }).inImmediateDanger;
+  return legacy === true ? 'not_safe' : undefined;
+}
+
+export function immediateSafetyAnswer(v: 'safe' | 'not_safe' | 'unsure' | undefined): string {
+  switch (v) {
+    case 'safe': return 'Survivor answered: Yes, I’m safe';
+    case 'not_safe': return 'Survivor answered: No';
+    case 'unsure': return 'Survivor answered: I’m not sure';
     default: return NOT_PROVIDED;
   }
 }

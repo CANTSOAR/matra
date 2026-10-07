@@ -40,7 +40,7 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 | M3 | **Zero-knowledge vault.** Passphrase-derived keys. Per-record and per-blob AES-256-GCM. Server stores ciphertext only. No reset. | Built |
 | M4 | **Evidence upload** with client-side image EXIF/GPS stripping and a SHA-256 integrity hash. Non-image metadata warning. | Built |
 | M5 | **WORM ledger.** Append-only hash chain (records, blobs, consents, revocations, escrow, shred) with a verify endpoint. | Built (not externally anchored) |
-| M6 | **Incident Summary PDF** (currently named "Police Evidentiary Brief", to be renamed) and an **NJ VCCO application draft**. Generated client-side. | Built |
+| M6 | **"Incident Summary in the Survivor's Own Words"** PDF (formerly "Police Evidentiary Brief") and an **NJ VCCO application draft**. Generated client-side. | Built |
 | M7 | **Legal Shield sharing.** Choose a verified attorney, accept verbatim consent text (ledgered), share scoped record and evidence re-encrypted to the attorney, revoke at any time. Attorney access appears in the survivor's audit log. | Built |
 | M8 | **Blind escrow (demo only).** Hashed identifiers. A cross-survivor match is recorded server-side only. Survivors always see "Sealed" (this prevents perpetrator self-checks). Matches are released as counts only to the verified attorney the survivor has an active share with. No ledger entry is written at match time. | Built. Self-check flaw **mitigated**. Still demo-only until OPRF and account verification are in place (see Security §5) |
 | M9 | **Crypto-shred account deletion** | Built |
@@ -92,7 +92,7 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 - FR4: Sealing a record or blob returns a ledger entry. `GET /api/ledger/verify` returns `ok: true` after any sequence of operations.
 - FR5: Shares are possible only to verified attorneys. Consent text is stored verbatim and hashed into the ledger. Revocation blocks bundle and blob fetches immediately.
 - FR6: Attorney opens and downloads create survivor-visible audit events.
-- FR7: The brief and VCCO PDFs are generated client-side, include the not-legal-advice and not-sworn notices, and display ledger hashes.
+- FR7: The incident summary and VCCO PDFs are generated client-side, include the not-legal-advice and not-sworn notices, and display ledger hashes.
 - FR8: Account deletion removes all ciphertext and keys. Ledger entries remain.
 
 ## 7. Non-functional requirements

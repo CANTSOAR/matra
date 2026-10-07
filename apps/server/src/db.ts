@@ -174,6 +174,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE shares ADD COLUMN expires_at TEXT;
   UPDATE shares SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+90 days');
   `,
+  // ── v3: survivor 18+ self-attestation (boolean + server time it was given). Accounts created before this
+  // column existed are left at 0 / NULL: we did not store their confirmation, so we don't invent one. ──
+  `
+  ALTER TABLE users ADD COLUMN age_confirmed_18 INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE users ADD COLUMN age_confirmed_at TEXT;
+  `,
 ];
 
 export function openDb(dbPath: string): DB {

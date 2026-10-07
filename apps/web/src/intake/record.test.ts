@@ -20,7 +20,7 @@ function assertValidRecord(r: IntakeRecord) {
   expect(typeof r.narrative.freeRecall).toBe('string');
   for (const arr of [r.perpetrators, r.witnesses, r.disclosures, r.priorReports, r.evidence]) expect(Array.isArray(arr)).toBe(true);
   expect(typeof r.medical.soughtCare).toBe('boolean');
-  expect(typeof r.safety.inImmediateDanger).toBe('boolean');
+  expect([undefined, 'safe', 'not_safe', 'unsure']).toContain(r.safety.immediateSafety);
   for (const g of Object.values(r.goals)) expect(['yes', 'no', 'undecided']).toContain(g);
 }
 
@@ -107,7 +107,7 @@ describe('draftToRecord', () => {
       }),
     );
     assertValidRecord(r);
-    expect(r.safety.inImmediateDanger).toBe(true);
+    expect(r.safety.immediateSafety).toBe('not_safe');
     expect(r.incident.dateStart).toBe('2025-07-04');
     expect(r.incident.dateEnd).toBe('last winter');
     expect(r.incident.dateIsApproximate).toBe(true);
@@ -133,6 +133,93 @@ describe('draftToRecord', () => {
     expect(r.financialImpact.hasInsurance).toBe('no');
   });
 
+  it('maps "Are you safe right now?" exactly, including "I\'m not sure" and skipped', () => {
+    expect(draftToRecord(draftWith({ 'safety.now': 'yes' })).safety.immediateSafety).toBe('safe');
+    expect(draftToRecord(draftWith({ 'safety.now': 'no' })).safety.immediateSafety).toBe('not_safe');
+    expect(draftToRecord(draftWith({ 'safety.now': 'unsure' })).safety.immediateSafety).toBe('unsure');
+    expect(draftToRecord(draftWith({})).safety.immediateSafety).toBeUndefined();
+  });
+
+  it('maps force, strangulation, substances, kit, physical evidence, access and person details', () => {
+    const r = draftToRecord(
+      draftWith({
+        'details.force': ['restraint', 'weapon', 'bogus'],
+        'details.forceWords': ' He blocked the door. ',
+        'details.strangulation': 'unsure',
+        'details.substances': ['suspected_drugging'],
+        'details.incapacitated': 'yes',
+        'details.substancesWords': 'My drink tasted salty.',
+        'medical.care': 'yes',
+        'medical.exam': 'yes',
+        'medical.kit': { toxicology: 'yes', fiveYearHold: 'unsure', reported: '' },
+        'evidence.physical': ['clothing', 'bedding'],
+        'evidence.physicalNotes': 'In a paper bag.',
+        'wishes.access': { interpreter: 'yes', language: 'Spanish', otherNeeds: '' },
+        'person.list': [{ id: 'p1', values: { name: 'Sam Doe', address: '12 Elm St', workplace: 'the gym', vehicle: 'red truck', whereabouts: '' } }],
+        'prior.any': 'yes',
+        'prior.list': [
+          { id: 'r1', values: { agency: 'City PD', agencyType: 'police', prosecutorFileNumber: 'P-22' } },
+          { id: 'r2', values: { agency: 'Title IX', agencyType: 'nonsense' } },
+        ],
+      }),
+    );
+    expect(r.incident.force).toEqual({ kinds: ['restraint', 'weapon'], description: ' He blocked the door. ' });
+    expect(r.incident.strangulation).toBe('unsure');
+    expect(r.incident.substances).toEqual({ kinds: ['suspected_drugging'], suspectedIncapacitation: 'yes', description: 'My drink tasted salty.' });
+    expect(r.medical).toMatchObject({ forensicExamCompleted: true, toxicologyTest: 'yes', fiveYearHoldKit: 'unsure', kitReportedToPolice: undefined });
+    expect(r.physicalEvidence).toEqual({ kinds: ['clothing', 'bedding'], description: 'In a paper bag.' });
+    expect(r.survivor.accessibility).toEqual({ interpreter: 'yes', interpreterLanguage: 'Spanish', otherNeeds: undefined });
+    expect(r.perpetrators[0]).toMatchObject({ address: '12 Elm St', workplace: 'the gym', vehicle: 'red truck', whereabouts: undefined });
+    expect(r.priorReports[0]).toMatchObject({ agencyType: 'police', prosecutorFileNumber: 'P-22' });
+    expect(r.priorReports[1].agencyType).toBeUndefined();
+  });
+
+  it('hides follow-ups when their question was not answered that way', () => {
+    const r = draftToRecord(
+      draftWith({
+        'details.forceWords': 'left over',
+        'details.incapacitated': 'yes',
+        'medical.care': 'no',
+        'medical.kit': { toxicology: 'yes' },
+        'goals.compensation': 'no',
+        'comp.mailing': { street: '1 Main St' },
+        'costs.insurance': 'no',
+        'costs.insuranceCarrier': 'Acme',
+      }),
+    );
+    expect(r.incident.force).toBeUndefined();
+    expect(r.incident.substances).toBeUndefined();
+    expect(r.medical.toxicologyTest).toBeUndefined();
+    expect(r.compensation).toBeUndefined();
+  });
+
+  it('collects compensation-only details when she wants help with compensation', () => {
+    const r = draftToRecord(
+      draftWith({
+        'goals.compensation': 'unsure',
+        'comp.mailing': { street: '1 Main St', city: 'Newark', state: 'NJ', zip: '07102' },
+        'comp.claimant': 'other',
+        'comp.claimantDetails': 'my mom, Rosa',
+        'comp.altContact': { name: 'Rosa', phone: '555-0101' },
+        'comp.goodCause': 'I did not know this help existed.',
+        'costs.insurance': 'yes',
+        'costs.insuranceCarrier': 'Acme Health',
+        'costs.amounts': { wages: '$400' },
+        'costs.work': { employer: 'Cafe', datesMissed: 'two weeks in May' },
+      }),
+    );
+    expect(r.compensation).toEqual({
+      mailingAddress: { street: '1 Main St', city: 'Newark', state: 'NJ', zip: '07102' },
+      claimant: 'other',
+      claimantDetails: 'my mom, Rosa',
+      alternateContact: { name: 'Rosa', relationship: undefined, phone: '555-0101', email: undefined },
+      insuranceCarrier: 'Acme Health',
+      employer: 'Cafe',
+      workDatesMissed: 'two weeks in May',
+      goodCauseExplanation: 'I did not know this help existed.',
+    });
+  });
+
   it('skipping every question still yields a completable record', () => {
     const d = emptyDraft();
     d.skipped = STEPS.filter((s) => s.kind !== 'info' && s.kind !== 'review').map((s) => s.id);
@@ -149,6 +236,14 @@ describe('draftToRecord', () => {
 });
 
 describe('script', () => {
+  it('asks every specific question only after free recall', () => {
+    const idx = (id: string) => STEPS.findIndex((s) => s.id === id);
+    const recall = idx('story.freeRecall');
+    expect(recall).toBeGreaterThan(0);
+    for (const id of ['details.force', 'details.strangulation', 'details.substances', 'medical.kit', 'evidence.physical', 'wishes.access', 'comp.mailing', 'comp.goodCause'])
+      expect(idx(id), id).toBeGreaterThan(recall);
+  });
+
   it('has unique ids and never uses forbidden wording', () => {
     const ids = STEPS.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);

@@ -22,6 +22,26 @@ export type IncidentType =
   | 'drugging_suspected'
   | 'other';
 
+/** A three-way answer where "I'm not sure" is always a valid, recorded answer. */
+export type TriAnswer = 'yes' | 'no' | 'unsure';
+
+/** Force / coercion the survivor selected (after free recall). Her own description is kept separately, verbatim. */
+export type ForceKind = 'physical_force' | 'restraint' | 'threats' | 'weapon' | 'other';
+
+/** Alcohol / drug involvement, recorded neutrally (it never changes responsibility). */
+export type SubstanceKind =
+  | 'survivor_alcohol'
+  | 'survivor_drugs'
+  | 'suspected_drugging'
+  | 'other_person_substances'
+  | 'unsure';
+
+/** Non-digital items the survivor kept. */
+export type PhysicalEvidenceKind = 'clothing' | 'bedding' | 'condom' | 'containers' | 'other';
+
+/** Who a prior report was made to. 'police' and 'prosecutor' count as law enforcement (NJ VCCO 9-month rule). */
+export type ReportAgencyType = 'police' | 'prosecutor' | 'campus' | 'employer' | 'other';
+
 export type IdentifierKind = 'email' | 'phone' | 'social_handle' | 'full_name' | 'other';
 
 export interface PerpetratorIdentifier {
@@ -40,6 +60,14 @@ export interface Perpetrator {
   identifiers: PerpetratorIdentifier[];
   /** Survivor opted in to sealed escrow matching for this person's identifiers. */
   escrowOptIn: boolean;
+  /** Where they live, if known (her words). */
+  address?: string;
+  /** Where they work or study. */
+  workplace?: string;
+  /** Vehicle description / plate. */
+  vehicle?: string;
+  /** Where they might be now. */
+  whereabouts?: string;
 }
 
 export interface Witness {
@@ -94,6 +122,13 @@ export interface IntakeRecord {
     safeContactNotes?: string; // "only call after 6pm"
     residenceState?: string; // USPS code, e.g. "NJ"
     residenceCounty?: string;
+    /** Interpreter / accessibility needs for anyone she later talks with. */
+    accessibility?: {
+      interpreter?: TriAnswer;
+      interpreterLanguage?: string;
+      /** Her words: disability access, advocate present, anything else. */
+      otherNeeds?: string;
+    };
   };
 
   incident: {
@@ -107,6 +142,12 @@ export interface IntakeRecord {
     jurisdiction: { state?: string; county?: string; city?: string; campus?: string };
     incidentTypes: IncidentType[];
     isOngoing: boolean;
+    /** Physical force, restraint, threats, weapons — survivor-selected, plus her own words. */
+    force?: { kinds: ForceKind[]; description?: string };
+    /** Hands/arm/object on the neck or pressure on the throat (high-lethality indicator). Her answer as given. */
+    strangulation?: TriAnswer;
+    /** Alcohol / drug involvement and suspected incapacitation, as she described it. */
+    substances?: { kinds: SubstanceKind[]; suspectedIncapacitation?: TriAnswer; description?: string };
   };
 
   /** Survivor's own words. Never rewritten or "improved" by software. */
@@ -128,15 +169,36 @@ export interface IntakeRecord {
     facility?: string;
     date?: string;
     forensicExamCompleted?: boolean; // SANE / rape kit
+    /** Forensic kit details (asked only if an exam was completed). */
+    toxicologyTest?: TriAnswer;
+    /** Kit kept anonymously / without a police report (NJ "Five-Year Hold" kit). */
+    fiveYearHoldKit?: TriAnswer;
+    kitReportedToPolice?: TriAnswer;
     injuries?: string;
   };
 
-  priorReports: Array<{ id: string; agency: string; date?: string; reportNumber?: string; outcome?: string }>;
+  priorReports: Array<{
+    id: string;
+    agency: string;
+    /** Absent on records sealed before this field existed. */
+    agencyType?: ReportAgencyType;
+    date?: string;
+    reportNumber?: string;
+    prosecutorFileNumber?: string;
+    outcome?: string;
+  }>;
 
   evidence: EvidenceItem[];
 
+  /** Non-digital evidence she kept (clothing, bedding…), and her own note on where / how it is stored. */
+  physicalEvidence?: { kinds: PhysicalEvidenceKind[]; description?: string };
+
   safety: {
-    inImmediateDanger: boolean;
+    /**
+     * Her answer to "Are you safe right now?" at the start of the intake, exactly as chosen.
+     * undefined = skipped. (Replaces the earlier boolean `inImmediateDanger`.)
+     */
+    immediateSafety: 'safe' | 'not_safe' | 'unsure' | undefined;
     perpetratorHasAccess?: boolean; // knows where she lives/works
     wantsProtectiveOrder?: 'yes' | 'no' | 'unsure';
     notes?: string;
@@ -150,6 +212,24 @@ export interface IntakeRecord {
     relocationCosts?: string;
     otherCosts?: string;
     hasInsurance?: 'yes' | 'no' | 'unsure';
+  };
+
+  /**
+   * Details used ONLY by the crime-victim-compensation worksheet (NJ VCCO). Never printed in the
+   * incident summary. Asked only if she wants help with compensation.
+   */
+  compensation?: {
+    mailingAddress?: { street?: string; city?: string; state?: string; zip?: string };
+    /** Is she applying for herself, or is someone else (e.g. a guardian) the claimant? */
+    claimant?: 'self' | 'other';
+    /** Claimant's name / relationship when claimant === 'other' (her words). */
+    claimantDetails?: string;
+    alternateContact?: { name?: string; relationship?: string; phone?: string; email?: string };
+    insuranceCarrier?: string;
+    employer?: string;
+    workDatesMissed?: string;
+    /** Her words: reasons for a late police report or late filing (VCCO §16 "good cause"). */
+    goodCauseExplanation?: string;
   };
 
   /** What she wants. Nothing is sent anywhere unless she explicitly approves at that moment. */
@@ -325,8 +405,11 @@ export interface RegisterRequest {
   publicKey: JsonWebKey;
   wrappedPrivateKey: Envelope;
   attorneyProfile?: Omit<AttorneyProfile, 'userId' | 'verified' | 'publicKey'>;
-  /** Required (must be `true`) when role is 'survivor': affirms the user is 18 or older. */
-  adultAffirmation?: boolean;
+  /**
+   * Required (must be `true`) when role is 'survivor': she confirms she is 18 or older. The server stores the
+   * confirmation and its time. Matra is for adults only (self-attestation; it cannot verify age).
+   */
+  ageConfirmed18?: true;
 }
 export interface AuthResponse { token: string; user: PublicUser }
 export interface LoginRequest { username: string; authKey: string }

@@ -4,8 +4,8 @@
  * return bytes / React elements locally.
  */
 export type { BriefOptions, BriefSection, BriefBlock, BriefRow, BriefTableRow } from './types';
-export { briefSections, BRIEF_TITLE } from './sections';
-export { generatePoliceBrief } from './police';
+export { briefSections, BRIEF_TITLE, INCIDENT_SUMMARY_TITLE, PREPARED_BY_NOTE } from './sections';
+export { generatePoliceBrief, generateIncidentSummary } from './police';
 export { generateVccoDraft, vccoSections, VCCO } from './vcco';
 export { BriefPreview } from './BriefPreview';
 export type { BriefPreviewProps } from './BriefPreview';
@@ -26,4 +26,9 @@ export function downloadPdf(bytes: Uint8Array, filename: string): void {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Download filename for the incident summary, e.g. `matra-incident-summary-2026-10-07.pdf`. */
+export function incidentSummaryFilename(date: Date = new Date()): string {
+  return `matra-incident-summary-${date.toISOString().slice(0, 10)}.pdf`;
 }

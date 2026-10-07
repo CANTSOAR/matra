@@ -10,7 +10,7 @@ type Scope = ShareT['scope'][number];
 const SCOPE_LABEL: Record<Scope, string> = {
   record: 'My written account',
   evidence: 'My evidence files',
-  brief: 'The police brief prepared from my account',
+  brief: 'The incident summary in my own words, prepared from my account',
 };
 
 export const SHARE_DISCLAIMER =

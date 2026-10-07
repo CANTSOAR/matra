@@ -4,7 +4,7 @@ import { decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWit
 import type { EvidenceItem, IntakeRecord, LedgerEntry, ShareBundle } from '@matra/shared';
 import { envelopeHash } from '../api/client';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
-import { BriefPreview, downloadPdf, generatePoliceBrief } from '../integration/briefAdapter';
+import { BriefPreview, downloadPdf, generateIncidentSummary } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { formatBytes, shortHash, type VaultPayload } from '../lib/vault';
 
@@ -143,14 +143,14 @@ export function AttorneyCase() {
     setBriefError(null);
     try {
       const { bundle, record, ledgerEntry } = opened.data;
-      const pdf = await generatePoliceBrief(record, {
+      const pdf = await generateIncidentSummary(record, {
         recordId: bundle.record.id,
         recordContentHash: bundle.record.contentHash,
         ledgerEntry,
         generatedAt: new Date(),
         preparedFor: session.attorneyProfile?.displayName,
       });
-      downloadPdf(pdf, `brief-${bundle.survivorAlias}-${new Date().toISOString().slice(0, 10)}.pdf`);
+      downloadPdf(pdf, `matra-incident-summary-${bundle.survivorAlias}-${new Date().toISOString().slice(0, 10)}.pdf`);
     } catch (e) {
       setBriefError(friendlyError(e));
     } finally {
@@ -217,9 +217,9 @@ export function AttorneyCase() {
 
           <section className="card stack" aria-labelledby="brief">
             <div className="section-title">
-              <h2 id="brief">Evidentiary brief</h2>
+              <h2 id="brief">Incident summary in the survivor’s own words</h2>
               <button className="btn btn-primary btn-small" onClick={() => void downloadBrief()} disabled={briefBusy}>
-                {briefBusy ? 'Preparing…' : 'Download police brief (PDF)'}
+                {briefBusy ? 'Preparing…' : 'Download incident summary (PDF)'}
               </button>
             </div>
             {briefError && <ErrorNote>{briefError}</ErrorNote>}
@@ -256,7 +256,7 @@ export function AttorneyCase() {
 /**
  * Blind-escrow result. You (the verified attorney with an active share) are the only person Matra ever tells about a
  * match — the client's own app always shows "Sealed", so a perpetrator posing as a survivor can't self-check.
- * Counts cover only this client's own sealed names; nothing about the other person is ever available.
+ * Counts cover only this client's own sealed identifiers; nothing about the other person is ever available.
  */
 function EscrowNotice({ escrow }: { escrow?: ShareBundle['escrow'] }) {
   if (!escrow || escrow.sealedCount + escrow.matchedCount === 0) return null;
@@ -265,8 +265,8 @@ function EscrowNotice({ escrow }: { escrow?: ShareBundle['escrow'] }) {
       <section className="card care stack" aria-labelledby="escrow-match" role="note">
         <h2 id="escrow-match">Sealed escrow: independent match</h2>
         <p>
-          Another person independently named someone this client also named. Their identity is not shared with you or
-          anyone. Discuss with your client how she’d like to proceed; a match is an investigative lead, not evidence.
+          Another person independently sealed an identifier (such as a phone number, email, handle or full name) that
+          matches one this client sealed. Their identity is not shared with you or anyone. Discuss with your client how she’d like to proceed; a match is an investigative lead, not evidence.
         </p>
         <p className="small muted">
           Your client’s app does not show match results — she has not been told. Please raise it with care, and only
@@ -279,7 +279,7 @@ function EscrowNotice({ escrow }: { escrow?: ShareBundle['escrow'] }) {
     <section className="card stack" aria-labelledby="escrow-sealed">
       <h2 id="escrow-sealed">Sealed escrow</h2>
       <p className="small muted">
-        Your client sealed {escrow.sealedCount === 1 ? 'one name' : `${escrow.sealedCount} names`} in escrow. No one else has
+        Your client sealed {escrow.sealedCount === 1 ? 'one identifier' : `${escrow.sealedCount} identifiers`} in escrow. No one else has
         independently named the same person so far.
       </p>
     </section>
