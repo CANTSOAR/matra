@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { deriveKeys, DEFAULT_KDF_ITERATIONS } from '@shield/crypto';
+import { deriveKeys, DEFAULT_KDF_ITERATIONS } from '@matra/crypto';
 import { makeApp, registerUser, TEST_ITERATIONS } from './test-helpers.js';
 
 describe('auth', () => {

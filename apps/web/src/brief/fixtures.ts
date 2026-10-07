@@ -2,7 +2,7 @@
  * Fictional demo records for the Matra brief engine. All names, places, numbers and hashes are invented.
  * Content is intentionally non-graphic.
  */
-import type { IntakeRecord, LedgerEntry } from '@shield/shared';
+import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 
 const NARRATIVE = `I have worked at the same marketing agency in New Brunswick for about two years. Derek is a senior account manager on my team. Before that night we were friendly at work but we had never spent time together outside the office.
 

@@ -2,7 +2,7 @@
  * In-progress intake state. Plain JSON — the app shell encrypts and persists it
  * so she can stop and resume. This module never stores anything itself.
  */
-import { randomId } from '@shield/crypto';
+import { randomId } from '@matra/crypto';
 import { PHASES, STEPS, UI, type PhaseId, type ScriptStep } from './script';
 
 export type Tri = 'yes' | 'no' | 'unsure';

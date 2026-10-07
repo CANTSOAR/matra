@@ -7,7 +7,7 @@
 ---
 
 ## Setup (before the meeting)
-- Start the server and seed demo accounts (`npm run seed -w @shield/server`). The seed creates:
+- Start the server and seed demo accounts (`npm run seed -w @matra/server`). The seed creates:
   - Survivor **`jane.demo`**, passphrase `demo-survivor-passphrase`, with no records. The demo creates them live.
   - Verified attorneys **`attorney.nj1`** (NJ), **`attorney.ny1`** (NY), and **`attorney.nj2`** (NJ/NY), all with passphrase `demo-attorney-passphrase`. Names and organizations are labelled "Demo —".
   - *If the seed names have changed, use whatever the seed script prints.*

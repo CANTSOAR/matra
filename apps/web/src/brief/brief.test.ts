@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import type { IntakeRecord } from '@shield/shared';
+import type { IntakeRecord } from '@matra/shared';
 import { briefSections, generatePoliceBrief, generateVccoDraft, vccoSections } from './index';
 import type { BriefSection } from './types';
 import { minimalRecord, sampleBriefOptions, sampleRecord } from './fixtures';

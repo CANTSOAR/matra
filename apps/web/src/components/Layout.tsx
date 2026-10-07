@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
-import type { Role } from '@shield/shared';
+import type { Role } from '@matra/shared';
 import { NEUTRAL_TITLE, QuickExitButton } from '../lib/quickExit';
 import { useSession } from '../lib/session';
 

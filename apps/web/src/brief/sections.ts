@@ -1,4 +1,4 @@
-import type { IntakeRecord } from '@shield/shared';
+import type { IntakeRecord } from '@matra/shared';
 import type { BriefBlock, BriefOptions, BriefRow, BriefSection } from './types';
 import {
   DISCLOSURE_METHOD_LABELS, EVIDENCE_KIND_LABELS, IDENTIFIER_LABELS, INCIDENT_TYPE_LABELS,

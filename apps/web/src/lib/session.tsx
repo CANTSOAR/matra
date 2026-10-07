@@ -15,8 +15,8 @@ import {
   unwrapKeyWithMaster,
   unwrapPrivateKey,
   wrapKeyWithMaster,
-} from '@shield/crypto';
-import type { AttorneyProfile, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@shield/shared';
+} from '@matra/crypto';
+import type { AttorneyProfile, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { onWipe, wipeAll } from './wipe';

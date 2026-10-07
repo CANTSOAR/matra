@@ -1,5 +1,5 @@
 /**
- * Matra API server. Implements the contract in @shield/shared exactly.
+ * Matra API server. Implements the contract in @matra/shared exactly.
  *
  * Zero-knowledge: the server only ever handles ciphertext (Envelope / blob bytes),
  * wrapped keys, public keys, and hashes. Request bodies are never logged.
@@ -29,7 +29,7 @@ import type {
   VaultRecord,
   VaultRecordMeta,
   WrappedKey,
-} from '@shield/shared';
+} from '@matra/shared';
 import { openDb, type DB } from './db.js';
 import {
   appendLedger,

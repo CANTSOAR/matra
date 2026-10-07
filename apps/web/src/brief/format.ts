@@ -1,4 +1,4 @@
-import type { IncidentType, EvidenceKind, IdentifierKind, Disclosure } from '@shield/shared';
+import type { IncidentType, EvidenceKind, IdentifierKind, Disclosure } from '@matra/shared';
 
 export const NOT_PROVIDED = 'Not provided';
 

@@ -1,5 +1,5 @@
 /**
- * @shield/crypto — isomorphic (browser + Node ≥ 20) WebCrypto helpers that
+ * @matra/crypto — isomorphic (browser + Node ≥ 20) WebCrypto helpers that
  * implement the zero-knowledge vault.
  *
  * Key hierarchy
@@ -9,7 +9,7 @@
  *   masterKey wraps: the user's RSA-OAEP private key, and every per-record / per-blob key.
  *   Sharing: a record key is re-wrapped to the attorney's RSA public key.
  */
-import type { Envelope, IdentifierKind, WrappedKey } from '@shield/shared';
+import type { Envelope, IdentifierKind, WrappedKey } from '@matra/shared';
 
 const subtle = globalThis.crypto.subtle;
 const enc = new TextEncoder();

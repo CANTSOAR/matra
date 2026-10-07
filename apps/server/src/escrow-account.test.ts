@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { encryptJSON, escrowIdentifierHash, generateContentKey } from '@shield/crypto';
+import { encryptJSON, escrowIdentifierHash, generateContentKey } from '@matra/crypto';
 import { createRecord, makeApp, registerUser, uploadBlob, type TestUser } from './test-helpers.js';
 import type express from 'express';
-import { wrapKeyForRecipient } from '@shield/crypto';
+import { wrapKeyForRecipient } from '@matra/crypto';
 
 async function seal(app: express.Express, u: TestUser, identifierHash: string) {
   const labelEnvelope = await encryptJSON({ label: 'person' }, await generateContentKey());

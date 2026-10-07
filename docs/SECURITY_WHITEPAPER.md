@@ -36,7 +36,7 @@
                                                     └─────────────────────────────────┘
  Attorney browser: same crypto library; decrypts only what was re-wrapped to its RSA key.
 ```
-(The package names in code are currently `@shield/*`. The rename to Matra is cosmetic.)
+(The package names in code are currently `@matra/*`. The rename to Matra is cosmetic.)
 
 ---
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { IntakeRecord } from '@shield/shared';
+import type { IntakeRecord } from '@matra/shared';
 import { IntakeChat, type IntakeDraft } from './index';
 
 afterEach(cleanup);

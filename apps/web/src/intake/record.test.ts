@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { IntakeRecord } from '@shield/shared';
+import type { IntakeRecord } from '@matra/shared';
 import { draftToRecord, emptyDraft, STEPS, type IntakeDraft } from './index';
 
 const NARRATIVE =

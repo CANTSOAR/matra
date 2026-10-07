@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { RegisterRequest, Role } from '@shield/shared';
+import type { RegisterRequest, Role } from '@matra/shared';
 import { generatePassphrase, passphraseStrength } from '../lib/passphrase';
 import { friendlyError, useSession, type Progress } from '../lib/session';
 import { US_STATES } from './common';
@@ -174,7 +174,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
       </div>
 
       {role === 'attorney' && (
-        <fieldset className="card stack" style={{ border: '1px solid var(--shield-border)' }}>
+        <fieldset className="card stack" style={{ border: '1px solid var(--matra-border)' }}>
           <legend>
             <h2 style={{ margin: 0 }}>Professional profile</h2>
           </legend>

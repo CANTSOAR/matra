@@ -14,8 +14,8 @@ import {
   sha256Hex,
   unwrapKeyWithMaster,
   wrapKeyWithMaster,
-} from '@shield/crypto';
-import type { BlobMeta, EvidenceItem, EvidenceKind, IntakeRecord, LedgerEntry, VaultRecord } from '@shield/shared';
+} from '@matra/crypto';
+import type { BlobMeta, EvidenceItem, EvidenceKind, IntakeRecord, LedgerEntry, VaultRecord } from '@matra/shared';
 import { envelopeHash, type ApiClient } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { stripMetadata } from './metadata';

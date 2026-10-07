@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { IntakeRecord, LedgerEntry } from '@shield/shared';
+import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common';
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';

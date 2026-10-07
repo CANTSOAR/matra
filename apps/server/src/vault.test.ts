@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { decryptJSON, sha256Hex, unwrapKeyWithMaster } from '@shield/crypto';
+import { decryptJSON, sha256Hex, unwrapKeyWithMaster } from '@matra/crypto';
 import { createRecord, makeApp, registerUser, uploadBlob } from './test-helpers.js';
 import { computeEntryHash } from './ledger.js';
 import { GENESIS_HASH } from './db.js';

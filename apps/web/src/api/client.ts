@@ -5,7 +5,7 @@
  * - Non-2xx responses are thrown as `ApiError` (with the server's `{ error, code }` when present).
  * - The server only ever sees ciphertext (`Envelope`, `WrappedKey`, encrypted blobs).
  */
-import { sha256Hex, toBase64 } from '@shield/crypto';
+import { sha256Hex, toBase64 } from '@matra/crypto';
 import type {
   AttorneyProfile,
   AuditEvent,
@@ -29,7 +29,7 @@ import type {
   VaultRecord,
   VaultRecordMeta,
   WrappedKey,
-} from '@shield/shared';
+} from '@matra/shared';
 
 export class ApiError extends Error {
   readonly status: number;

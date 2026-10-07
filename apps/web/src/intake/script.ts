@@ -35,7 +35,7 @@
  *  trauma-informed / FETI principles (open invitations, no "why" questions,
  *  sensory and peripheral detail), and self-paced "Seek Then Speak" style intake.
  */
-import type { IncidentType } from '@shield/shared';
+import type { IncidentType } from '@matra/shared';
 import type { IntakeDraft } from './draft';
 import { answerOf } from './draft';
 

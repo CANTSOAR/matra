@@ -1,5 +1,5 @@
 {
-  "name": "@shield/crypto",
+  "name": "@matra/crypto",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@shield/shared": "*"
+    "@matra/shared": "*"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

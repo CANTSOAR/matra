@@ -5,7 +5,7 @@ import type {
   Perpetrator,
   PerpetratorIdentifier,
   Witness,
-} from '@shield/shared';
+} from '@matra/shared';
 import { answerOf, asDate, asGroup, asList, asRecord, asText, type IntakeDraft } from './draft';
 import { INCIDENT_TYPE_OPTIONS } from './script';
 

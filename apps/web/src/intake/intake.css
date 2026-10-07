@@ -1,14 +1,14 @@
-/* Matra — intake chat. Themeable via --shield-* custom properties; calm fallbacks below. */
+/* Matra — intake chat. Themeable via --matra-* custom properties; calm fallbacks below. */
 
 .intake-root {
-  --_bg: var(--shield-bg, #f5f7f6);
-  --_surface: var(--shield-surface, #ffffff);
-  --_text: var(--shield-text, #1f2a2c);
-  --_muted: var(--shield-muted, #5b6b6e);
-  --_accent: var(--shield-accent, #2f7d78);
-  --_accent-contrast: var(--shield-accent-contrast, #ffffff);
-  --_border: var(--shield-border, #d5dfdd);
-  --_radius: var(--shield-radius, 14px);
+  --_bg: var(--matra-bg, #f5f7f6);
+  --_surface: var(--matra-surface, #ffffff);
+  --_text: var(--matra-text, #1f2a2c);
+  --_muted: var(--matra-muted, #5b6b6e);
+  --_accent: var(--matra-accent, #2f7d78);
+  --_accent-contrast: var(--matra-accent-contrast, #ffffff);
+  --_border: var(--matra-border, #d5dfdd);
+  --_radius: var(--matra-radius, 14px);
   --_bot-bg: color-mix(in srgb, var(--_accent) 9%, var(--_surface));
   --_focus: color-mix(in srgb, var(--_accent) 70%, var(--_text));
 
@@ -23,13 +23,13 @@
 
 @media (prefers-color-scheme: dark) {
   .intake-root {
-    --_bg: var(--shield-bg, #121a1b);
-    --_surface: var(--shield-surface, #1b2526);
-    --_text: var(--shield-text, #e6eeec);
-    --_muted: var(--shield-muted, #9fb0ae);
-    --_accent: var(--shield-accent, #6cc3bb);
-    --_accent-contrast: var(--shield-accent-contrast, #0f1d1c);
-    --_border: var(--shield-border, #31403f);
+    --_bg: var(--matra-bg, #121a1b);
+    --_surface: var(--matra-surface, #1b2526);
+    --_text: var(--matra-text, #e6eeec);
+    --_muted: var(--matra-muted, #9fb0ae);
+    --_accent: var(--matra-accent, #6cc3bb);
+    --_accent-contrast: var(--matra-accent-contrast, #0f1d1c);
+    --_border: var(--matra-border, #31403f);
   }
 }
 

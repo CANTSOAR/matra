@@ -1,4 +1,4 @@
-import type { IntakeRecord } from '@shield/shared';
+import type { IntakeRecord } from '@matra/shared';
 import type { BriefOptions } from './types';
 import { briefSections } from './sections';
 import { renderPdf } from './pdf/render';

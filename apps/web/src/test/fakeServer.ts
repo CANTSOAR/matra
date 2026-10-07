@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { PublicUser, RegisterRequest } from '@shield/shared';
+import type { PublicUser, RegisterRequest } from '@matra/shared';
 
 /** Minimal in-memory auth server for session tests (fetch mock). */
 export function fakeAuthFetch() {

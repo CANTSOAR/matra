@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { IntakeRecord } from '@shield/shared';
+import type { IntakeRecord } from '@matra/shared';
 import type { BriefBlock, BriefOptions, BriefSection } from './types';
 import { briefSections } from './sections';
 import { NOT_PROVIDED } from './format';

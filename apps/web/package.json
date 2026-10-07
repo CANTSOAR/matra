@@ -1,5 +1,5 @@
 {
-  "name": "@shield/web",
+  "name": "@matra/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,8 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@shield/crypto": "*",
-    "@shield/shared": "*",
+    "@matra/crypto": "*",
+    "@matra/shared": "*",
     "pdf-lib": "^1.17.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

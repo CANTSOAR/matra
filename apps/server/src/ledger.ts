@@ -18,7 +18,7 @@
  *   account.shredded SHA-256_hex(JSON.stringify({ userId, recordIds, blobIds }))  (ids sorted ascending)
  */
 import { createHash, randomBytes } from 'node:crypto';
-import type { Envelope, LedgerEntry, LedgerVerifyResponse } from '@shield/shared';
+import type { Envelope, LedgerEntry, LedgerVerifyResponse } from '@matra/shared';
 import { GENESIS_HASH, type DB } from './db.js';
 
 export type LedgerType =

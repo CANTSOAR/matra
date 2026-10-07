@@ -1,4 +1,4 @@
-import type { LedgerEntry } from '@shield/shared';
+import type { LedgerEntry } from '@matra/shared';
 
 export interface BriefOptions {
   /** Vault record id of the sealed (encrypted) IntakeRecord. */

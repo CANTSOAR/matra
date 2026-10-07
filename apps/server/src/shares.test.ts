@@ -5,7 +5,7 @@ import {
   decryptJSON,
   unwrapKeyWithPrivate,
   wrapKeyForRecipient,
-} from '@shield/crypto';
+} from '@matra/crypto';
 import { createRecord, makeApp, registerUser, uploadBlob } from './test-helpers.js';
 
 const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {

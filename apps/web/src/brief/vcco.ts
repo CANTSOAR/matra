@@ -3,7 +3,7 @@
  * Mirrors the 16 sections of the official Claim Application (eff. 8/1/2020, rev. 8/25/2020).
  * Sources & rules: docs/research/brief-fields.md.
  */
-import type { IntakeRecord, IncidentType } from '@shield/shared';
+import type { IntakeRecord, IncidentType } from '@matra/shared';
 import type { BriefBlock, BriefRow, BriefSection } from './types';
 import { renderPdf } from './pdf/render';
 import { NOT_PROVIDED, formatDate, formatDateUTC, formatTimestamp, goalLabel, has, parseIsoDate } from './format';

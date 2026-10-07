@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@shield/crypto';
-import type { EvidenceItem, IntakeRecord, LedgerEntry, ShareBundle } from '@shield/shared';
+import { decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@matra/crypto';
+import type { EvidenceItem, IntakeRecord, LedgerEntry, ShareBundle } from '@matra/shared';
 import { envelopeHash } from '../api/client';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { BriefPreview, downloadPdf, generatePoliceBrief } from '../integration/briefAdapter';

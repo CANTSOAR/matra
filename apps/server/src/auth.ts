@@ -7,8 +7,8 @@
  */
 import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { DEFAULT_KDF_ITERATIONS } from '@shield/crypto';
-import type { Role } from '@shield/shared';
+import { DEFAULT_KDF_ITERATIONS } from '@matra/crypto';
+import type { Role } from '@matra/shared';
 import type { DB } from './db.js';
 import { sha256Hex } from './ledger.js';
 

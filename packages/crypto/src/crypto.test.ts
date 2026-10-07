@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as c from './index';
 
-describe('@shield/crypto', () => {
+describe('@matra/crypto', () => {
   it('derives deterministic auth key, round-trips records, and shares to a recipient', async () => {
     const salt = c.newKdfSalt();
     const a = await c.deriveKeys('correct horse battery', salt, 1000);

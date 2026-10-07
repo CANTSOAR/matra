@@ -1,5 +1,5 @@
 {
-  "name": "@shield/server",
+  "name": "@matra/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,8 @@
     "verify-attorney": "tsx src/verify-attorney.ts"
   },
   "dependencies": {
-    "@shield/crypto": "*",
-    "@shield/shared": "*",
+    "@matra/crypto": "*",
+    "@matra/shared": "*",
     "better-sqlite3": "^13.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",

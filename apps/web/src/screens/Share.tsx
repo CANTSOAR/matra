@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { publicKeyFingerprint, wrapKeyForRecipient } from '@shield/crypto';
-import type { AttorneyProfile, Share as ShareT } from '@shield/shared';
+import { publicKeyFingerprint, wrapKeyForRecipient } from '@matra/crypto';
+import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { blobKeyFor, finals, loadVault, type OpenedRecord } from '../lib/vault';
@@ -236,7 +236,7 @@ function Consent({
           <strong>{SHARE_DISCLAIMER}</strong>
         </p>
       </div>
-      <fieldset className="card stack" style={{ border: '1px solid var(--shield-border)' }}>
+      <fieldset className="card stack" style={{ border: '1px solid var(--matra-border)' }}>
         <legend>
           <h2 style={{ margin: 0 }}>What do you want to share?</h2>
         </legend>

@@ -1,14 +1,14 @@
 /**
  * Matra demo seed — idempotent. Creates FICTIONAL demo accounts through the real API
- * (client-side key derivation with @shield/crypto, exactly like the web app):
+ * (client-side key derivation with @matra/crypto, exactly like the web app):
  *   - 3 verified attorneys (NJ / NY)
  *   - 1 survivor, jane.demo, with no records (the live demo creates them)
  *
- *   npm run seed -w @shield/server          (MATRA_DB_PATH overrides the DB location)
+ *   npm run seed -w @matra/server          (MATRA_DB_PATH overrides the DB location)
  */
 import type { AddressInfo } from 'node:net';
-import { DEFAULT_KDF_ITERATIONS, deriveKeys, generateIdentity, newKdfSalt } from '@shield/crypto';
-import type { AuthResponse, RegisterRequest } from '@shield/shared';
+import { DEFAULT_KDF_ITERATIONS, deriveKeys, generateIdentity, newKdfSalt } from '@matra/crypto';
+import type { AuthResponse, RegisterRequest } from '@matra/shared';
 import { createApp, getDb } from './app.js';
 import { loadPepper, resolveDbPath } from './config.js';
 

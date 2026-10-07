@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@shield/shared';
+import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { escrowLabel, finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes } from '../lib/vault';

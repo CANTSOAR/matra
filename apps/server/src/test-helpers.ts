@@ -8,8 +8,8 @@ import {
   generateIdentity,
   newKdfSalt,
   wrapKeyWithMaster,
-} from '@shield/crypto';
-import type { AttorneyProfile, AuthResponse, Envelope, RegisterRequest, Role } from '@shield/shared';
+} from '@matra/crypto';
+import type { AttorneyProfile, AuthResponse, Envelope, RegisterRequest, Role } from '@matra/shared';
 import { createApp, getDb } from './app.js';
 
 export const TEST_ITERATIONS = 1000;

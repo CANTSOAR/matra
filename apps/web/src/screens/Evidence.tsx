@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import type { BlobMeta, EvidenceItem } from '@shield/shared';
+import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { emptyDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';

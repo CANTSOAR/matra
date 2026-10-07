@@ -1,5 +1,5 @@
 /**
- * @shield/shared — the single source of truth for data shapes that cross
+ * @matra/shared — the single source of truth for data shapes that cross
  * module boundaries (intake → vault → brief → attorney) and for the HTTP API.
  *
  * Zero-knowledge rule: anything typed `Envelope` or `WrappedKey` is opaque
