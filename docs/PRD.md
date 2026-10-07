@@ -42,14 +42,14 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 | M5 | **WORM ledger.** Append-only hash chain (records, blobs, consents, revocations, escrow, shred) with a verify endpoint. | Built (not externally anchored) |
 | M6 | **Incident Summary PDF** (currently named "Police Evidentiary Brief", to be renamed) and an **NJ VCCO application draft**. Generated client-side. | Built |
 | M7 | **Legal Shield sharing.** Choose a verified attorney, accept verbatim consent text (ledgered), share scoped record and evidence re-encrypted to the attorney, revoke at any time. Attorney access appears in the survivor's audit log. | Built |
-| M8 | **Blind escrow (demo only).** Hashed identifiers. Both entries flip to "matched" on a cross-survivor match. | Built. **Not safe for real use** (see Security §5) |
+| M8 | **Blind escrow (demo only).** Hashed identifiers. A cross-survivor match is recorded server-side only. Survivors always see "Sealed" (this prevents perpetrator self-checks). Matches are released as counts only to the verified attorney the survivor has an active share with. No ledger entry is written at match time. | Built. Self-check flaw **mitigated**. Still demo-only until OPRF and account verification are in place (see Security §5) |
 | M9 | **Crypto-shred account deletion** | Built |
 
 ### 4.2 Next phase (pilot-readiness)
 | # | Requirement | Why |
 |---|---|---|
 | N1 | **Attorney-first route:** "Talk to a lawyer first" before the long intake. The attorney can request that the survivor prepare her account for counsel, with an attorney-set designation. | Strengthens privilege and work product (Memo §2) |
-| N2 | **Escrow redesign:** matches go to a vetted Legal Options Counselor, not to users. Account verification. OPRF with threshold key. | Prevents perpetrator probing (Security §5) |
+| N2 | **Escrow hardening:** ~~matches hidden from users~~ (done: they go to the survivor's verified, actively shared attorney). Next: account verification, rate limits, an optional vetted counselor who can reach both parties, and OPRF with a threshold key. | The pepper holder can still test identifiers. A perpetrator with an attorney share could still learn of a match through that attorney (Security §5) |
 | N3 | **Share expiry and renewal**, plus scoped consent per item | VAWA "reasonably time-limited" consent |
 | N4 | **Warnings at key moments:** intake start, seal, share, export, and delete (discoverability, version history, spoliation) | Honest informed consent (Memo §2) |
 | N5 | **Private notes vs. sealed statements.** Drafts are local and unsealed. Sealing is deliberate. | Reduces version-history impeachment risk |
@@ -137,7 +137,7 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 1. Legal structure: own 501(c)(3), or fiscal sponsorship? Is a legal service plan registration required (RPC 7.3(e))?
 2. Attorney-first or documentation-first as the default flow? This needs advocate and counsel input.
 3. Should drafts be sealed at all before counsel is engaged? What is the right balance between integrity and impeachment risk?
-4. Escrow: is matching worth its risk in the pilot, or should it be deferred until OPRF and the counselor model are in place? (Recommendation: defer real-data escrow.)
+4. Escrow: is matching worth its risk in the pilot, or should it be deferred until OPRF and account verification are in place? Survivor self-checks are now blocked, but the pepper-holder risk remains. (Recommendation: defer real-data escrow.)
 5. Who serves as Legal Options Counselor for matches, and under what privilege?
 6. Recovery: which advocates can hold Shamir shares, and what happens if a share-holder is subpoenaed?
 7. Campus pilot: which institution is willing to keep Matra fully independent of its Title IX office?

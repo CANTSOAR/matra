@@ -132,7 +132,7 @@ describe('IntakeChat', () => {
           await user.click(a.getByRole('button', { name: 'Save and continue' }));
           break;
         case 'person.escrow':
-          await user.click(a.getAllByRole('button', { name: 'Yes, check for matches' })[0]);
+          await user.click(a.getAllByRole('button', { name: 'Yes, seal it' })[0]);
           await user.click(a.getByRole('button', { name: 'Continue' }));
           break;
         case 'people.told':

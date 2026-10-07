@@ -152,7 +152,11 @@ export function mergeEvidence(...lists: (EvidenceItem[] | undefined)[]): Evidenc
 
 // ───────────── escrow ─────────────
 
-/** Lodge escrow hashes for every opted-in perpetrator identifier. Returns all hashes lodged so far. */
+/**
+ * Lodge escrow hashes for every opted-in perpetrator identifier. Returns all hashes lodged so far.
+ * The server always answers 'sealed' — survivors never see match results (anti-self-check). Matches are released
+ * only as counts to a verified attorney she has an active share with.
+ */
 export async function lodgeEscrow(
   api: ApiClient,
   masterKey: CryptoKey,

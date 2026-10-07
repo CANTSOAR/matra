@@ -118,7 +118,7 @@ export const UI = {
     approxSuffix: ' (approximate)',
   },
   escrow: {
-    yes: 'Yes, check for matches',
+    yes: 'Yes, seal it',
     no: 'No, thank you',
     unsure: "I'm not sure yet",
     noIdentifiers: 'No email, phone, or handle given',
@@ -769,7 +769,9 @@ export const STEPS: ScriptStep[] = [
     say: [
       'There is one more thing you can choose, if you want. It is called a sealed match.',
       'If you turn it on, the name, email, phone, or handle you gave is turned into a sealed code on this device. Nobody can read it — not us, not anyone.',
-      'If someone else, on their own, names the same person, you will both get a message that you are not alone. Nobody sees your name or what you wrote.',
+      'If someone else, on their own, names the same person, we will not show it in this app. That keeps this tool safe, so no one can use it to find out if they have been named.',
+      'Instead, if you choose to share your file with an attorney, that attorney will be told. They will never learn who the other person is, and neither will you.',
+      'Your attorney can talk it through with you, when you are ready. Nobody sees your name or what you wrote.',
       'Nothing else happens unless you decide. It is completely okay to say no.',
     ],
     label: 'Sealed match',

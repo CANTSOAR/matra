@@ -212,12 +212,17 @@ const toShare = (s: ShareRow): Share => ({
   ledgerEntryId: s.ledger_entry_id,
 });
 
-const toEscrow = (e: EscrowRow): EscrowEntry => ({
+/**
+ * Survivor-facing view of an escrow entry. ALWAYS reports 'sealed' and never includes matchedAt:
+ * if survivors could see match results, a perpetrator could register as a "survivor", submit his own
+ * identifiers, and learn that he has been named. The real state stays in the DB and is released only
+ * as aggregate counts to a verified attorney the survivor has an active share with (see the bundle route).
+ */
+const toSurvivorEscrow = (e: EscrowRow): EscrowEntry => ({
   id: e.id,
   labelEnvelope: JSON.parse(e.label_envelope),
-  status: e.status,
+  status: 'sealed',
   createdAt: e.created_at,
-  ...(e.matched_at != null && { matchedAt: e.matched_at }),
   ledgerEntryId: e.ledger_entry_id,
 });
 
@@ -655,6 +660,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
         sizeBytes: b.size_bytes,
       })),
       survivorAlias: s.survivor_alias,
+      // Human gatekeeper: match results are released only here, as counts over THIS survivor's own entries —
+      // no labels, no hashes, nothing about the other survivor. The survivor's own views never show them.
+      escrow: db
+        .prepare(
+          `SELECT COALESCE(SUM(status = 'sealed'), 0) AS sealedCount, COALESCE(SUM(status = 'matched'), 0) AS matchedCount
+             FROM escrow_entries WHERE user_id = ?`,
+        )
+        .get(s.survivor_id) as { sealedCount: number; matchedCount: number },
     };
     const when = new Date().toISOString();
     audit(me.id, 'share.opened', `Opened shared case file (share ${s.id})`);
@@ -689,7 +702,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   /*
    * Stored value: HMAC-SHA256(pepper, identifierHash) — so a DB leak alone can't be dictionary-attacked.
    * A match occurs only when a *different* user holds the same peppered hash. When it does, every still-sealed
-   * entry with that hash flips to 'matched'. Responses never include hashes, counts, or other users.
+   * entry with that hash flips to 'matched' (matched_at recorded in the DB only).
+   *
+   * Anti-self-check: survivors NEVER see match results — responses always say 'sealed' with no matchedAt — and no
+   * ledger entry is written at match time (otherwise a jump in /api/ledger/head seq would leak the match). Each
+   * submission appends exactly one 'escrow.sealed' entry whether or not it matches. Matches are released only as
+   * counts in the ShareBundle to a verified attorney with an active share. Responses never include hashes or other users.
    */
   app.post('/api/escrow', auth, survivorOnly, (req, res) => {
     const me = req.user!;
@@ -713,21 +731,18 @@ export function createApp(opts: CreateAppOptions): express.Express {
           .prepare(`SELECT id FROM escrow_entries WHERE peppered_hash = ? AND status = 'sealed' ORDER BY rowid`)
           .all(peppered) as Array<{ id: string }>;
         const upd = db.prepare(`UPDATE escrow_entries SET status = 'matched', matched_at = ? WHERE id = ?`);
-        for (const e of toMatch) {
-          upd.run(ts, e.id);
-          appendLedger(db, 'escrow.matched', e.id, sha256Hex(JSON.stringify({ escrowEntryId: e.id, matchedAt: ts })), ts);
-        }
+        for (const e of toMatch) upd.run(ts, e.id);
       }
     })();
     const row = db.prepare('SELECT * FROM escrow_entries WHERE id = ?').get(id) as EscrowRow;
-    res.status(201).json({ entry: toEscrow(row) });
+    res.status(201).json({ entry: toSurvivorEscrow(row) });
   });
 
   app.get('/api/escrow', auth, (req, res) => {
     const rows = db
       .prepare('SELECT * FROM escrow_entries WHERE user_id = ? ORDER BY created_at DESC, rowid DESC')
       .all(req.user!.id) as EscrowRow[];
-    res.json({ entries: rows.map(toEscrow) });
+    res.json({ entries: rows.map(toSurvivorEscrow) });
   });
 
   // ════════════ audit ════════════

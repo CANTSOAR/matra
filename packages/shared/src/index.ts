@@ -272,6 +272,13 @@ export interface ShareBundle {
   recipientWrappedKey: WrappedKey;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey; contentHash: string; sizeBytes: number }>;
   survivorAlias: string;
+  /**
+   * Blind-escrow summary for THIS survivor's own entries only — no labels, no hashes, nothing about any other
+   * survivor. This is the only place match results are ever released: to the verified attorney the survivor
+   * chose to share with (a human gatekeeper), never to the survivor's own client, so a perpetrator posing as a
+   * survivor cannot submit his own identifiers to learn whether he has been named.
+   */
+  escrow: { sealedCount: number; matchedCount: number };
 }
 
 export type EscrowStatus = 'sealed' | 'matched';
@@ -280,8 +287,15 @@ export interface EscrowEntry {
   id: string;
   /** label the survivor sees, stored encrypted client-side — server only returns it back */
   labelEnvelope: Envelope;
+  /**
+   * Survivor-facing responses (POST/GET /api/escrow) ALWAYS report 'sealed', whatever the real state.
+   * The true sealed/matched state is kept server-side and surfaced only as counts in ShareBundle.escrow
+   * to a verified attorney with an active share. Showing 'matched' to survivors would let a perpetrator
+   * register as a survivor, escrow his own identifiers, and learn he has been reported.
+   */
   status: EscrowStatus;
   createdAt: string;
+  /** Never sent to survivors (see `status`). Retained for type compatibility. */
   matchedAt?: string;
   ledgerEntryId: string;
 }
@@ -364,11 +378,11 @@ export interface ApiError { error: string; code?: string }
  GET    /api/attorneys?state=NJ                       -> { attorneys: AttorneyProfile[] }  (verified only)
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }
  GET    /api/shares                                   -> { shares: Share[] }  (survivor: outgoing, attorney: incoming)
- GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares)
+ GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares; includes escrow counts)
  POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only)
 
- POST   /api/escrow             CreateEscrowRequest   -> { entry: EscrowEntry }
- GET    /api/escrow                                   -> { entries: EscrowEntry[] }
+ POST   /api/escrow             CreateEscrowRequest   -> { entry: EscrowEntry }     (status always 'sealed')
+ GET    /api/escrow                                   -> { entries: EscrowEntry[] } (status always 'sealed')
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
  POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)

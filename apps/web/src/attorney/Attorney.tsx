@@ -165,6 +165,8 @@ export function AttorneyCase() {
             <div className="consent-text">{opened.data.bundle.share.consentStatement}</div>
           </section>
 
+          <EscrowNotice escrow={opened.data.bundle.escrow} />
+
           <section className="card stack" aria-labelledby="proof">
             <div className="section-title">
               <h2 id="proof">Integrity proof</h2>
@@ -234,6 +236,39 @@ export function AttorneyCase() {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Blind-escrow result. You (the verified attorney with an active share) are the only person Matra ever tells about a
+ * match — the client's own app always shows "Sealed", so a perpetrator posing as a survivor can't self-check.
+ * Counts cover only this client's own sealed names; nothing about the other person is ever available.
+ */
+function EscrowNotice({ escrow }: { escrow?: ShareBundle['escrow'] }) {
+  if (!escrow || escrow.sealedCount + escrow.matchedCount === 0) return null;
+  if (escrow.matchedCount > 0) {
+    return (
+      <section className="card care stack" aria-labelledby="escrow-match" role="note">
+        <h2 id="escrow-match">Sealed escrow: independent match</h2>
+        <p>
+          Another person independently named someone this client also named. Their identity is not shared with you or
+          anyone. Discuss with your client how she’d like to proceed; a match is an investigative lead, not evidence.
+        </p>
+        <p className="small muted">
+          Your client’s app does not show match results — she has not been told. Please raise it with care, and only
+          when and how she is ready to hear it.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section className="card stack" aria-labelledby="escrow-sealed">
+      <h2 id="escrow-sealed">Sealed escrow</h2>
+      <p className="small muted">
+        Your client sealed {escrow.sealedCount === 1 ? 'one name' : `${escrow.sealedCount} names`} in escrow. No one else has
+        independently named the same person so far.
+      </p>
+    </section>
   );
 }
 

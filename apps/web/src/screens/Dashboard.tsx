@@ -31,7 +31,6 @@ export function describeAudit(e: AuditEvent): string {
   if (/blob.*(download|read)/.test(a)) return 'A shared evidence file was downloaded';
   if (/revoke/.test(a)) return 'You revoked an attorney’s access';
   if (/share/.test(a)) return 'You shared your file with an attorney';
-  if (/escrow.*match/.test(a)) return 'A sealed escrow match was found';
   if (/escrow/.test(a)) return 'You sealed a name in escrow';
   if (/blob|evidence/.test(a)) return 'Evidence added to your vault';
   if (/record/.test(a)) return 'You sealed a record';
@@ -156,8 +155,9 @@ export function Dashboard() {
       <section className="card stack" aria-labelledby="escrow">
         <h2 id="escrow">Sealed escrow</h2>
         <p className="small muted">
-          If you chose to, the names or handles you gave are sealed as one-way fingerprints. If someone else independently
-          names the same person, you’ll see it here. Nobody is told who you are.
+          If you chose to, the names or handles you gave are sealed as one-way fingerprints. Nobody can read them, and
+          nobody is told who you are. This list will always say “Sealed” — that is on purpose, so no one can use this
+          page to find out whether they have been named.
         </p>
         {escrow.loading && <Loading />}
         {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
@@ -209,32 +209,24 @@ export function Dashboard() {
   );
 }
 
+/**
+ * Survivors never see match results (the server always reports 'sealed'). If they could, a perpetrator posing as a
+ * survivor could escrow his own identifiers and learn he has been named. Matches are released only to the verified
+ * attorney she chooses to share with.
+ */
 function EscrowCard({ entry, label }: { entry: EscrowEntry; label: string }) {
-  if (entry.status === 'matched') {
-    return (
-      <div className="card care stack" role="status">
-        <div className="row">
-          <span className="badge care">Match found</span>
-          <strong>{label}</strong>
-        </div>
-        <p>
-          Someone else independently named this person. You are not alone in this, and you don’t have to do anything right
-          now. An advocate or attorney can help you decide what to do next.
-        </p>
-        <p className="small">
-          <Link to="/vault/share">Talk to a verified attorney</Link> · or call the hotline at{' '}
-          <a href="tel:18006564673">1-800-656-4673</a>
-        </p>
-        <p className="small muted">Match noted {formatDate(entry.matchedAt)}</p>
-      </div>
-    );
-  }
   return (
-    <div className="row" style={{ justifyContent: 'space-between' }}>
-      <span>
-        <strong>{label}</strong> <span className="small muted">· sealed {formatDate(entry.createdAt)}</span>
-      </span>
-      <span className="badge neutral">Sealed — waiting</span>
+    <div className="stack">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span>
+          <strong>{label}</strong> <span className="small muted">· sealed {formatDate(entry.createdAt)}</span>
+        </span>
+        <span className="badge neutral">Sealed</span>
+      </div>
+      <p className="small muted">
+        Sealed. If someone else independently names this person, the attorney you choose to share with will be told —
+        never the other person’s identity.
+      </p>
     </div>
   );
 }

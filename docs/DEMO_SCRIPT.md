@@ -71,11 +71,13 @@
 
 ### 10. Escrow match (8:30-9:30), **framed as a prototype**
 - As `jane.demo`, seal the Instagram handle in escrow. Status: *sealed*.
-- Log in as the second survivor (`sam.demo`). Enter the same handle in a different format (`@Demo_Handle_123`). Both entries flip to **matched**.
+- Log in as the second survivor (`sam.demo`). Enter the same handle in a different format (`@Demo_Handle_123`). Her status still says **Sealed**. That is on purpose.
+- Matches reach only an attorney with an **active** share, and step 9 revoked Jane's. So, as `jane.demo` in Profile A, share again with `attorney.nj1`. Then in Profile B, open Jane's case file. A notice says another person independently named someone this client also named, with no identity attached.
 - **Talking points:**
-  - *"Neither survivor learns who the other is. The server never sees the raw handle."*
+  - *"Neither survivor ever sees a match. If they could, the person himself could sign up, type in his own handle, and learn he's been reported. Now the only person told is the verified attorney the survivor chose, and only as a count."*
+  - *"Neither survivor learns who the other is. The server never sees the raw handle. Nothing extra is written to the public ledger when a match happens, so the ledger can't be watched either."*
   - *"A match is a lead, not evidence. In New Jersey other-acts evidence goes through Rule 404(b), and there's no equivalent of federal Rule 413."*
-  - **Say this before anyone asks:** *"This version has a known flaw. Anyone could type in a handle and learn it's been reported, including the person himself. And whoever holds our server secret could test phone numbers. Before any real use, matches go to a trained counselor, not to users, and we move to OPRF-based cryptography like Callisto's. Until then this stays demo-only."*
+  - **Say this before anyone asks:** *"We fixed the self-check flaw: users never see matches. Two limits remain. Whoever holds our server secret could still test phone numbers. And someone posing as a survivor who gets a verified attorney to accept his file could hear about a match from that attorney. We rely on attorney verification and professional duty for that. Before any real use we move to OPRF-based cryptography like Callisto's and add account verification. Until then this stays demo-only."*
 
 ### 11. Close and ask (9:30-10:00)
 *"We're asking for three things. Attorneys willing to pilot under our MOU. Advocates to co-own the intake script. And a security auditor. We take no fees and no referral money, ever."*
