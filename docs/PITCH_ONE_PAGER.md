@@ -17,14 +17,14 @@
 4. **Tamper-evident ledger.** Every sealed record, file, and consent gets an entry in an append-only hash chain. *(Today it is self-hosted. External timestamp anchoring is on the roadmap. Until then it shows integrity, not independent proof of time.)*
 5. **Incident summary PDF** in her own words, plus an **NJ VCCO compensation application draft**. Both are generated on her device.
 6. **Legal Shield sharing.** She picks a verified attorney, reads and accepts plain consent text (logged verbatim), and shares a scoped, re-encrypted file. She can revoke at any time and **sees every time the attorney opens it**.
-7. **Blind escrow (demo only).** A prototype of confidential repeat-perpetrator matching. It is not for real use until redesigned (see below).
+7. **Blind escrow (demo only).** A prototype of confidential repeat-perpetrator matching. Matches are never shown to survivors; only her chosen attorney sees a count. Disabled for any pilot (see below).
 
 **Never:** auto-sending to police, schools, or employers · AI rewriting of her account · legal advice from software · fees from attorneys.
 
 ### What we are honest about
 - Matra cannot be compelled to produce content it cannot decrypt. **She can be.** Anything given to police becomes discoverable to the defense. We tell her this before she writes, seals, or shares.
 - A Matra record **cannot replace testimony**. An app entry is not a New Jersey "fresh complaint," because the doctrine requires telling a *person*. Matra helps her and her lawyer identify who she told.
-- An escrow match is **a lead, not evidence** (N.J.R.E. 404(b); New Jersey has no counterpart to FRE 413). Before any real use, matching will route through a trained counselor and stronger cryptography (OPRF), because the current design could let a perpetrator probe whether he has been named.
+- An escrow match is **a lead, not evidence** (N.J.R.E. 404(b); New Jersey has no counterpart to FRE 413). Before any real use, matching will route through a trained counselor and stronger cryptography (OPRF), Survivors never see match results (so no one can sign up to check whether they've been named); only her chosen attorney sees a match count. Remaining limit: whoever holds the server secret could test a guessed identifier.
 - **No independent security audit yet.** One is required before real survivor data.
 Full analysis: [Legal Research Memo](LEGAL_RESEARCH_MEMO.md) · [Security Whitepaper](SECURITY_WHITEPAPER.md)
 
