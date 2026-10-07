@@ -169,6 +169,11 @@ const MIGRATIONS: string[] = [
   WHEN NOT EXISTS (SELECT 1 FROM shred_authorizations WHERE owner_id = OLD.owner_id)
   BEGIN SELECT RAISE(ABORT, 'records are immutable (WORM); deletion only via account crypto-shred'); END;
   `,
+  // ── v2: share expiry. Existing rows get created_at + 90 days. ──────────
+  `
+  ALTER TABLE shares ADD COLUMN expires_at TEXT;
+  UPDATE shares SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+90 days');
+  `,
 ];
 
 export function openDb(dbPath: string): DB {

@@ -26,6 +26,7 @@ export type LedgerType =
   | 'blob.sealed'
   | 'share.granted'
   | 'share.revoked'
+  | 'share.renewed'
   | 'escrow.sealed'
   | 'account.shredded';
 

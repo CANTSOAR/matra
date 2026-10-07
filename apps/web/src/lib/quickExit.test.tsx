@@ -20,7 +20,7 @@ describe('quick exit', () => {
       </Harness>,
     );
     await act(async () => {
-      await current!.register({ username: 'wren', passphrase: 'pebble-lantern-fjord-mango-heron', role: 'survivor' });
+      await current!.register({ username: 'wren', passphrase: 'pebble-lantern-fjord-mango-heron', role: 'survivor', adultAffirmed: true });
     });
     expect(screen.getByTestId('state')).toHaveTextContent('in:wren');
 

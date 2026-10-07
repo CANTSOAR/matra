@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
-import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import type { Role } from '@matra/shared';
 import { NEUTRAL_TITLE, QuickExitButton } from '../lib/quickExit';
 import { useSession } from '../lib/session';
@@ -15,6 +15,7 @@ function useFocusOnNavigate() {
 
 export function Layout() {
   const { session, logout } = useSession();
+  const navigate = useNavigate();
   useFocusOnNavigate();
   useEffect(() => {
     document.title = NEUTRAL_TITLE; // tab title stays neutral on every screen
@@ -55,7 +56,15 @@ export function Layout() {
         )}
         <span className="header-spacer" />
         {session && (
-          <button type="button" className="btn btn-quiet btn-small" onClick={() => void logout()}>
+          <button
+            type="button"
+            className="btn btn-quiet btn-small"
+            onClick={() => {
+              // land on a neutral page, not a "Welcome back" sign-in form that shows this device has an account
+              navigate(role === 'attorney' ? '/attorney' : '/', { replace: true });
+              void logout();
+            }}
+          >
             Lock &amp; sign out
           </button>
         )}

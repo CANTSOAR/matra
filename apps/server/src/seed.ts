@@ -75,6 +75,7 @@ async function main() {
       kdfIterations: DEFAULT_KDF_ITERATIONS,
       publicKey,
       wrappedPrivateKey,
+      ...(role === 'survivor' && { adultAffirmation: true }),
       ...(attorneyProfile && { attorneyProfile }),
     };
     const res = await fetch(`${base}/api/auth/register`, {

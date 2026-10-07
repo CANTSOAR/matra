@@ -73,8 +73,11 @@ export const registerRequest = z
     publicKey: rsaPublicJwk,
     wrappedPrivateKey: envelope,
     attorneyProfile: attorneyProfileInput.optional(),
+    adultAffirmation: z.boolean().optional(),
   })
   .superRefine((r, ctx) => {
+    if (r.role === 'survivor' && r.adultAffirmation !== true)
+      ctx.addIssue({ code: 'custom', path: ['adultAffirmation'], message: 'You must confirm you are 18 or older.' });
     if (r.role === 'attorney' && !r.attorneyProfile)
       ctx.addIssue({ code: 'custom', path: ['attorneyProfile'], message: 'attorneyProfile is required for attorneys' });
     if (r.role === 'survivor' && r.attorneyProfile)
@@ -98,6 +101,7 @@ export const createShareRequest = z.object({
   recordId: id,
   attorneyId: id,
   recipientWrappedKey,
+  attorneyKeyFingerprint: z.string().regex(/^[0-9A-F]{4}(-[0-9A-F]{4}){7}$/),
   blobs: z
     .array(z.object({ blobId: id, recipientWrappedKey }))
     .max(500)
@@ -109,7 +113,10 @@ export const createShareRequest = z.object({
     .max(3)
     .refine((s) => new Set(s).size === s.length, 'duplicate scope'),
   survivorAlias: z.string().trim().min(1).max(100),
+  expiresInDays: z.number().int().min(1).max(365).optional(),
 });
+
+export const renewShareRequest = z.object({ expiresInDays: z.number().int().min(1).max(365).optional() });
 
 export const createEscrowRequest = z.object({
   identifierHash: z

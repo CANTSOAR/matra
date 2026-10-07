@@ -85,6 +85,21 @@ export function finals(list: OpenedRecord[]): OpenedRecord[] {
   return list.filter((r) => r.payload.kind === 'final' && r.payload.record);
 }
 
+/**
+ * Where to pick the intake back up: a vault draft saved after the latest seal, otherwise the answers of the latest
+ * sealed version (so adding evidence or a detail after sealing never means starting over).
+ */
+export function resumeFrom(list: OpenedRecord[]): { draft?: IntakeDraft; draftRecord?: OpenedRecord; final?: OpenedRecord } {
+  const final = latestOf(list, 'final');
+  const draftRecord = latestOf(list, 'draft');
+  const draftIsNewer = !!draftRecord && !draftRecord.supersededBy && (!final || draftRecord.meta.createdAt > final.meta.createdAt);
+  return {
+    draft: (draftIsNewer ? draftRecord.payload.draft : undefined) ?? final?.payload.draft,
+    draftRecord: draftIsNewer ? draftRecord : undefined,
+    final,
+  };
+}
+
 // ───────────── evidence ─────────────
 
 export function evidenceKindFor(file: { type: string; name: string }): EvidenceKind {
@@ -152,6 +167,14 @@ export function mergeEvidence(...lists: (EvidenceItem[] | undefined)[]): Evidenc
 
 // ───────────── escrow ─────────────
 
+const ESCROW_KIND_LABEL: Record<string, string> = {
+  full_name: 'name',
+  email: 'email',
+  phone: 'phone number',
+  social_handle: 'social media handle',
+  other: 'other identifier',
+};
+
 /**
  * Lodge escrow hashes for every opted-in perpetrator identifier. Returns all hashes lodged so far.
  * The server always answers 'sealed' — survivors never see match results (anti-self-check). Matches are released
@@ -168,9 +191,11 @@ export async function lodgeEscrow(
     if (!p.escrowOptIn) continue;
     for (const id of p.identifiers) {
       if (!id.value?.trim()) continue;
+      // An initial or a first name alone ("R.", "Mike") would "match" unrelated people — only full names are sealed.
+      if (id.kind === 'full_name' && id.value.trim().split(/\s+/).filter((w) => w.replace(/\W/g, '').length > 1).length < 2) continue;
       const hash = await escrowIdentifierHash(id.kind, id.value, id.platform);
       if (done.has(hash)) continue;
-      const label = p.name?.trim() || `${id.kind.replace('_', ' ')}${id.platform ? ` (${id.platform})` : ''}`;
+      const label = `${p.name?.trim() || 'A person you named'} · ${ESCROW_KIND_LABEL[id.kind] ?? 'identifier'}${id.platform ? ` (${id.platform})` : ''}`;
       // label encrypted directly with masterKey — only she can read it back
       const labelEnvelope = await encryptJSON({ label }, masterKey);
       await api.createEscrow({ identifierHash: hash, labelEnvelope });

@@ -84,6 +84,16 @@ describe('auth', () => {
     expect(badJson.body.code).toBe('invalid_json');
   });
 
+  it('survivor registration requires an explicit 18+ affirmation', async () => {
+    const { app } = makeApp();
+    await expect(registerUser(app, 'no.field', 'survivor', { adultAffirmation: null })).rejects.toThrow(/400/);
+    await expect(registerUser(app, 'says.false', 'survivor', { adultAffirmation: false })).rejects.toThrow(/400/);
+    const ok = await registerUser(app, 'adult.one', 'survivor', { adultAffirmation: true });
+    expect(ok.user.role).toBe('survivor');
+    // attorneys are not asked
+    await registerUser(app, 'lawyer.one', 'attorney');
+  });
+
   it('attorney requires profile, starts unverified, appears only once verified', async () => {
     const { app } = makeApp();
     const s = await registerUser(app, 'jane.test');

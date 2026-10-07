@@ -261,6 +261,8 @@ export interface Share {
   consentStatement: string;
   scope: Array<'record' | 'evidence' | 'brief'>;
   createdAt: string;
+  /** Access stops at this time (default 90 days); the survivor can renew. Stops future access only. */
+  expiresAt: string;
   revokedAt?: string;
   ledgerEntryId: string;
 }
@@ -323,6 +325,8 @@ export interface RegisterRequest {
   publicKey: JsonWebKey;
   wrappedPrivateKey: Envelope;
   attorneyProfile?: Omit<AttorneyProfile, 'userId' | 'verified' | 'publicKey'>;
+  /** Required (must be `true`) when role is 'survivor': affirms the user is 18 or older. */
+  adultAffirmation?: boolean;
 }
 export interface AuthResponse { token: string; user: PublicUser }
 export interface LoginRequest { username: string; authKey: string }
@@ -338,10 +342,14 @@ export interface CreateShareRequest {
   recordId: string;
   attorneyId: string;
   recipientWrappedKey: WrappedKey;
+  /** Fingerprint of the attorney key the survivor confirmed on screen; server rejects on mismatch. */
+  attorneyKeyFingerprint: string;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
   consentStatement: string;
   scope: Share['scope'];
   survivorAlias: string;
+  /** 1-365, default 90 */
+  expiresInDays?: number;
 }
 
 export interface CreateEscrowRequest {
@@ -379,6 +387,7 @@ export interface ApiError { error: string; code?: string }
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }
  GET    /api/shares                                   -> { shares: Share[] }  (survivor: outgoing, attorney: incoming)
  GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares; includes escrow counts)
+ POST   /api/shares/:id/renew  { expiresInDays? } -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; not revoked)
  POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only)
 
  POST   /api/escrow             CreateEscrowRequest   -> { entry: EscrowEntry }     (status always 'sealed')

@@ -20,6 +20,7 @@
   max-width: 8.5in;
   margin: 0 auto;
   padding: 48px 56px;
+  overflow-wrap: anywhere; /* long hashes / formulas must not widen the page on phones */
   background: var(--brief-paper);
   color: var(--brief-ink);
   font: 14px/1.5 'Helvetica Neue', Helvetica, Arial, sans-serif;

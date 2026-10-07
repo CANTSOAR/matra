@@ -3,7 +3,7 @@ import request from 'supertest';
 import { encryptJSON, escrowIdentifierHash, generateContentKey } from '@matra/crypto';
 import { createRecord, makeApp, registerUser, uploadBlob, type TestUser } from './test-helpers.js';
 import type express from 'express';
-import { wrapKeyForRecipient } from '@matra/crypto';
+import { publicKeyFingerprint, wrapKeyForRecipient } from '@matra/crypto';
 
 async function seal(app: express.Express, u: TestUser, identifierHash: string) {
   const labelEnvelope = await encryptJSON({ label: 'person' }, await generateContentKey());
@@ -126,7 +126,8 @@ describe('blind escrow', () => {
           attorneyId: atty.user.id,
           recipientWrappedKey: await wrapKeyForRecipient(key, atty.user.publicKey),
           blobs: [],
-          consentStatement: 'I consent to share my case file with this attorney.',
+          consentStatement: `I consent to share my case file with this attorney. ${await publicKeyFingerprint(atty.user.publicKey)}`,
+          attorneyKeyFingerprint: await publicKeyFingerprint(atty.user.publicKey),
           scope: ['record'],
           survivorAlias: 'J.',
         })
@@ -173,7 +174,8 @@ describe('account crypto-shredding', () => {
         attorneyId: atty.user.id,
         recipientWrappedKey: await wrapKeyForRecipient(key, atty.user.publicKey),
         blobs: [{ blobId: blob, recipientWrappedKey: await wrapKeyForRecipient(key, atty.user.publicKey) }],
-        consentStatement: 'I consent to share my case file with this attorney.',
+        consentStatement: `I consent to share my case file with this attorney. ${await publicKeyFingerprint(atty.user.publicKey)}`,
+          attorneyKeyFingerprint: await publicKeyFingerprint(atty.user.publicKey),
         scope: ['record', 'evidence'],
         survivorAlias: 'J.',
       });

@@ -91,6 +91,11 @@ a {
   outline-offset: 2px;
   border-radius: 4px;
 }
+/* Headings and <main> receive focus programmatically on navigation (for screen readers); they aren't controls,
+   so they don't need a focus ring. */
+[tabindex="-1"]:focus {
+  outline: none;
+}
 
 .visually-hidden {
   position: absolute !important;
@@ -138,6 +143,17 @@ a {
 @media (max-width: 420px) {
   .quick-exit-hint { display: none; }
 }
+/* The intake's sticky header pins to the top while scrolling — keep its "Take a break" button clear of Quick exit. */
+@media (max-width: 1100px) {
+  .intake-header-row { padding-right: 180px; }
+}
+@media (max-width: 480px) {
+  .intake-header-row { padding-right: 112px; }
+  /* the page heading above already says "Your account"; keep the intake's title for screen readers only */
+  .intake-header-row .intake-title {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+}
 
 /* ───────── layout ───────── */
 .app-header {
@@ -145,7 +161,7 @@ a {
   align-items: center;
   gap: 16px;
   padding: 12px 16px;
-  padding-right: 150px; /* room for quick exit */
+  padding-right: 200px; /* room for quick exit (incl. its "Esc ×3" hint) */
   border-bottom: 1px solid var(--matra-border);
   background: var(--matra-surface);
   min-height: 64px;

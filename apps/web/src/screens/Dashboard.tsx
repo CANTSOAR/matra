@@ -163,6 +163,12 @@ export function Dashboard() {
         {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
         {escrow.data && escrow.data.length === 0 && <p className="muted">Nothing sealed in escrow.</p>}
         {escrow.data?.map(({ entry, label }) => <EscrowCard key={entry.id} entry={entry} label={label} />)}
+        {escrow.data && escrow.data.length > 0 && (
+          <p className="small muted">
+            If someone else independently names the same person, the attorney you choose to share with will be told —
+            never the other person’s identity.
+          </p>
+        )}
       </section>
 
       {/* ── shares ── */}
@@ -223,10 +229,6 @@ function EscrowCard({ entry, label }: { entry: EscrowEntry; label: string }) {
         </span>
         <span className="badge neutral">Sealed</span>
       </div>
-      <p className="small muted">
-        Sealed. If someone else independently names this person, the attorney you choose to share with will be told —
-        never the other person’s identity.
-      </p>
     </div>
   );
 }
@@ -237,6 +239,19 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = attorney ? `${attorney.displayName}${attorney.organization ? `, ${attorney.organization}` : ''}` : 'Attorney';
+  const expired = share.status === 'active' && Date.parse(share.expiresAt) <= Date.now();
+  async function renew() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.renewShare(share.id);
+      onChanged();
+    } catch (e) {
+      setError(friendlyError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function revoke() {
     setBusy(true);
     setError(null);
@@ -256,10 +271,10 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
         <span>
           <strong>{name}</strong>{' '}
           <span className="small muted">
-            · shared {formatDate(share.createdAt)} · {share.scope.join(', ')}
+            · shared {formatDate(share.createdAt)} · {share.scope.join(', ')}{share.status === 'active' && <> · {expired ? 'expired' : 'expires'} {formatDate(share.expiresAt)}</>}
           </span>
         </span>
-        {share.status === 'active' ? <span className="badge ok">Has access</span> : <span className="badge neutral">Revoked {formatDate(share.revokedAt)}</span>}
+        {share.status === 'active' ? expired ? <span className="badge neutral">Expired</span> : <span className="badge ok">Has access</span> : <span className="badge neutral">Revoked {formatDate(share.revokedAt)}</span>}
       </div>
       {share.status === 'active' &&
         (confirming ? (
@@ -275,7 +290,10 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
             </div>
           </div>
         ) : (
-          <div>
+          <div className="row">
+            <button className="btn btn-small" onClick={renew} disabled={busy}>
+              {busy ? 'Renewing…' : 'Renew 90 days'}
+            </button>
             <button className="btn btn-small btn-danger" onClick={() => setConfirming(true)}>
               Revoke
             </button>

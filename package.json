@@ -12,9 +12,11 @@
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @matra/server\" \"npm run dev -w @matra/web\"",
     "test": "npm test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "seed": "npm run seed -w @matra/server"
+    "seed": "npm run seed -w @matra/server",
+    "e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "concurrently": "^10.0.5",
     "typescript": "^7.0.2"
   }

@@ -7,7 +7,7 @@
  * Error shape: ApiError `{ error: string, code?: string }`. Codes used:
  *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch
  *   401 unauthorized | session_expired | invalid_credentials
- *   403 forbidden | forbidden_role | share_revoked | attorney_not_verified
+ *   403 forbidden | forbidden_role | share_revoked | share_expired | attorney_not_verified
  *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found
  *   409 username_taken | already_revoked
  *   413 payload_too_large   415 unsupported_media_type   429 rate_limited   500 internal
@@ -141,6 +141,7 @@ interface ShareRow {
   survivor_alias: string;
   created_at: string;
   revoked_at: string | null;
+  expires_at: string;
   ledger_entry_id: string;
 }
 interface EscrowRow {
@@ -208,9 +209,15 @@ const toShare = (s: ShareRow): Share => ({
   consentStatement: s.consent_statement,
   scope: JSON.parse(s.scope),
   createdAt: s.created_at,
+  expiresAt: s.expires_at,
   ...(s.revoked_at != null && { revokedAt: s.revoked_at }),
   ledgerEntryId: s.ledger_entry_id,
 });
+
+const DEFAULT_SHARE_DAYS = 90;
+const addDays = (from: number, days: number) => new Date(from + days * 86_400_000).toISOString();
+/** A share grants access only while active AND unexpired. Revocation and expiry stop future access only. */
+const isShareLive = (s: ShareRow) => s.status === 'active' && Date.parse(s.expires_at) > Date.now();
 
 /**
  * Survivor-facing view of an escrow entry. ALWAYS reports 'sealed' and never includes matchedAt:
@@ -518,11 +525,21 @@ export function createApp(opts: CreateAppOptions): express.Express {
           ? (db
               .prepare(
                 `SELECT s.id, s.survivor_id FROM share_blobs sb JOIN shares s ON s.id = sb.share_id
-                  WHERE sb.blob_id = ? AND s.attorney_id = ? AND s.status = 'active' LIMIT 1`,
+                  WHERE sb.blob_id = ? AND s.attorney_id = ? AND s.status = 'active' AND s.expires_at > ? LIMIT 1`,
               )
-              .get(bid, me.id) as { id: string; survivor_id: string } | undefined)
+              .get(bid, me.id, new Date().toISOString()) as { id: string; survivor_id: string } | undefined)
           : undefined;
-      if (!grant) throw new HttpError(403, 'forbidden', 'You do not have access to this file.');
+      if (!grant) {
+        const wasShared =
+          me.role === 'attorney'
+            ? (db
+            .prepare(`SELECT s.status FROM share_blobs sb JOIN shares s ON s.id = sb.share_id WHERE sb.blob_id = ? AND s.attorney_id = ? ORDER BY (s.status = 'active') DESC LIMIT 1`)
+            .get(bid, me.id) as { status: string } | undefined)
+            : undefined;
+        if (wasShared?.status === 'active') throw new HttpError(403, 'share_expired', 'This share has expired. Ask the survivor to renew it.');
+        if (wasShared) throw new HttpError(403, 'share_revoked', 'The survivor has revoked access to this file.');
+        throw new HttpError(403, 'forbidden', 'You do not have access to this file.');
+      }
       const when = new Date().toISOString();
       audit(me.id, 'share.blob_downloaded', `Downloaded encrypted evidence file ${bid} (share ${grant.id})`);
       audit(grant.survivor_id, 'attorney.downloaded_evidence', `${attorneyLabel(me.id)} downloaded one of your shared evidence files at ${when}`);
@@ -575,6 +592,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (profile.verified !== 1)
       throw new HttpError(403, 'attorney_not_verified', 'This attorney has not been verified yet.');
 
+    // Bind the share to the key the survivor confirmed: a swapped key changes the fingerprint (W3).
+    const pk = JSON.parse(attorney.public_key) as { kty?: string; n?: string; e?: string };
+    const actualFp = sha256Hex(`${pk.kty}|${pk.n}|${pk.e}`).slice(0, 32).toUpperCase().match(/.{4}/g)!.join('-');
+    if (body.attorneyKeyFingerprint !== actualFp)
+      throw new HttpError(409, 'attorney_key_mismatch', "The attorney's key does not match the fingerprint you confirmed. Nothing was shared.");
+    if (!body.consentStatement.includes(actualFp))
+      throw new HttpError(400, 'consent_fingerprint_missing', 'The consent statement must name the confirmed key fingerprint.');
+
     for (const b of body.blobs) {
       const meta = q.blobMetaById.get(b.blobId) as BlobRow | undefined;
       if (!meta) throw new HttpError(404, 'blob_not_found', 'One of the files was not found.');
@@ -584,15 +609,18 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(400, 'scope_mismatch', "Sharing files requires 'evidence' in the consent scope.");
 
     const id = newId();
+    const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
     const blobIds = body.blobs.map((b) => b.blobId);
     const contentHash = sha256Hex(
       JSON.stringify({
         shareId: id,
         recordId: body.recordId,
         attorneyId: body.attorneyId,
+        attorneyKeyFingerprint: actualFp,
         consentStatement: body.consentStatement,
         scope: body.scope,
         blobIds,
+        expiresAt,
       }),
     );
     let ledgerEntry!: LedgerEntry;
@@ -600,8 +628,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
       ledgerEntry = appendLedger(db, 'share.granted', id, contentHash);
       db.prepare(
         `INSERT INTO shares (id, record_id, survivor_id, attorney_id, status, consent_statement, scope,
-                             recipient_wrapped_key, survivor_alias, created_at, revoked_at, ledger_entry_id)
-         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, NULL, ?)`,
+                             recipient_wrapped_key, survivor_alias, created_at, revoked_at, expires_at, ledger_entry_id)
+         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, NULL, ?, ?)`,
       ).run(
         id,
         body.recordId,
@@ -612,6 +640,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         JSON.stringify(body.recipientWrappedKey),
         body.survivorAlias,
         ledgerEntry.timestamp,
+        expiresAt,
         ledgerEntry.id,
       );
       const ins = db.prepare('INSERT INTO share_blobs (share_id, blob_id, recipient_wrapped_key) VALUES (?, ?, ?)');
@@ -635,6 +664,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
     if (s.attorney_id !== me.id) throw new HttpError(403, 'forbidden', 'This share was not granted to you.');
     if (s.status !== 'active') throw new HttpError(403, 'share_revoked', 'The survivor has revoked access to this file.');
+    if (!isShareLive(s)) throw new HttpError(403, 'share_expired', 'This share has expired. Ask the survivor to renew it.');
     const r = q.recordById.get(s.record_id) as RecordRow;
     const blobs = db
       .prepare(
@@ -673,6 +703,24 @@ export function createApp(opts: CreateAppOptions): express.Express {
     audit(me.id, 'share.opened', `Opened shared case file (share ${s.id})`);
     audit(s.survivor_id, 'attorney.opened_share', `${attorneyLabel(me.id)} opened your shared case file at ${when}`);
     res.json(bundle);
+  });
+
+  app.post('/api/shares/:id/renew', auth, survivorOnly, (req, res) => {
+    const me = req.user!;
+    const s = q.shareById.get(parse(S.id, req.params.id)) as ShareRow | undefined;
+    if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
+    if (s.survivor_id !== me.id) throw new HttpError(403, 'forbidden', 'You can only renew your own shares.');
+    if (s.status === 'revoked') throw new HttpError(409, 'already_revoked', 'A revoked share cannot be renewed. Create a new share.');
+    const { expiresInDays } = parse(S.renewShareRequest, req.body ?? {});
+    const expiresAt = addDays(Date.now(), expiresInDays ?? DEFAULT_SHARE_DAYS);
+    let ledgerEntry!: LedgerEntry;
+    db.transaction(() => {
+      ledgerEntry = appendLedger(db, 'share.renewed', s.id, sha256Hex(JSON.stringify({ shareId: s.id, expiresAt })));
+      db.prepare('UPDATE shares SET expires_at = ? WHERE id = ?').run(expiresAt, s.id);
+      audit(me.id, 'share.renewed', `You renewed access for ${attorneyLabel(s.attorney_id)} until ${expiresAt.slice(0, 10)}`);
+      audit(s.attorney_id, 'share.renewed_by_survivor', `A survivor ("${s.survivor_alias}") renewed your access to a case file`);
+    })();
+    res.json({ share: toShare(q.shareById.get(s.id) as ShareRow), ledgerEntry });
   });
 
   app.post('/api/shares/:id/revoke', auth, survivorOnly, (req, res) => {
@@ -723,16 +771,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
       ).run(id, me.id, peppered, canonicalEnvelope(body.labelEnvelope), ts, le.id);
       audit(me.id, 'escrow.created', 'Sealed an identifier in the blind escrow');
 
-      const otherUser = db
-        .prepare('SELECT 1 FROM escrow_entries WHERE peppered_hash = ? AND user_id != ? LIMIT 1')
-        .get(peppered, me.id);
-      if (otherUser) {
-        const toMatch = db
-          .prepare(`SELECT id FROM escrow_entries WHERE peppered_hash = ? AND status = 'sealed' ORDER BY rowid`)
-          .all(peppered) as Array<{ id: string }>;
-        const upd = db.prepare(`UPDATE escrow_entries SET status = 'matched', matched_at = ? WHERE id = ?`);
-        for (const e of toMatch) upd.run(ts, e.id);
-      }
+      // One statement, always executed, so a match costs the same code path as a miss (no timing/branch oracle).
+      db.prepare(
+        `UPDATE escrow_entries SET status = 'matched', matched_at = ?
+          WHERE peppered_hash = ? AND status = 'sealed'
+            AND EXISTS (SELECT 1 FROM escrow_entries WHERE peppered_hash = ? AND user_id != ?)`,
+      ).run(ts, peppered, peppered, me.id);
     })();
     const row = db.prepare('SELECT * FROM escrow_entries WHERE id = ?').get(id) as EscrowRow;
     res.status(201).json({ entry: toSurvivorEscrow(row) });

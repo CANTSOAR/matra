@@ -31,6 +31,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
   const [confirm, setConfirm] = useState('');
   const [show, setShow] = useState(false);
   const [ack, setAck] = useState(false);
+  const [adult, setAdult] = useState(false);
   const [suggestion, setSuggestion] = useState(() => generatePassphrase());
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +52,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
     strength.level !== 'weak' &&
     pass === confirm &&
     ack &&
+    (role !== 'survivor' || adult) &&
     (role !== 'attorney' || (displayName.trim() && jurisdictions.length > 0));
 
   async function onSubmit(e: FormEvent) {
@@ -69,7 +71,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
           acceptsProBono: proBono,
         };
       }
-      await register({ username, passphrase: pass, role, attorneyProfile }, setProgress);
+      await register({ username, passphrase: pass, role, attorneyProfile, adultAffirmed: adult }, setProgress);
       navigate(role === 'attorney' ? '/attorney/cases' : '/vault', { replace: true });
     } catch (err) {
       setError(friendlyError(err));
@@ -172,6 +174,20 @@ export function CreateAccountForm({ role }: { role: Role }) {
           <span>I’ve written my passphrase down somewhere safe, and I understand it can’t be reset.</span>
         </label>
       </div>
+
+      {role === 'survivor' && (
+        <div className="card stack">
+          <h2>Adults only</h2>
+          <p className="small muted">
+            Matra is a tool for adults. If you are worried a child or teenager is being abused, please contact the
+            appropriate authorities (in New Jersey, call 1-877-NJ-ABUSE) or 911 if someone is in danger right now.
+          </p>
+          <label className="check">
+            <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} />
+            <span>I am 18 or older, and I understand Matra is not for reporting child abuse.</span>
+          </label>
+        </div>
+      )}
 
       {role === 'attorney' && (
         <fieldset className="card stack" style={{ border: '1px solid var(--matra-border)' }}>

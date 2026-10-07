@@ -4,7 +4,7 @@ import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common';
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
-import { latestOf, loadVault, lodgeEscrow, mergeEvidence, sealPayload, shortHash } from '../lib/vault';
+import { latestOf, loadVault, lodgeEscrow, mergeEvidence, resumeFrom, sealPayload, shortHash } from '../lib/vault';
 
 interface Boot {
   working: WorkingData;
@@ -30,18 +30,17 @@ export function Story() {
     let alive = true;
     (async () => {
       const [mem, vault] = await Promise.all([getWorkingData(), loadVault(api, session.masterKey)]);
-      const final = latestOf(vault, 'final');
-      const draft = latestOf(vault, 'draft');
-      const draftIsNewer = draft && !draft.supersededBy && (!final || draft.meta.createdAt > final.meta.createdAt);
+      const { draft: resumeDraft, draftRecord, final } = resumeFrom(vault);
+      // A new sealed version keeps the evidence of the one it replaces.
+      const sealedEvidence = final?.payload.record?.evidence;
       let working: WorkingData;
-      if (mem?.draft) working = mem;
-      else if (draftIsNewer)
+      if (mem?.draft) working = { ...mem, evidence: mergeEvidence(sealedEvidence, mem.evidence) };
+      else
         working = {
-          draft: draft!.payload.draft ?? emptyDraft(),
-          evidence: mergeEvidence(draft!.payload.evidence, mem?.evidence),
-          savedDraftRecordId: mem?.savedDraftRecordId ?? draft!.meta.id,
+          draft: resumeDraft ?? emptyDraft(),
+          evidence: mergeEvidence(sealedEvidence, draftRecord?.payload.evidence, mem?.evidence),
+          savedDraftRecordId: mem?.savedDraftRecordId ?? draftRecord?.meta.id ?? latestOf(vault, 'draft')?.meta.id,
         };
-      else working = { draft: emptyDraft(), evidence: mem?.evidence ?? [], savedDraftRecordId: mem?.savedDraftRecordId ?? draft?.meta.id };
       if (!alive) return;
       workingRef.current = working;
       setBoot({
@@ -113,7 +112,8 @@ export function Story() {
       const res = await sealPayload(
         api,
         session.masterKey,
-        { kind: 'final', record, escrowedHashes: escrowed, savedAt: new Date().toISOString() },
+        // the answers are kept too, so she can add to this version later without starting over
+        { kind: 'final', record, draft: workingRef.current?.draft ?? undefined, escrowedHashes: escrowed, savedAt: new Date().toISOString() },
         boot.previousFinalId,
       );
       await setWorkingData(null);

@@ -101,6 +101,20 @@ interface OpenedCase {
   ledgerOk: boolean;
 }
 
+/**
+ * Every bundle fetch is logged to the client as "Attorney opened your file". React StrictMode (dev) mounts effects
+ * twice, which would log one visit as two — so concurrent requests for the same share are shared.
+ */
+const inflightBundles = new Map<string, Promise<ShareBundle>>();
+function fetchBundleOnce(api: ReturnType<typeof useRequiredSession>['api'], id: string): Promise<ShareBundle> {
+  let p = inflightBundles.get(id);
+  if (!p) {
+    p = api.getShareBundle(id).finally(() => inflightBundles.delete(id));
+    inflightBundles.set(id, p);
+  }
+  return p;
+}
+
 export function AttorneyCase() {
   const { id = '' } = useParams();
   const { api, session } = useRequiredSession();
@@ -108,7 +122,7 @@ export function AttorneyCase() {
   const [briefError, setBriefError] = useState<string | null>(null);
 
   const opened = useAsync(async (): Promise<OpenedCase> => {
-    const bundle = await api.getShareBundle(id);
+    const bundle = await fetchBundleOnce(api, id);
     const key = await unwrapKeyWithPrivate(bundle.recipientWrappedKey, session.privateKey);
     const payload = await decryptJSON<VaultPayload>(bundle.record.envelope, key);
     if (!payload.record) throw new Error('This file does not contain a sealed account.');

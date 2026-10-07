@@ -14,7 +14,7 @@ const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 export const SHARE_DISCLAIMER =
-  'This does not report anything to police. You can revoke access at any time; revoking stops future access but cannot un-see what was already viewed.';
+  'This does not report anything to police. You can revoke access at any time, and access ends on its own on the expiry date (you can renew it); revoking or expiry stops future access but cannot un-see what was already viewed.';
 
 export function buildConsentStatement(p: {
   alias: string;
@@ -23,12 +23,14 @@ export function buildConsentStatement(p: {
   scope: Scope[];
   sealedAt: string;
   at: string;
+  expiresInDays: number;
 }): string {
   const who = `${p.attorney.displayName}${p.attorney.organization ? ` of ${p.attorney.organization}` : ''}`;
   return [
     `I, "${p.alias}", choose to share my sealed Matra file (sealed ${p.sealedAt}) with ${who}, a verified attorney, so that they can advise me.`,
     `I am sharing: ${p.scope.map((s) => SCOPE_LABEL[s].replace(/^My /, 'my ').replace(/^The /, 'the ')).join('; ')}.`,
     `It will be encrypted on my device so that only the holder of the key with fingerprint ${p.fingerprint} can open it.`,
+    `This access expires ${p.expiresInDays} days after the date below unless I renew it.`,
     SHARE_DISCLAIMER.replace(/\bYou\b/g, 'I').replace(/\byou\b/g, 'I'),
     `Agreed at ${p.at}.`,
   ].join('\n');
@@ -176,8 +178,10 @@ function Consent({
   const evidence = (record.payload.record?.evidence ?? []).filter((e) => e.blobId);
   const [scope, setScope] = useState<Record<Scope, boolean>>({ record: true, evidence: evidence.length > 0, brief: true });
   const [agreed, setAgreed] = useState(false);
+  const [fpConfirmed, setFpConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expiresInDays, setExpiresInDays] = useState(90);
   const [at] = useState(() => new Date().toISOString());
 
   const scopeList = (Object.keys(scope) as Scope[]).filter((s) => scope[s]);
@@ -189,11 +193,12 @@ function Consent({
         scope: scopeList,
         sealedAt: record.ledgerEntry?.timestamp ?? record.meta.createdAt,
         at,
+        expiresInDays,
       })
     : '';
 
   async function share() {
-    if (!agreed || !statement) return;
+    if (!agreed || !fpConfirmed || !fp || !statement) return;
     setBusy(true);
     setError(null);
     try {
@@ -213,10 +218,12 @@ function Consent({
         recordId: record.meta.id,
         attorneyId: attorney.userId,
         recipientWrappedKey,
+        attorneyKeyFingerprint: fp,
         blobs,
         consentStatement: statement,
         scope: scopeList,
         survivorAlias: session.user.username,
+        expiresInDays,
       });
       onDone(new Date().toISOString());
     } catch (e) {
@@ -236,6 +243,18 @@ function Consent({
           <strong>{SHARE_DISCLAIMER}</strong>
         </p>
       </div>
+      <section className="card warn stack" aria-labelledby="fp-h">
+        <h2 id="fp-h">Check the attorney’s key</h2>
+        <p>
+          Your file will be locked so only the key with this fingerprint can open it. Ask {attorney.displayName} (by phone
+          or in person, not by this app) to read their fingerprint to you.
+        </p>
+        <p className="fingerprint" style={{ fontSize: '1.2em' }}>{fp || '…'}</p>
+        <label className="check">
+          <input type="checkbox" checked={fpConfirmed} disabled={!fp} onChange={(e) => setFpConfirmed(e.target.checked)} />
+          <span>This matches what the attorney told me.</span>
+        </label>
+      </section>
       <fieldset className="card stack" style={{ border: '1px solid var(--matra-border)' }}>
         <legend>
           <h2 style={{ margin: 0 }}>What do you want to share?</h2>
@@ -262,6 +281,16 @@ function Consent({
           <span>{SCOPE_LABEL.brief}</span>
         </label>
       </fieldset>
+      <label className="stack">
+        <span>How long should access last?</span>
+        <select value={expiresInDays} onChange={(e) => setExpiresInDays(Number(e.target.value))}>
+          <option value={30}>30 days</option>
+          <option value={90}>90 days (default)</option>
+          <option value={180}>180 days</option>
+          <option value={365}>1 year</option>
+        </select>
+        <span className="small muted">You can renew or revoke at any time. Expiry stops future access only.</span>
+      </label>
       <section className="card stack" aria-labelledby="consent-h">
         <h2 id="consent-h">Your consent, word for word</h2>
         <p className="small muted">This exact text is saved with the share so there’s a clear record of what you agreed to.</p>
@@ -273,7 +302,7 @@ function Consent({
         {busy && <Loading label="Encrypting your file for this attorney on your device…" />}
         {error && <ErrorNote>{error}</ErrorNote>}
         <div className="row">
-          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !statement || busy}>
+          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !fpConfirmed || !statement || busy}>
             Yes, share with {attorney.displayName}
           </button>
           <button className="btn" onClick={onCancel} disabled={busy}>

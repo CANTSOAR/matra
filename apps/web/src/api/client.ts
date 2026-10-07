@@ -184,6 +184,9 @@ export class ApiClient {
   getShareBundle(id: string) {
     return this.json<ShareBundle>('GET', `/api/shares/${encodeURIComponent(id)}/bundle`);
   }
+  renewShare(id: string, expiresInDays?: number) {
+    return this.json<{ share: Share; ledgerEntry: LedgerEntry }>('POST', `/api/shares/${encodeURIComponent(id)}/renew`, { expiresInDays });
+  }
   revokeShare(id: string) {
     return this.json<{ share: Share; ledgerEntry: LedgerEntry }>('POST', `/api/shares/${encodeURIComponent(id)}/revoke`);
   }

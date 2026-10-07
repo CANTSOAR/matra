@@ -11,6 +11,7 @@ import {
   loadVault,
   mergeEvidence,
   openEvidence,
+  resumeFrom,
   sealPayload,
   shortHash,
   uploadEvidence,
@@ -64,7 +65,15 @@ export function Evidence() {
     const draft = latestOf(vault, 'draft');
     const final = latestOf(vault, 'final');
     const meta = mergeEvidence(draft?.payload.evidence, final?.payload.record?.evidence, mem?.evidence);
-    return { blobs, meta, vaultDraft: draft, inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)) };
+    const resume = resumeFrom(vault);
+    return {
+      blobs,
+      meta,
+      vaultDraft: draft,
+      resumeDraft: resume.draft,
+      resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.draftRecord?.payload.evidence),
+      inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)),
+    };
   }, [api, session.masterKey, getWorkingData]);
 
   async function handleFiles(files: FileList | File[]) {
@@ -90,8 +99,8 @@ export function Evidence() {
     try {
       const mem = await getWorkingData();
       const vaultDraft = existing.data?.vaultDraft;
-      const draft = mem?.draft ?? vaultDraft?.payload.draft ?? emptyDraft();
-      const evidence = mergeEvidence(vaultDraft?.payload.evidence, mem?.evidence, added);
+      const draft = mem?.draft ?? existing.data?.resumeDraft ?? emptyDraft();
+      const evidence = mergeEvidence(existing.data?.resumeEvidence, mem?.evidence, added);
       const res = await sealPayload(
         api,
         session.masterKey,
@@ -217,7 +226,8 @@ export function Evidence() {
           <>
             {existing.data.blobs.some((b) => !existing.data!.inFinal.has(b.id)) && (
               <p className="small card soft">
-                Files not yet in your sealed account will be included the next time you finish <Link to="/vault/story">your account</Link>.
+                Files not yet in your sealed account are added when you seal it again: open <Link to="/vault/story">your account</Link>{' '}
+                and press “Seal my account”. Only sealed files can be shared with an attorney.
               </p>
             )}
             <ul className="list">

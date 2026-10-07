@@ -6,6 +6,7 @@ import {
   unwrapKeyWithPrivate,
   wrapKeyForRecipient,
 } from '@matra/crypto';
+import { publicKeyFingerprint } from '@matra/crypto';
 import { createRecord, makeApp, registerUser, uploadBlob } from './test-helpers.js';
 
 const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {
@@ -14,7 +15,7 @@ const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {
   res.on('end', () => cb(null, Buffer.concat(chunks)));
 };
 
-const CONSENT = 'I consent to share my case file with this attorney for legal consultation.';
+const consentFor = (fp: string) => `I consent to share my case file with this attorney for legal consultation. Key ${fp}.`;
 
 describe('shares', () => {
   it('grant → attorney decrypts bundle + blob → audit → revoke → 403', async () => {
@@ -32,12 +33,14 @@ describe('shares', () => {
     const attorneys = (await request(app).get('/api/attorneys').set(jane.auth)).body.attorneys;
     const pub = attorneys.find((a: { userId: string }) => a.userId === atty.user.id).publicKey;
 
+    const FP = await publicKeyFingerprint(pub);
     const body = {
       recordId,
       attorneyId: atty.user.id,
       recipientWrappedKey: await wrapKeyForRecipient(recKey, pub),
       blobs: [{ blobId, recipientWrappedKey: await wrapKeyForRecipient(blobKey, pub) }],
-      consentStatement: CONSENT,
+      consentStatement: consentFor(FP),
+      attorneyKeyFingerprint: FP,
       scope: ['record', 'evidence'],
       survivorAlias: 'J.',
     };
@@ -46,7 +49,7 @@ describe('shares', () => {
     const created = await request(app).post('/api/shares').set(jane.auth).send(body);
     expect(created.status).toBe(201);
     const share = created.body.share;
-    expect(share).toMatchObject({ status: 'active', consentStatement: CONSENT, survivorId: jane.user.id });
+    expect(share).toMatchObject({ status: 'active', consentStatement: consentFor(FP), survivorId: jane.user.id });
     expect(created.body.ledgerEntry.type).toBe('share.granted');
 
     expect((await request(app).get('/api/shares').set(jane.auth)).body.shares).toHaveLength(1);
@@ -90,7 +93,9 @@ describe('shares', () => {
     const after = await request(app).get(`/api/shares/${share.id}/bundle`).set(atty.auth);
     expect(after.status).toBe(403);
     expect(after.body.code).toBe('share_revoked');
-    expect((await request(app).get(`/api/vault/blobs/${blobId}`).set(atty.auth)).status).toBe(403);
+    const blobAfter = await request(app).get(`/api/vault/blobs/${blobId}`).set(atty.auth);
+    expect(blobAfter.status).toBe(403);
+    expect(blobAfter.body.code).toBe('share_revoked');
 
     expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
   });
@@ -104,12 +109,14 @@ describe('shares', () => {
     const { res, key } = await createRecord(app, jane);
     const mBlob = (await uploadBlob(app, mallory)).res.body.blob.id;
     const wk = await wrapKeyForRecipient(key, atty.user.publicKey);
+    const FP = await publicKeyFingerprint(atty.user.publicKey);
     const base = {
       recordId: res.body.record.id,
       attorneyId: atty.user.id,
       recipientWrappedKey: wk,
       blobs: [] as Array<{ blobId: string; recipientWrappedKey: typeof wk }>,
-      consentStatement: CONSENT,
+      consentStatement: consentFor(FP),
+      attorneyKeyFingerprint: FP,
       scope: ['record'],
       survivorAlias: 'J.',
     };
@@ -129,6 +136,63 @@ describe('shares', () => {
       .set(jane.auth)
       .send({ ...base, blobs: [{ blobId: ownBlob, recipientWrappedKey: wk }] });
     expect(noScope.body.code).toBe('scope_mismatch');
+    // swapped key / unconfirmed fingerprint is refused (W3)
+    const other = await publicKeyFingerprint(mallory.user.publicKey);
+    const swapped = await request(app)
+      .post('/api/shares')
+      .set(jane.auth)
+      .send({ ...base, attorneyKeyFingerprint: other, consentStatement: consentFor(other) });
+    expect(swapped.status).toBe(409);
+    expect(swapped.body.code).toBe('attorney_key_mismatch');
+    const noFpInText = await request(app)
+      .post('/api/shares')
+      .set(jane.auth)
+      .send({ ...base, consentStatement: 'I consent to share my case file with this attorney.' });
+    expect(noFpInText.body.code).toBe('consent_fingerprint_missing');
     expect((await request(app).post('/api/shares').set(jane.auth).send(base)).status).toBe(201);
+  });
+
+  it('expires shares server-side (bundle + blob), and renewal restores access', async () => {
+    const { app, db } = makeApp() as any;
+    const jane = await registerUser(app, 'jane.test');
+    const atty = await registerUser(app, 'atty.nj', 'attorney');
+    const { res, key } = await createRecord(app, jane);
+    const { res: blobRes, key: blobKey } = await uploadBlob(app, jane, new TextEncoder().encode('photo'));
+    const pub = (await request(app).get('/api/attorneys').set(jane.auth)).body.attorneys.find((a: { userId: string }) => a.userId === atty.user.id).publicKey;
+    const FP = await publicKeyFingerprint(pub);
+    const body = {
+      recordId: res.body.record.id,
+      attorneyId: atty.user.id,
+      recipientWrappedKey: await wrapKeyForRecipient(key, pub),
+      blobs: [{ blobId: blobRes.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(blobKey, pub) }],
+      consentStatement: consentFor(FP),
+      attorneyKeyFingerprint: FP,
+      scope: ['record', 'evidence'],
+      survivorAlias: 'J.',
+    };
+    expect((await request(app).post('/api/shares').set(jane.auth).send({ ...body, expiresInDays: 0 })).status).toBe(400);
+    const created = await request(app).post('/api/shares').set(jane.auth).send(body);
+    const share = created.body.share;
+    const days = (Date.parse(share.expiresAt) - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(89.9);
+    expect(days).toBeLessThan(90.1);
+
+    db.prepare('UPDATE shares SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1000).toISOString(), share.id);
+    const b = await request(app).get(`/api/shares/${share.id}/bundle`).set(atty.auth);
+    expect(b.status).toBe(403);
+    expect(b.body.code).toBe('share_expired');
+    const bl = await request(app).get(`/api/vault/blobs/${blobRes.body.blob.id}`).set(atty.auth);
+    expect(bl.status).toBe(403);
+    expect(bl.body.code).toBe('share_expired');
+
+    expect((await request(app).post(`/api/shares/${share.id}/renew`).set(atty.auth)).status).toBe(403);
+    const renewed = await request(app).post(`/api/shares/${share.id}/renew`).set(jane.auth).send({ expiresInDays: 30 });
+    expect(renewed.status).toBe(200);
+    expect(renewed.body.ledgerEntry.type).toBe('share.renewed');
+    expect((await request(app).get(`/api/shares/${share.id}/bundle`).set(atty.auth)).status).toBe(200);
+
+    await request(app).post(`/api/shares/${share.id}/revoke`).set(jane.auth);
+    expect((await request(app).post(`/api/shares/${share.id}/renew`).set(jane.auth)).status).toBe(409);
+    expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
   });
 });
