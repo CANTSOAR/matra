@@ -5,3 +5,14 @@ dist
 apps/server/data
 .env
 .DS_Store
+test-results
+playwright-report
+e2e/.data
+e2e/.screens
+
+# compiled_resources: third-party full texts stay local (copyright); commit only original notes
+compiled_resources/**
+!compiled_resources/*/
+!compiled_resources/README.md
+!compiled_resources/*/SOURCES.md
+!compiled_resources/05_advisory_board_governance/CONTACTS.md

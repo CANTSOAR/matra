@@ -14,11 +14,13 @@ Matra is a survivor-controlled, zero-knowledge documentation tool with a consent
 | [DEMO_SCRIPT.md](DEMO_SCRIPT.md) | Presenter | 10-minute live demo with talking points and honest answers to hard questions |
 | [research/brief-fields.md](research/brief-fields.md) | Engineering, counsel | Source research behind the incident-summary PDF and NJ VCCO draft fields |
 | [research/outreach-and-governance-playbook.md](research/outreach-and-governance-playbook.md) | Founder | Advisor outreach and governance |
-| [threat-model.md](threat-model.md) | Engineering | Code-level threat model (companion to the Security Whitepaper) |
+| [threat-model.md](threat-model.md) | Engineering | Known-weakness tracker (W1 to W12); a supplement to the Security Whitepaper, which is primary |
 | [legal/](legal/README.md) | Counsel, partners | Other agreement templates: advisor agreement, attorney partner terms, pilot partner agreement, trademark policy |
 
-*Note:* `ATTORNEY_PARTNER_MOU_TEMPLATE.md` (an MOU with legal-aid organizations or attorneys) and `legal/attorney-partner-terms.md` (platform terms for directory attorneys) overlap. Counsel should reconcile them into a single instrument, or define how the two relate, before either is used.
+*Which attorney document to use:* [ATTORNEY_PARTNER_MOU_TEMPLATE.md](ATTORNEY_PARTNER_MOU_TEMPLATE.md) is the full instrument for legal-aid organizations, clinics and firms joining the partner program (verification, response times, data handling, fees). [legal/attorney-partner-terms.md](legal/attorney-partner-terms.md) is a short standard-terms version for an individual directory attorney. They cover the same duties; where they differ, the MOU controls. Counsel may merge them into one instrument before either is used.
+
+The repository front door is the [root README](../README.md); project governance, license and security policy are in [GOVERNANCE.md](../GOVERNANCE.md), [LICENSE](../LICENSE) (AGPL-3.0-only) and [SECURITY.md](../SECURITY.md).
 
 **Before pitching, read the "Corrections to blueprint claims" table in [LEGAL_RESEARCH_MEMO.md §8](LEGAL_RESEARCH_MEMO.md#8-corrections-to-blueprint-claims-consolidated).**
 
-Background sources collected for the project are in `compiled_resources/`.
+Citations and reading notes for the background sources are in [`compiled_resources/`](../compiled_resources/README.md). Third-party full texts are kept locally and not committed.
