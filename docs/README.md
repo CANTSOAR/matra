@@ -1,6 +1,6 @@
 # Matra Documentation
 
-Matra is a survivor-controlled, zero-knowledge documentation tool with a consent-based path to pro-bono attorneys. Its working tagline is *a one-touch justice pipeline*. These documents are written for lawyers, legal-aid organizations, advocates, funders, and security reviewers.
+Matra is a survivor-controlled, zero-knowledge documentation tool with a consent-based path to verified volunteer and legal-aid attorneys. Its working tagline is *a one-touch justice pipeline*. These documents are written for lawyers, legal-aid organizations, advocates, funders, and security reviewers.
 
 > Nothing in this folder is legal advice. All legal analysis must be reviewed by licensed New Jersey and New York counsel.
 
