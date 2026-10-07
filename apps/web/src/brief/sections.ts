@@ -3,7 +3,7 @@ import type { BriefBlock, BriefOptions, BriefRow, BriefSection } from './types';
 import {
   AGENCY_TYPE_LABELS, DISCLOSURE_METHOD_LABELS, EVIDENCE_KIND_LABELS, FORCE_LABELS, IDENTIFIER_LABELS,
   INCIDENT_TYPE_LABELS, NOT_PROVIDED, PHYSICAL_EVIDENCE_LABELS, SUBSTANCE_LABELS, formatBytes, formatDate,
-  formatTimestamp, goalLabel, has, immediateSafetyAnswer, immediateSafetyOf, orNP, survivorAnswered, yesNo,
+  formatTimestamp, goalLabel, has, immediateSafetyAnswer, immediateSafetyOf, orNP, parseIsoDate, survivorAnswered, yesNo,
 } from './format';
 
 /** The document's name, everywhere it is shown (PDF title, header, preview, buttons). */
@@ -144,15 +144,18 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
 
   // ── 3. Own words ──
   const n = r.narrative;
+  const entries = (n.entries ?? []).filter((e) => has(e.text));
   out.push({
     id: 'narrative',
     title: 'Account — In the Survivor’s Own Words',
-    blocks: has(n.freeRecall)
-      ? [
-          { kind: 'note', tone: 'info', text: 'Verbatim. Reproduced exactly as written by the survivor, including paragraph breaks, wording and spelling.' },
-          { kind: 'verbatim', text: n.freeRecall },
-        ]
-      : [{ kind: 'note', tone: 'info', text: 'The survivor did not provide a written account in this intake.' }],
+    blocks: entries.length
+      ? narrativeEntryBlocks(entries)
+      : has(n.freeRecall)
+        ? [
+            { kind: 'note', tone: 'info', text: 'Verbatim. Reproduced exactly as written by the survivor, including paragraph breaks, wording and spelling.' },
+            { kind: 'verbatim', text: n.freeRecall },
+          ]
+        : [{ kind: 'note', tone: 'info', text: 'The survivor did not provide a written account in this intake.' }],
   });
 
   // ── 4. Sensory & contextual ──
@@ -420,6 +423,33 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
   });
 
   return out;
+}
+
+/** Shown under every piece she spoke rather than typed. */
+export const VOICE_ENTRY_NOTE = 'Spoken, transcribed on her device, and reviewed by her before saving.';
+
+type NarrativeEntry = NonNullable<IntakeRecord['narrative']['entries']>[number];
+
+/** Her story pieces, verbatim and in the order she added them, each with when she added it. */
+function narrativeEntryBlocks(entries: NarrativeEntry[]): BriefBlock[] {
+  const blocks: BriefBlock[] = [
+    {
+      kind: 'note',
+      tone: 'info',
+      text:
+        entries.length > 1
+          ? 'Verbatim. Reproduced exactly as the survivor wrote or spoke it, in the order she added each part, including wording and spelling.'
+          : 'Verbatim. Reproduced exactly as written by the survivor, including paragraph breaks, wording and spelling.',
+    },
+  ];
+  entries.forEach((e, i) => {
+    const when = parseIsoDate(e.createdAt);
+    const added = when ? `Added ${formatTimestamp(when)}` : 'Date added not recorded';
+    const label = entries.length > 1 ? `Part ${i + 1} of ${entries.length} — ${added}` : added;
+    blocks.push({ kind: 'verbatim', label, text: e.text });
+    if (e.source === 'voice') blocks.push({ kind: 'note', tone: 'info', text: VOICE_ENTRY_NOTE });
+  });
+  return blocks;
 }
 
 function circumstanceBlocks(r: IntakeRecord): BriefBlock[] {

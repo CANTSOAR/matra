@@ -4,7 +4,7 @@
  * return bytes / React elements locally.
  */
 export type { BriefOptions, BriefSection, BriefBlock, BriefRow, BriefTableRow } from './types';
-export { briefSections, BRIEF_TITLE, INCIDENT_SUMMARY_TITLE, PREPARED_BY_NOTE } from './sections';
+export { briefSections, BRIEF_TITLE, INCIDENT_SUMMARY_TITLE, PREPARED_BY_NOTE, VOICE_ENTRY_NOTE } from './sections';
 export { generatePoliceBrief, generateIncidentSummary } from './police';
 export { generateVccoDraft, vccoSections, VCCO } from './vcco';
 export { BriefPreview } from './BriefPreview';
