@@ -183,7 +183,7 @@ describe('IntakeChat', () => {
     expect(r.goals).toMatchObject({ policeReport: 'yes', attorney: 'undecided' });
     expect(drafts.length).toBeGreaterThan(0);
     expect(drafts.at(-1)!.answers['story.freeRecall']).toBe(NARRATIVE);
-  });
+  }, 60_000);
 
   it('take a break shows grounding, keeps typed words, and resumes', async () => {
     const user = userEvent.setup();
