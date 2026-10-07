@@ -3,7 +3,7 @@
  * one Save). Values have exactly the shapes the interview uses (src/intake/draft.ts AnswerValue).
  */
 import { useId, useState } from 'react';
-import { Field, isMatchable } from '../intake/inputs';
+import { Field, isMatchable, matchIssues } from '../intake/inputs';
 import {
   asDate,
   asGroup,
@@ -226,13 +226,23 @@ export function StepField({ step, value, onChange, draft, onAddFiles }: StepFiel
           {people.map((p, i) => {
             const name = p.values.name?.trim() || `Person ${i + 1}`;
             const lid = `${id}-p${i}`;
-            if (!isMatchable(p))
+            if (!isMatchable(p)) {
+              const issues = matchIssues(p);
               return (
                 <div key={p.id} className="space-escrow-row">
                   <p className="space-sublegend">{name}</p>
-                  <p className="space-hint">{UI.escrow.notMatchable}</p>
+                  {issues.length ? (
+                    issues.map((m) => (
+                      <p key={m} className="space-hint" data-testid="match-issue">
+                        {m}
+                      </p>
+                    ))
+                  ) : (
+                    <p className="space-hint">{UI.escrow.notMatchable}</p>
+                  )}
                 </div>
               );
+            }
             return (
               <div key={p.id} className="space-escrow-row">
                 <p className="space-sublegend" id={lid}>

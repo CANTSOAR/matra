@@ -11,7 +11,7 @@
 - Legal-aid organizations spend scarce attorney hours reconstructing facts at intake.
 
 ### What Matra does today (working MVP, fictional data only)
-1. **Warm, trauma-informed intake.** She can start anywhere and tell it her way, by typing or by speaking (transcribed on her device), or she can answer one gentle question at a time. Every question can be skipped. Prompts are non-leading and sensory. Her words are stored **verbatim**: no AI rewrites them, and any voice or suggestion feature runs only in her browser. **Quick Exit** is available at all times.
+1. **Warm, trauma-informed intake.** She can start anywhere and tell it her way, by typing or by speaking (transcribed on her device), or she can answer one gentle question at a time. Every question can be skipped. Prompts are non-leading and sensory. Her words are stored **verbatim**. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. (The speech model downloads once, about 94 MB, from Matra's own server.) **Quick Exit** is available at all times.
 2. **Zero-knowledge vault.** Content is encrypted on her device. Our server stores only ciphertext. **Matra cannot read or produce her content.**
 3. **Evidence handling.** Photo location and EXIF data are stripped on her device. Each file is fingerprinted with SHA-256.
 4. **Tamper-evident ledger.** Every sealed record, file, and consent gets an entry in an append-only hash chain. *(Today it is self-hosted. External timestamp anchoring is on the roadmap. Until then it shows integrity, not independent proof of time.)*
@@ -20,7 +20,7 @@
 7. **Confidential matching (being rebuilt; demo only).** Callisto-style matching on unique identifiers only (phone, email, social handles; never names), using an OPRF with split keys. If two survivors name the same person, a **Legal Options Counselor** (a licensed attorney) sees the matched group and contacts each survivor who opted in, separately. Survivors never see match results in the app. Disabled for any pilot (see below).
 8. **"Download my data."** One file, decrypted on her device, any time.
 
-**Never:** auto-sending to police, schools, or employers · AI rewriting of her account · legal advice from software · fees from attorneys.
+**Never:** auto-sending to police, schools, or employers · AI rewriting of her account · server-side or third-party AI · legal advice from software · fees from attorneys.
 
 ### What we are honest about
 - Matra cannot be compelled to produce content it cannot decrypt. **She can be.** Anything given to police becomes discoverable to the defense. We tell her this before she writes, seals, or shares.

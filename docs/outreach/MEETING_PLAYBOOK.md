@@ -107,7 +107,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 - *"Will this make me a mandatory reporter or break my privilege?"* Matra doesn't change your obligations. Matra itself has no counselors, so the victim-counselor privilege doesn't attach to Matra. Whether your communications through it could be covered is a question for counsel. We'd never make you an institutional reporter.
 - *"Forgotten passphrase?"* Data is gone; nobody can recover it. Optional recovery shares held by a trusted advocate are on the roadmap, with the risk that a share-holder could be subpoenaed.
 - *"Is it in Spanish?"* Not yet. Native-speaking advocates would need to review any translation (PRD N13).
-- *"Do you use AI?"* Nothing ever rewrites her words, and nothing goes to an outside AI. Optional voice transcription and topic suggestions run only on her device, and she confirms or dismisses each suggestion. The one-question-at-a-time mode is a fixed script. *Ask them:* would they want the voice option on or off by default?
+- *"Do you use AI?"* Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Both are optional. The one-question-at-a-time mode is a fixed script. *Ask them:* would they want the voice option on or off by default?
 
 ---
 

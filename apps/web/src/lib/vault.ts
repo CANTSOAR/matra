@@ -13,6 +13,7 @@ import {
   encryptBlob,
   encryptJSON,
   normalizeMatchIdentifier,
+  refreshMatchEntries,
   submitMatchEntry,
   generateContentKey,
   randomId,
@@ -24,6 +25,7 @@ import type { BlobMeta, EvidenceItem, EvidenceKind, IntakeRecord, LedgerEntry, M
 import { envelopeHash, type ApiClient } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { stripMetadata } from './metadata';
+import { MATCH_PINS } from '../matchPins';
 
 /** Her personal preferences, stored only inside an encrypted 'profile' vault record. */
 export interface VaultProfile {
@@ -292,6 +294,8 @@ export async function lodgeEscrow(
   for (const p of record.perpetrators) {
     if (!p.escrowOptIn) continue;
     for (const raw of p.identifiers) {
+      // Only unique identifiers: free text ('other') and names are never sealed, whatever they look like.
+      if (raw.kind !== 'email' && raw.kind !== 'phone' && raw.kind !== 'social_handle') continue;
       const id = normalizeMatchIdentifier(raw.kind, raw.value, raw.platform);
       if (!id.ok) continue; // names and unrecognised text are never sealed
       const key = await localKey(id.canonical);
@@ -306,14 +310,10 @@ export async function lodgeEscrow(
     throw new MatchingError('To use a sealed match, add a safe way for a legal options counselor to reach you (a phone number or email).');
   const config = await api.matchingConfig();
   if (!config.counselors.length) throw new MatchingError('Sealed matching isn’t available right now. Nothing was sealed.');
-  const transport = {
-    config: async () => config,
-    evaluate: (h: 'a' | 'b', req: { blinded: string }) => api.oprfEvaluate(h, req),
-    createEntry: (req: Parameters<ApiClient['createMatchEntry']>[0]) => api.createMatchEntry(req),
-  };
+  const transport = { ...matchTransport(api), config: async () => config };
   for (const t of todo) {
-    // Her label keeps the canonical identifier (encrypted to her alone) so she can re-seal after a key rotation.
-    const labelEnvelope = await encryptJSON({ label: t.label, canonical: t.id.canonical }, masterKey);
+    // Her (padded, encrypted) label keeps the canonical identifier, contact and share, so her client can re-seal after
+    // a key rotation and add seals for new counselors without asking her again.
     try {
       await submitMatchEntry(transport, {
         masterKey,
@@ -321,8 +321,9 @@ export async function lodgeEscrow(
         contact,
         consentStatement: opts.consentStatement ?? MATCHING_CONSENT_STATEMENT,
         state: record.incident.jurisdiction?.state ?? record.survivor.residenceState,
-        labelEnvelope,
+        label: t.label,
         config,
+        pins: MATCH_PINS,
       });
     } catch (e) {
       if ((e as { code?: string }).code !== 'already_sealed') throw e;
@@ -330,6 +331,24 @@ export async function lodgeEscrow(
     done.add(t.key);
   }
   return Array.from(done);
+}
+
+function matchTransport(api: ApiClient) {
+  return {
+    config: () => api.matchingConfig(),
+    evaluate: (h: 'a' | 'b', req: { blinded: string }) => api.oprfEvaluate(h, req),
+    createEntry: (req: Parameters<ApiClient['createMatchEntry']>[0]) => api.createMatchEntry(req),
+    listEntries: () => api.listMatchEntries(),
+    addSeals: (id: string, req: Parameters<ApiClient['addMatchSeals']>[1]) => api.addMatchSeals(id, req),
+  };
+}
+
+/**
+ * On sign-in (survivor, best effort): re-seal entries from an older OPRF key epoch and add seals for counselors who
+ * joined the signed roster since she sealed (packages/crypto refreshMatchEntries). Never shows anything about matches.
+ */
+export async function refreshSealedMatches(api: ApiClient, masterKey: CryptoKey) {
+  return refreshMatchEntries(matchTransport(api), { masterKey, pins: MATCH_PINS });
 }
 
 /** Withdraw (delete) one of her sealed identifiers. */

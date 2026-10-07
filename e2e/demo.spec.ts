@@ -118,7 +118,7 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
   await chip(page, 'Did you know this person before?', 'Yes');
   await moreDetails(page);
   await fill(page, {
-    'Their phone number': '(555) 010-0199',
+    'Their phone number': '(201) 555-0199', // valid NANP (review M1: (555) 010-… is not a real number shape)
     'Their social media name or handle': '@demo_handle_123',
     'Which app or site?': { select: 'instagram' },
   });
@@ -415,7 +415,7 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await chip(page, 'Did you know this person before?', 'Yes');
   await moreDetails(page);
   await fill(page, {
-    'Their phone number': '(555) 010-0177',
+    'Their phone number': '(201) 555-0177',
     'Their social media name or handle': 'https://www.instagram.com/Demo_Handle_123/',
     'Which app or site?': { select: 'instagram' },
   });
@@ -469,7 +469,9 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   const groups = page.getByTestId('counselor-group');
   await expect(groups).toHaveCount(1);
   await groups.getByRole('button', { name: 'Open with my private key' }).click();
-  await expect(groups.getByText('instagram:demo_handle_123')).toBeVisible({ timeout: 30_000 });
+  await expect(groups.getByText('instagram:demo_handle_123').first()).toBeVisible({ timeout: 30_000 });
+  // every card shows the identifier its bundle names (review L1)
+  await expect(groups.getByTestId('counselor-canonical')).toHaveText(['instagram:demo_handle_123', 'instagram:demo_handle_123']);
   const people = groups.getByTestId('counselor-survivor');
   await expect(people).toHaveCount(2);
   // two separate contact bundles, never mixed

@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { DEFAULT_KDF_ITERATIONS, deriveKeys, generateIdentity, newKdfSalt } from '@matra/crypto';
 import type { AuthResponse, RegisterRequest } from '@matra/shared';
 import { createApp, getDb } from './app.js';
-import { loadOprfKey, loadPepper, resolveDbPath } from './config.js';
+import { loadMatchingSettings, loadOprfKey, loadPepper, resolveDbPath } from './config.js';
 
 const ATTORNEY_PASSPHRASE = 'demo-attorney-passphrase';
 const SURVIVOR_PASSPHRASE = 'demo-survivor-passphrase';
@@ -61,7 +61,7 @@ const ATTORNEYS: AttorneySeed[] = [
 
 async function main() {
   const dbPath = resolveDbPath();
-  const app = createApp({ dbPath, pepper: loadPepper(), matching: { keyA: loadOprfKey('a'), keyB: loadOprfKey('b') } });
+  const app = createApp({ dbPath, pepper: loadPepper(), matching: { keyA: loadOprfKey('a'), keyB: loadOprfKey('b'), ...loadMatchingSettings() } });
   const db = getDb(app);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((r) => server.once('listening', () => r()));

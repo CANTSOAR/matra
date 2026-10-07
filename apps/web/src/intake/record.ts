@@ -10,6 +10,7 @@ import type {
   PerpetratorIdentifier,
   Witness,
 } from '@matra/shared';
+import { normalizeMatchIdentifier } from '@matra/crypto';
 import { answerOf, asDate, asGroup, asList, asRecord, asText, type IntakeDraft } from './draft';
 import {
   AGENCY_TYPE_OPTIONS,
@@ -63,6 +64,12 @@ function dateValue(d: IntakeDraft, id: string): { value?: string; approximate: b
 }
 
 const VALID_TYPES = new Set<string>(INCIDENT_TYPE_OPTIONS.map((o) => o.value));
+/** Can this identifier be sealed for matching? Never 'full_name' or 'other'; must normalize to one canonical form. */
+export function isSealable(i: PerpetratorIdentifier): boolean {
+  if (i.kind !== 'email' && i.kind !== 'phone' && i.kind !== 'social_handle') return false;
+  return normalizeMatchIdentifier(i.kind, i.value, i.platform).ok;
+}
+
 const VALID_METHODS = new Set(['in_person', 'phone', 'text', 'social_media', 'email', 'other']);
 const VALID_FORCE = new Set<string>(FORCE_OPTIONS.map((o) => o.value));
 const VALID_SUBSTANCES = new Set<string>(SUBSTANCE_OPTIONS.map((o) => o.value));
@@ -114,8 +121,9 @@ export function draftToRecord(draft: IntakeDraft, now: Date = new Date()): Intak
         knownToSurvivor: v.known === 'yes',
         physicalDescription: keep(v.description),
         identifiers,
-        // Only unique identifiers (email / phone / handle) can be matched; a name alone never opts in.
-        escrowOptIn: escrow[p.id] === 'yes' && identifiers.some((i) => i.kind !== 'full_name' && i.kind !== 'other'),
+        // Only unique identifiers (email / phone / handle) that normalize to one person can be matched. A name, free
+        // text ("anything else"), or a link that isn't a profile never opts in.
+        escrowOptIn: escrow[p.id] === 'yes' && identifiers.some(isSealable),
         address: keep(v.address),
         workplace: keep(v.workplace),
         vehicle: keep(v.vehicle),

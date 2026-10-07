@@ -36,7 +36,8 @@ export default defineConfig({
         `rm -f "${DB}" "${DB}-wal" "${DB}-shm"`,
         `mkdir -p "${path.dirname(DB)}"`,
         `MATRA_DB_PATH="${DB}" npm run seed --silent`,
-        `MATRA_DB_PATH="${DB}" PORT=${API_PORT} MATRA_AUTO_VERIFY_ATTORNEYS=1 npx tsx apps/server/src/index.ts`,
+        // No sealed-match release delay in tests (production default: 72 h), so test 5 sees its group immediately.
+        `MATRA_DB_PATH="${DB}" PORT=${API_PORT} MATRA_AUTO_VERIFY_ATTORNEYS=1 MATRA_MATCH_RELEASE_DELAY_HOURS=0 npx tsx apps/server/src/index.ts`,
       ].join(' && '),
       url: `http://localhost:${API_PORT}/api/health`,
       timeout: 120_000,

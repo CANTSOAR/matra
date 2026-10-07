@@ -11,6 +11,7 @@
  *       | age_not_confirmed
  *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found | entry_not_found
  *       | counselor_not_found | group_not_found
+ *   403 … | counselor_not_listed (seal to a counselor missing from the signed roster)
  *   409 username_taken | already_revoked | already_sealed
  *   413 payload_too_large   415 unsupported_media_type   500 internal
  *   429 rate_limited | rate_limited_daily | rate_limited_lifetime
@@ -28,6 +29,7 @@ import type {
   CounselorMatchGroup,
   CounselorNote,
   CounselorProfile,
+  CounselorRosterPayload,
   CounselorSeal,
   EscrowEntry,
   MatchingConfig,
@@ -36,6 +38,7 @@ import type {
   Role,
   Share,
   ShareBundle,
+  SignedCounselorRoster,
   VaultRecord,
   VaultRecordMeta,
   WrappedKey,
@@ -88,8 +91,16 @@ export interface CreateAppOptions {
   /**
    * Sealed matching. keyA / keyB are the two independent OPRF key shares (config.ts loadOprfKey). When omitted (tests),
    * fresh ephemeral keys are generated — matching then only works for the lifetime of this process.
+   * releaseDelayHours (default 72): a group is released only once ≥ 2 distinct survivors' entries are at least this old.
+   * allowKeyRotation: accept keys that differ from the ones recorded in the DB (MATRA_OPRF_ROTATE=1) → new key epoch.
    */
-  matching?: { keyA?: OprfKeyPair; keyB?: OprfKeyPair; limits?: Partial<OprfLimits> };
+  matching?: {
+    keyA?: OprfKeyPair;
+    keyB?: OprfKeyPair;
+    limits?: Partial<OprfLimits>;
+    releaseDelayHours?: number;
+    allowKeyRotation?: boolean;
+  };
 }
 
 /**
@@ -201,6 +212,9 @@ interface MatchEntryRow {
   label_envelope: string;
   created_at: string;
   ledger_entry_id: string;
+  key_epoch: number;
+  /** JSON array, from a subquery (survivor list only) */
+  counselor_ids?: string;
 }
 interface CounselorProfileRow {
   user_id: string;
@@ -288,6 +302,8 @@ const toSurvivorEscrow = (e: MatchEntryRow): EscrowEntry => ({
   status: 'sealed',
   createdAt: e.created_at,
   ledgerEntryId: e.ledger_entry_id,
+  keyEpoch: e.key_epoch,
+  counselorIds: e.counselor_ids ? (JSON.parse(e.counselor_ids) as string[]).sort() : [],
 });
 
 const toCounselorProfile = (p: CounselorProfileRow): CounselorProfile => ({
@@ -366,6 +382,35 @@ export function createApp(opts: CreateAppOptions): express.Express {
     b: new OprfKeyHolder('b', opts.matching?.keyB ?? generateOprfKey(), db, limits),
   };
   if (holders.a.publicKey === holders.b.publicKey) throw new Error('OPRF key shares A and B must differ');
+  const releaseDelayMs = Math.max(0, opts.matching?.releaseDelayHours ?? 72) * 3_600_000;
+
+  // ── key pinning in the DB (review M5): the holder public keys are recorded on first start; a silent key change would
+  // make every existing entry unmatchable (and could be used to partition survivors), so it is refused unless the
+  // operator explicitly rotates. A rotation starts a new key epoch; survivors' clients re-seal on their next sign-in.
+  const metaGet = db.prepare('SELECT value FROM matching_meta WHERE key = ?');
+  const metaSet = db.prepare('INSERT INTO matching_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
+  const meta = (k: string) => (metaGet.get(k) as { value: string } | undefined)?.value;
+  db.transaction(() => {
+    const [pkA, pkB] = [meta('oprf_pk_a'), meta('oprf_pk_b')];
+    if (pkA === undefined && pkB === undefined) {
+      metaSet.run('oprf_pk_a', holders.a.publicKey);
+      metaSet.run('oprf_pk_b', holders.b.publicKey);
+      metaSet.run('key_epoch', String(Number(meta('key_epoch') ?? 0) + 1));
+    } else if (pkA !== holders.a.publicKey || pkB !== holders.b.publicKey) {
+      if (!opts.matching?.allowKeyRotation)
+        throw new Error(
+          'OPRF key holder public keys differ from the ones recorded in this database. Refusing to start: a silent key ' +
+            'change breaks every sealed entry. To rotate deliberately, restart once with MATRA_OPRF_ROTATE=1.',
+        );
+      const epoch = Number(meta('key_epoch') ?? 1) + 1;
+      metaSet.run('oprf_pk_a', holders.a.publicKey);
+      metaSet.run('oprf_pk_b', holders.b.publicKey);
+      metaSet.run('key_epoch', String(epoch));
+      db.prepare('DELETE FROM oprf_quota').run(); // new keys: re-sealing must not be blocked by old quotas
+      console.warn(`[matra] OPRF keys rotated: key epoch is now ${epoch}. Survivors' clients re-seal on next sign-in.`);
+    }
+  })();
+  const keyEpoch = Number(meta('key_epoch'));
 
   const loginLimiterKey = new RateLimiter(10, 60_000);
   const loginLimiterIp = new RateLimiter(60, 60_000);
@@ -400,7 +445,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
       `SELECT c.*, u.public_key FROM counselor_profiles c JOIN users u ON u.id = c.user_id
         WHERE c.verified = 1 ORDER BY c.display_name`,
     ),
-    matchEntryById: db.prepare('SELECT * FROM match_entries WHERE id = ?'),
+    matchEntryById: db.prepare(
+      `SELECT e.*, (SELECT json_group_array(counselor_id) FROM match_seals s WHERE s.entry_id = e.id) AS counselor_ids
+         FROM match_entries e WHERE e.id = ?`,
+    ),
   };
 
   const audit = (userId: string, action: string, detail?: string) =>
@@ -844,8 +892,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
    * Threshold 2: a tag is MATCHED when entries from 2 distinct survivor accounts exist (one entry per account per
    * tag: UNIQUE(user_id, tag), so a survivor cannot match herself). Only matched groups are ever released, and only
    * to verified counselors, each receiving only the seals addressed to them. Unmatched entries are never served to
-   * anyone but their owner — this closes the "counselor + OPRF guessing" gap (research A7): a counselor never holds a
-   * single-survivor seal to test guesses against, and counselors cannot call the OPRF endpoints at all.
+   * anyone but their owner, and only after the release delay. This MITIGATES (does not close) the "counselor + OPRF
+   * guessing" gap (research A7): a counselor never holds a single-survivor seal to test guesses against and cannot call
+   * the OPRF, but a counselor colluding with a Sybil survivor account can still seal a guess and wait for a group.
+   * Residual risk: Sybil + counselor collusion — needs account-level Sybil resistance before real use.
    *
    * Anti-self-check: survivors ALWAYS see 'sealed' (no matchedAt, no tag), her audit trail never mentions a match or
    * a counselor viewing it, and no ledger entry is written at match time — each submission appends exactly one
@@ -860,14 +910,57 @@ export function createApp(opts: CreateAppOptions): express.Express {
     next();
   };
 
+  /**
+   * The org-signed counselor roster (npm run -w @matra/server sign-roster), if one has been stored. The server does not
+   * hold the org key and cannot change the roster without invalidating its signature; clients built with the pinned
+   * roster key seal only to counselors listed in it. When present, it is also authoritative here: only verified
+   * counselors who are ALSO listed are offered, accepted as seal recipients, and keep their seals.
+   */
+  const signedRoster = (): SignedCounselorRoster | undefined => {
+    const v = meta('counselor_roster');
+    return v ? (JSON.parse(v) as SignedCounselorRoster) : undefined;
+  };
+  const rosterIds = (): Set<string> | null => {
+    const r = signedRoster();
+    if (!r) return null;
+    try {
+      return new Set((JSON.parse(r.payload) as CounselorRosterPayload).counselors.map((c) => c.userId));
+    } catch {
+      return new Set();
+    }
+  };
+  const sealableCounselors = (): CounselorProfileRow[] => {
+    const ids = rosterIds();
+    return (q.verifiedCounselors.all() as CounselorProfileRow[]).filter((c) => !ids || ids.has(c.user_id));
+  };
+  /** Seals addressed to counselors who are no longer verified (or no longer on the signed roster) are deleted (M6). */
+  const pruneSeals = () => {
+    const keep = sealableCounselors().map((c) => c.user_id);
+    db.prepare(`DELETE FROM match_seals WHERE counselor_id NOT IN (SELECT value FROM json_each(?))`).run(JSON.stringify(keep));
+  };
+  /** Groups (and all their counselor notes) with no entries left are deleted; notes about deleted entries too (L3). */
+  const pruneGroups = () => {
+    db.prepare(
+      `DELETE FROM counselor_notes WHERE group_id IN (SELECT g.id FROM match_groups g WHERE NOT EXISTS (SELECT 1 FROM match_entries e WHERE e.tag = g.tag))
+          OR (entry_id IS NOT NULL AND entry_id NOT IN (SELECT id FROM match_entries))`,
+    ).run();
+    db.prepare('DELETE FROM match_groups WHERE NOT EXISTS (SELECT 1 FROM match_entries e WHERE e.tag = match_groups.tag)').run();
+  };
+  pruneSeals();
+  pruneGroups();
+
   app.get('/api/matching/config', auth, verifiedAdultSurvivor, (_req, res) => {
+    pruneSeals();
+    const roster = signedRoster();
     const config: MatchingConfig = {
       threshold: 2,
       suite: 'ristretto255-SHA512',
       mode: 'voprf',
       keyHolders: { a: { publicKey: holders.a.publicKey }, b: { publicKey: holders.b.publicKey } },
-      counselors: (q.verifiedCounselors.all() as CounselorProfileRow[]).map(toCounselorProfile),
+      counselors: sealableCounselors().map(toCounselorProfile),
       limits: { perDay: limits.perDay, lifetime: limits.lifetime },
+      keyEpoch,
+      ...(roster && { roster }),
     };
     res.json(config);
   });
@@ -894,9 +987,25 @@ export function createApp(opts: CreateAppOptions): express.Express {
     });
   }
 
-  const ownEntries = db.prepare('SELECT * FROM match_entries WHERE user_id = ? ORDER BY created_at DESC, rowid DESC');
-  const ownEntryCount = db.prepare('SELECT COUNT(*) AS n FROM match_entries WHERE user_id = ?');
-  const ownEntryForTag = db.prepare('SELECT 1 FROM match_entries WHERE user_id = ? AND tag = ?');
+  const ownEntries = db.prepare(
+    `SELECT e.*, (SELECT json_group_array(counselor_id) FROM match_seals s WHERE s.entry_id = e.id) AS counselor_ids
+       FROM match_entries e WHERE e.user_id = ? ORDER BY e.created_at DESC, e.rowid DESC`,
+  );
+  const ownEntryCount = db.prepare('SELECT COUNT(*) AS n FROM match_entries WHERE user_id = ? AND id IS NOT ?');
+  const ownEntryForTag = db.prepare('SELECT 1 FROM match_entries WHERE user_id = ? AND tag = ? AND id IS NOT ?');
+  const checkSealRecipients = (seals: Array<{ counselorId: string }>) => {
+    const ids = rosterIds();
+    for (const seal of seals) {
+      const c = q.counselorProfileByUser.get(seal.counselorId) as CounselorProfileRow | undefined;
+      if (!c) throw new HttpError(404, 'counselor_not_found', 'Counselor not found.');
+      if (c.verified !== 1) throw new HttpError(403, 'counselor_not_verified', 'This counselor has not been verified.');
+      if (ids && !ids.has(c.user_id)) throw new HttpError(403, 'counselor_not_listed', 'This counselor is not on the signed counselor list.');
+    }
+  };
+  const deleteEntry = (entryId: string) => {
+    db.prepare('DELETE FROM match_seals WHERE entry_id = ?').run(entryId);
+    db.prepare('DELETE FROM match_entries WHERE id = ?').run(entryId);
+  };
   const markMatched = db.prepare(
     `INSERT OR IGNORE INTO match_groups (id, tag, matched_at)
      SELECT ?, ?, ? WHERE (SELECT COUNT(DISTINCT user_id) FROM match_entries WHERE tag = ?) >= 2`,
@@ -905,28 +1014,32 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.post('/api/matching/entries', auth, verifiedAdultSurvivor, (req, res) => {
     const me = req.user!;
     const body = parse(S.createMatchEntryRequest, req.body);
-    for (const seal of body.seals) {
-      const c = q.counselorProfileByUser.get(seal.counselorId) as CounselorProfileRow | undefined;
-      if (!c) throw new HttpError(404, 'counselor_not_found', 'Counselor not found.');
-      if (c.verified !== 1) throw new HttpError(403, 'counselor_not_verified', 'This counselor has not been verified.');
+    checkSealRecipients(body.seals);
+    const replaces = body.replacesEntryId ?? null;
+    if (replaces) {
+      const old = q.matchEntryById.get(replaces) as MatchEntryRow | undefined;
+      if (!old || old.user_id !== me.id) throw new HttpError(404, 'entry_not_found', 'Entry not found.');
     }
     // Only reveals HER OWN earlier submission for the same person.
-    if (ownEntryForTag.get(me.id, body.tag)) throw new HttpError(409, 'already_sealed', 'You have already sealed this.');
-    if ((ownEntryCount.get(me.id) as { n: number }).n >= limits.lifetime)
+    if (ownEntryForTag.get(me.id, body.tag, replaces)) throw new HttpError(409, 'already_sealed', 'You have already sealed this.');
+    if ((ownEntryCount.get(me.id, replaces) as { n: number }).n >= limits.lifetime)
       throw new HttpError(429, 'rate_limited_lifetime', 'This account has reached the limit for sealed identifiers.');
     const id = newId();
     db.transaction(() => {
       const ts = new Date().toISOString();
+      // a re-seal (after a key rotation) replaces her older entry atomically
+      if (replaces) deleteEntry(replaces);
       const le = appendLedger(db, 'escrow.sealed', id, envelopeContentHash(body.bundle), ts);
       db.prepare(
-        `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, me.id, body.tag, canonicalEnvelope(body.bundle), canonicalEnvelope(body.labelEnvelope), ts, le.id);
+        `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id, key_epoch)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, me.id, body.tag, canonicalEnvelope(body.bundle), canonicalEnvelope(body.labelEnvelope), ts, le.id, keyEpoch);
       const ins = db.prepare('INSERT INTO match_seals (entry_id, counselor_id, seal) VALUES (?, ?, ?)');
       for (const seal of body.seals) ins.run(id, seal.counselorId, JSON.stringify(seal satisfies CounselorSeal));
-      audit(me.id, 'escrow.created', 'Sealed an identifier for sealed matching');
+      audit(me.id, 'escrow.created', replaces ? 'Re-sealed an identifier under the current matching keys' : 'Sealed an identifier for sealed matching');
       // Always executed, so a match takes the same code path as a miss (no branch/timing oracle in the handler).
       markMatched.run(newId(), body.tag, ts, body.tag);
+      if (replaces) pruneGroups();
     })();
     res.status(201).json({ entry: toSurvivorEscrow(q.matchEntryById.get(id) as MatchEntryRow) });
   });
@@ -937,14 +1050,33 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.get('/api/escrow', auth, listOwn); // kept for the Home screen / data export
   app.get('/api/matching/entries', auth, listOwn);
 
+  /**
+   * Add seals to one of HER entries for counselors who joined the (signed) roster after she sealed (M6). Owner only.
+   * Existing seals are kept as they are. The response is the same whatever the entry's match state.
+   */
+  app.post('/api/matching/entries/:id/seals', auth, verifiedAdultSurvivor, (req, res) => {
+    const me = req.user!;
+    const e = q.matchEntryById.get(parse(S.id, req.params.id)) as MatchEntryRow | undefined;
+    if (!e || e.user_id !== me.id) throw new HttpError(404, 'entry_not_found', 'Entry not found.');
+    const body = parse(S.addMatchSealsRequest, req.body);
+    checkSealRecipients(body.seals);
+    const have = (db.prepare('SELECT COUNT(*) AS n FROM match_seals WHERE entry_id = ?').get(e.id) as { n: number }).n;
+    if (have + body.seals.length > S.MAX_SEALS_PER_ENTRY) throw new HttpError(400, 'invalid_request', 'Too many counselors for one entry.');
+    db.transaction(() => {
+      const ins = db.prepare('INSERT OR IGNORE INTO match_seals (entry_id, counselor_id, seal) VALUES (?, ?, ?)');
+      for (const seal of body.seals) ins.run(e.id, seal.counselorId, JSON.stringify(seal satisfies CounselorSeal));
+    })();
+    res.json({ entry: toSurvivorEscrow(q.matchEntryById.get(e.id) as MatchEntryRow) });
+  });
+
   /** Withdraw: deletes her entry and its seals. If that leaves fewer than 2 survivors, the group is no longer released. */
   app.delete('/api/matching/entries/:id', auth, survivorOnly, (req, res) => {
     const me = req.user!;
     const e = q.matchEntryById.get(parse(S.id, req.params.id)) as MatchEntryRow | undefined;
     if (!e || e.user_id !== me.id) throw new HttpError(404, 'entry_not_found', 'Entry not found.');
     db.transaction(() => {
-      db.prepare('DELETE FROM match_seals WHERE entry_id = ?').run(e.id);
-      db.prepare('DELETE FROM match_entries WHERE id = ?').run(e.id);
+      deleteEntry(e.id);
+      pruneGroups();
       audit(me.id, 'escrow.withdrawn', 'You withdrew a sealed identifier. It was deleted.');
     })();
     res.json({ ok: true });
@@ -957,27 +1089,47 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(403, 'counselor_not_verified', 'Your counselor account has not been verified yet.');
     next();
   };
+  /*
+   * Release delay (review M2): an entry counts toward (and is shown in) a group only once it is releaseDelayMs old, so
+   * a counselor (or anyone colluding with one) who seals a GUESS from a Sybil survivor account cannot learn within
+   * minutes whether that guess matches someone. It slows guessing; it does not stop a patient Sybil — see
+   * docs/threat-model.md.
+   */
+  const releaseCutoff = () => new Date(Date.now() - releaseDelayMs).toISOString();
   const releasedGroups = db.prepare(
     `SELECT g.id, g.tag, g.matched_at FROM match_groups g
-      WHERE (SELECT COUNT(DISTINCT e.user_id) FROM match_entries e WHERE e.tag = g.tag) >= 2
+      WHERE (SELECT COUNT(DISTINCT e.user_id) FROM match_entries e WHERE e.tag = g.tag AND e.created_at <= ?) >= 2
       ORDER BY g.matched_at ASC, g.rowid ASC`,
   );
   const groupById = db.prepare('SELECT id, tag, matched_at FROM match_groups WHERE id = ?');
-  // UNIQUE(user_id, tag) ⇒ every entry of a group comes from a different survivor. user_id is never selected.
+  // UNIQUE(user_id, tag) ⇒ every entry of a group comes from a different survivor. user_id is never returned; the
+  // account creation time is used only for the Sybil signals below and never leaves the server.
   const groupEntriesFor = db.prepare(
-    `SELECT e.id, e.created_at, e.bundle, s.seal FROM match_entries e
+    `SELECT e.id, e.created_at, e.bundle, s.seal, u.created_at AS account_created_at FROM match_entries e
        JOIN match_seals s ON s.entry_id = e.id AND s.counselor_id = ?
-      WHERE e.tag = ? ORDER BY e.created_at ASC, e.rowid ASC`,
+       JOIN users u ON u.id = e.user_id
+      WHERE e.tag = ? AND e.created_at <= ? ORDER BY e.created_at ASC, e.rowid ASC`,
   );
   const notesFor = db.prepare('SELECT * FROM counselor_notes WHERE group_id = ? AND counselor_id = ? ORDER BY created_at ASC, rowid ASC');
 
   type GroupRow = { id: string; tag: string; matched_at: string };
   const groupFor = (g: GroupRow, counselorId: string): CounselorMatchGroup | null => {
-    const entries = (groupEntriesFor.all(counselorId, g.tag) as Array<{ id: string; created_at: string; bundle: string; seal: string }>).map(
-      (e) => ({ entryId: e.id, createdAt: e.created_at, bundle: JSON.parse(e.bundle), seal: JSON.parse(e.seal) as CounselorSeal }),
-    );
+    const rows = groupEntriesFor.all(counselorId, g.tag, releaseCutoff()) as Array<{
+      id: string;
+      created_at: string;
+      bundle: string;
+      seal: string;
+      account_created_at: string;
+    }>;
+    const entries = rows.map((e) => ({ entryId: e.id, createdAt: e.created_at, bundle: JSON.parse(e.bundle), seal: JSON.parse(e.seal) as CounselorSeal }));
     // A counselor needs two seals addressed to them to reconstruct; anything less is never released.
     if (entries.length < 2) return null;
+    // Sybil signals (M2): accounts created within 24 h of each other, and entries sealed < 7 days after account creation.
+    const created = rows.map((r) => Date.parse(r.account_created_at)).sort((a, b) => a - b);
+    const signals = {
+      accountsCreatedClose: created.some((t, i) => i > 0 && t - created[i - 1]! < 86_400_000),
+      newAccountEntries: rows.filter((r) => Date.parse(r.created_at) - Date.parse(r.account_created_at) < 7 * 86_400_000).length,
+    };
     const notes = (notesFor.all(g.id, counselorId) as Array<{ id: string; group_id: string; entry_id: string | null; envelope: string; created_at: string }>).map(
       (n): CounselorNote => ({
         id: n.id,
@@ -987,12 +1139,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
         createdAt: n.created_at,
       }),
     );
-    return { id: g.id, tag: g.tag, matchedAt: g.matched_at, entries, notes };
+    return { id: g.id, tag: g.tag, matchedAt: g.matched_at, entries, notes, signals };
   };
 
   app.get('/api/counselor/groups', auth, counselorOnly, verifiedCounselor, (req, res) => {
     const me = req.user!;
-    const groups = (releasedGroups.all() as GroupRow[]).map((g) => groupFor(g, me.id)).filter((g): g is CounselorMatchGroup => !!g);
+    pruneSeals();
+    const groups = (releasedGroups.all(releaseCutoff()) as GroupRow[]).map((g) => groupFor(g, me.id)).filter((g): g is CounselorMatchGroup => !!g);
     // Logged to the counselor's own trail only. Never to a survivor's: that would tell her (or a perpetrator posing
     // as a survivor) that a match exists.
     audit(me.id, 'counselor.viewed_matches', `Opened the matched groups list (${groups.length})`);
@@ -1060,6 +1213,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       db.prepare('DELETE FROM counselor_notes WHERE counselor_id = ?').run(me.id);
       db.prepare('DELETE FROM counselor_profiles WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM oprf_quota WHERE user_id = ?').run(me.id);
+      pruneGroups();
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM audit_events WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM attorney_profiles WHERE user_id = ?').run(me.id);

@@ -266,6 +266,23 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (user_id, holder)
   );
   `,
+  // ── v5: sealed-matching v2 (security review fixes). The tag is now derived from the line's intercept, seals carry
+  // v2 shares, bundles/labels are padded, and labels hold what her client needs to re-seal. Old entries cannot be
+  // converted (that would need the plaintext identifiers), and only ever held DEMO data, so ALL matching data is
+  // dropped: entries, seals, groups, counselor notes, and OPRF quotas. Ledger rows stay (append-only; hashes only).
+  // Adds the key epoch per entry and a small meta table (pinned OPRF public keys, current epoch, signed roster).
+  `
+  DELETE FROM counselor_notes;
+  DELETE FROM match_groups;
+  DELETE FROM match_seals;
+  DELETE FROM match_entries;
+  DELETE FROM oprf_quota;
+  ALTER TABLE match_entries ADD COLUMN key_epoch INTEGER NOT NULL DEFAULT 1;
+  CREATE TABLE matching_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Migrations (0-based index) that rebuild a referenced table and must run with foreign_keys OFF. */

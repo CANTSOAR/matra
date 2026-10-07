@@ -14,7 +14,11 @@ const PORT = Number(process.env.MATRA_E2E_PROD_PORT) || 4300;
 const DB = process.env.MATRA_E2E_DB || path.resolve('e2e/.data/e2e-prod.db');
 // Throwaway pepper for this isolated test stack only. Real deployments set their own secret.
 const PEPPER = 'e2e-prod-only-pepper-not-a-secret-0123456789';
-const env = `NODE_ENV=production MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}"`;
+// Throwaway OPRF key shares (production refuses to start without them, and never generates them) and no release
+// delay, so the sealed-match scenario can see its group immediately.
+const OPRF_A = 'e2e-prod-only-oprf-key-a-not-a-secret-0123456789';
+const OPRF_B = 'e2e-prod-only-oprf-key-b-not-a-secret-0123456789';
+const env = `NODE_ENV=production MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}" MATRA_OPRF_KEY_A=${OPRF_A} MATRA_OPRF_KEY_B=${OPRF_B} MATRA_MATCH_RELEASE_DELAY_HOURS=0`;
 
 export default defineConfig({
   ...base,

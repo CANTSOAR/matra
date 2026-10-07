@@ -7,7 +7,8 @@
  * switches to the real module automatically the moment it lands. Everything marked TEMP is a minimal
  * stand-in, only used while the real module is missing.
  */
-import { createElement, type ComponentType } from 'react';
+import { createElement, lazy, Suspense, type ComponentType } from 'react';
+import { Loading } from '../components/common';
 import type { IntakeRecord } from '@matra/shared';
 import type { ApiClient } from '../api/client';
 import * as vault from '../lib/vault';
@@ -38,16 +39,18 @@ interface VoiceModule {
 }
 
 const understandMods = import.meta.glob<Partial<UnderstandModule>>('../understand/index.ts', { eager: true });
-const voiceMods = import.meta.glob<Partial<VoiceModule>>('../voice/index.ts', { eager: true });
+// Voice is NOT eager: its code (recorder, transcription client) loads only when she taps to talk. The model itself
+// is a separate, one-time download the voice module asks her about first.
+const voiceLoaders = import.meta.glob<Partial<VoiceModule>>('../voice/index.ts');
 const realUnderstand = understandMods['../understand/index.ts'];
-const realVoice = voiceMods['../voice/index.ts'];
+const loadVoice = voiceLoaders['../voice/index.ts'] as (() => Promise<Partial<VoiceModule>>) | undefined;
 
 /** Which adapters are real (for tests, the report, and a dev hint). */
 export const adapterStatus = {
   understand: typeof realUnderstand?.understand === 'function',
   applySuggestion: typeof realUnderstand?.applySuggestion === 'function',
   withEntries: typeof realUnderstand?.withEntries === 'function',
-  voice: typeof realVoice?.VoiceCapture === 'function',
+  voice: typeof loadVoice === 'function',
 };
 
 // ───────────── understand ─────────────
@@ -148,18 +151,23 @@ function TempVoiceCapture({ onCancel }: VoiceCaptureProps) {
   );
 }
 
-export const VoiceCapture: ComponentType<VoiceCaptureProps> = realVoice?.VoiceCapture ?? TempVoiceCapture;
+const LazyVoiceCapture = loadVoice
+  ? lazy(async () => ({ default: (await loadVoice()).VoiceCapture ?? TempVoiceCapture }))
+  : TempVoiceCapture;
 
-export function isVoiceSupported(): boolean {
+export const VoiceCapture: ComponentType<VoiceCaptureProps> = (props) =>
+  createElement(Suspense, { fallback: createElement(Loading, { label: 'Getting voice ready…' }) }, createElement(LazyVoiceCapture, props));
+
+export async function isVoiceSupported(): Promise<boolean> {
   try {
-    return realVoice?.isVoiceSupported?.() ?? false;
+    return (await loadVoice?.())?.isVoiceSupported?.() ?? false;
   } catch {
     return false;
   }
 }
 
-export function preloadTranscriber(onProgress?: (pct: number) => void): Promise<void> {
-  return realVoice?.preloadTranscriber?.(onProgress) ?? Promise.resolve();
+export async function preloadTranscriber(onProgress?: (pct: number) => void): Promise<void> {
+  await (await loadVoice?.())?.preloadTranscriber?.(onProgress);
 }
 
 // ───────────── matching (sealed escrow) ─────────────

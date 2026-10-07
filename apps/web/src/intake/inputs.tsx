@@ -1,4 +1,5 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { MATCH_REJECT_COPY, normalizeMatchIdentifier } from '@matra/crypto';
 import {
   asDate,
   asGroup,
@@ -530,9 +531,27 @@ export function GroupInput({ step, initial, onPending, onSubmit, onSkip }: Input
 
 // ───────────── sealed escrow opt-in, per person ─────────────
 
-/** A person can be matched only by a unique identifier — never by name alone. */
+const MATCH_FIELD_KIND = { email: 'email', phone: 'phone', handle: 'social_handle' } as const;
+
+/** Gentle explanations for identifiers she typed that can't be sealed (e.g. a link that isn't a profile). */
+export function matchIssues(p: GroupItem): string[] {
+  const out: string[] = [];
+  for (const [key, kind] of Object.entries(MATCH_FIELD_KIND)) {
+    const v = (p.values[key] ?? '').trim();
+    if (!v) continue;
+    const r = normalizeMatchIdentifier(kind, v, p.values.platform);
+    if (!r.ok && !out.includes(MATCH_REJECT_COPY[r.reason])) out.push(MATCH_REJECT_COPY[r.reason]);
+  }
+  return out;
+}
+
+/** A person can be matched only by a unique identifier that names one person — never by name alone. */
 export function isMatchable(p: GroupItem): boolean {
-  return MATCHABLE_KEYS.some((k) => (p.values[k] ?? '').trim() !== '');
+  return MATCHABLE_KEYS.some((k) => {
+    const v = (p.values[k] ?? '').trim();
+    const kind = MATCH_FIELD_KIND[k as keyof typeof MATCH_FIELD_KIND];
+    return !!v && !!kind && normalizeMatchIdentifier(kind, v, p.values.platform).ok;
+  });
 }
 
 export function EscrowInput({ step, initial, onPending, onSubmit, onSkip, draft }: InputProps<EscrowStep> & { draft: IntakeDraft }) {
@@ -560,10 +579,11 @@ export function EscrowInput({ step, initial, onPending, onSubmit, onSkip, draft 
       {people.map((p, i) => {
         const name = p.values.name?.trim() || `Person ${i + 1}`;
         if (!isMatchable(p)) {
+          const issues = matchIssues(p);
           return (
             <div key={p.id} className="intake-fieldset intake-card">
               <p className="intake-label">{name}</p>
-              <p className="intake-hint">{UI.escrow.notMatchable}</p>
+              {issues.length ? issues.map((m) => <p key={m} className="intake-hint">{m}</p>) : <p className="intake-hint">{UI.escrow.notMatchable}</p>}
             </div>
           );
         }

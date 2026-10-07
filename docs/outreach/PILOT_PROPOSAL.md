@@ -7,7 +7,7 @@
 ## 1. What Matra is
 
 Matra is a nonprofit, open-source (AGPL-3.0) web tool for adult (18+) sexual-assault survivors:
-- **Scripted, trauma-informed intake** (no AI). She can skip any question. Prompts are non-leading and sensory. Her words are stored verbatim. Quick Exit is always available.
+- **Trauma-informed intake.** She can start anywhere, typing or speaking, or answer one question at a time. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. She can skip any question. Prompts are non-leading and sensory. Her words are stored verbatim. Quick Exit is always available.
 - **Zero-knowledge vault.** Content is encrypted on her device. The operator stores only ciphertext and **cannot read it**. The operator can see metadata (account existence, timing, sizes, share relationships).
 - **Outputs generated on her device:** an **Incident Summary in the Survivor's Own Words**, an **evidence inventory** (photo location data stripped, SHA-256 hashes), and an **NJ VCCO application draft** that states the eligibility rules accurately.
 - **Consent-based sharing.** Only if she chooses, she shares a scoped, re-encrypted copy with a verified attorney she picks. She can revoke at any time, and she sees every time the attorney opens it.

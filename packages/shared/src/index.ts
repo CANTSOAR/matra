@@ -384,6 +384,10 @@ export interface EscrowEntry {
   /** Never sent to survivors (see `status`). Retained for type compatibility. */
   matchedAt?: string;
   ledgerEntryId: string;
+  /** OPRF key epoch this entry was sealed under. Her client re-seals entries from an older epoch on sign-in. */
+  keyEpoch?: number;
+  /** Counselors this entry holds a seal for (her own seals). Her client adds seals for newly listed counselors. */
+  counselorIds?: string[];
 }
 
 // ───────────────────────── Sealed matching (Callisto-style) ─────────────────────────
@@ -445,6 +449,30 @@ export interface MatchingConfig {
   /** Verified counselors; a sealed entry carries one CounselorSeal per counselor. */
   counselors: CounselorProfile[];
   limits: { perDay: number; lifetime: number };
+  /** Current OPRF key epoch (increments on an explicit key rotation, MATRA_OPRF_ROTATE=1). */
+  keyEpoch: number;
+  /**
+   * The counselor roster signed offline by the organization's Ed25519 key (npm run -w @matra/server sign-roster).
+   * Clients built with a pinned roster key (MATRA_COUNSELOR_ROSTER_PUBKEY) seal ONLY to counselors listed here.
+   */
+  roster?: SignedCounselorRoster;
+}
+
+/** `payload` is canonical JSON of CounselorRosterPayload; `signature` is base64 Ed25519 over "matra/counselor-roster/v1|" + payload. */
+export interface SignedCounselorRoster {
+  payload: string;
+  signature: string;
+}
+
+export interface CounselorRosterPayload {
+  v: 1;
+  issuedAt: string;
+  counselors: Array<{ userId: string; publicKey: { kty: 'RSA'; n: string; e: string } }>;
+}
+
+/** POST /api/matching/entries/:id/seals — add seals for counselors that joined the roster after she sealed. */
+export interface AddMatchSealsRequest {
+  seals: CounselorSeal[];
 }
 
 export interface CreateMatchEntryRequest {
@@ -456,6 +484,8 @@ export interface CreateMatchEntryRequest {
   labelEnvelope: Envelope;
   /** one per verified counselor: {tag, x, y, ce} sealed to that counselor */
   seals: CounselorSeal[];
+  /** Re-seal after a key rotation: her older entry with this id is deleted in the same transaction. */
+  replacesEntryId?: string;
 }
 
 /** A matched group as released to ONE counselor: only seals addressed to that counselor, never user ids. */
@@ -466,6 +496,11 @@ export interface CounselorMatchGroup {
   matchedAt: string;
   entries: Array<{ entryId: string; createdAt: string; bundle: Envelope; seal: CounselorSeal }>;
   notes: CounselorNote[];
+  /**
+   * Sybil warning signs, computed server-side without revealing accounts: some entries come from accounts created
+   * within 24 hours of each other, and how many entries were sealed less than 7 days after their account was created.
+   */
+  signals: { accountsCreatedClose: boolean; newAccountEntries: number };
 }
 
 /** Outreach note, encrypted client-side under the counselor's own master key. */
@@ -570,6 +605,7 @@ export interface ApiError { error: string; code?: string }
  POST   /api/matching/oprf-a    OprfEvaluateRequest   -> OprfEvaluateResponse (verified-adult survivor; rate-limited)
  POST   /api/matching/oprf-b    OprfEvaluateRequest   -> OprfEvaluateResponse (independent key; separately rate-limited)
  POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed')
+ POST   /api/matching/entries/:id/seals AddMatchSealsRequest -> { entry: EscrowEntry } (owner only; adds seals for new counselors)
  GET    /api/matching/entries                         -> { entries: EscrowEntry[] }
  DELETE /api/matching/entries/:id                     -> { ok: true }  (withdraw: deletes her entry)
 

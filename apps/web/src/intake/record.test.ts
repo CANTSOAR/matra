@@ -261,8 +261,11 @@ describe('sealed match: unique identifiers only', () => {
     expect(STEPS.find((s) => s.id === 'person.escrow')!.showIf!(d)).toBe(false);
   });
   it('opts in with a phone / email / handle, and then asks how a counselor may reach her', () => {
-    const d = draftWith({ 'person.list': person({ name: 'R.', phone: '555' }), 'person.escrow': { p1: 'yes' } });
+    const d = draftWith({ 'person.list': person({ name: 'R.', phone: '(201) 555-0142' }), 'person.escrow': { p1: 'yes' } });
     expect(draftToRecord(d).perpetrators[0].escrowOptIn).toBe(true);
+    // free text, a non-profile link, or an invalid number never opts in (review M1/H2)
+    for (const values of [{ otherId: 'Badguy 2015550100' } as Record<string, string>, { handle: 'https://www.instagram.com/share/AbC', platform: 'instagram' }, { phone: '555' }])
+      expect(draftToRecord(draftWith({ 'person.list': person({ name: 'R.', ...values }), 'person.escrow': { p1: 'yes' } })).perpetrators[0].escrowOptIn).toBe(false);
     expect(STEPS.find((s) => s.id === 'person.matchContact')!.showIf!(d)).toBe(true);
     const words = STEPS.find((s) => s.id === 'person.escrow')!.say.join(' ');
     expect(words).toMatch(/legal options counselor — not the police, not your school/);

@@ -7,6 +7,7 @@
  */
 import { sha256Hex, toBase64 } from '@matra/crypto';
 import type {
+  AddMatchSealsRequest,
   AttorneyProfile,
   AuditEvent,
   AuthResponse,
@@ -212,6 +213,13 @@ export class ApiClient {
   }
   createMatchEntry(req: CreateMatchEntryRequest) {
     return this.json<{ entry: EscrowEntry }>('POST', '/api/matching/entries', req);
+  }
+  /** Add seals for counselors who joined the roster after she sealed (owner only). */
+  addMatchSeals(id: string, req: AddMatchSealsRequest) {
+    return this.json<{ entry: EscrowEntry }>('POST', `/api/matching/entries/${encodeURIComponent(id)}/seals`, req);
+  }
+  listMatchEntries() {
+    return this.json<{ entries: EscrowEntry[] }>('GET', '/api/matching/entries');
   }
   withdrawMatchEntry(id: string) {
     return this.json<{ ok: true }>('DELETE', `/api/matching/entries/${encodeURIComponent(id)}`);

@@ -10,7 +10,7 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 
 | Area | Grade | Why |
 |---|---|---|
-| Core flow (intake → vault → PDF → share → revoke) | **A-** | Built and covered by 8 Playwright scenarios against both the dev and production builds |
+| Core flow (story space → vault → PDF → share → revoke → sealed match → counselor) | **A-** | Built and covered by 9 Playwright scenarios (dump-first story, interview mode, evidence, summary/export, sharing, revocation, sealed match with the counselor portal, Quick Exit, sign-in errors) against both the dev and production builds, plus an opt-in on-device voice test |
 | Crypto design | **B** | Sound primitives (AES-256-GCM, RSA-OAEP-3072, PBKDF2 600k). Known gaps W2–W5 and W12 are documented. Thin unit tests (2 crypto tests) |
 | Server | **B** | Express + SQLite, append-only ledger enforced by triggers, rate limits on register and login, strict CSP in production |
 | Trauma-informed UX | **B / unvalidated** | Skip-anything, Quick Exit, triple-Esc, 15-minute idle lock, 18+ gate. **No advocate has reviewed the script yet**, which is the single biggest credibility gap |
@@ -22,18 +22,16 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 
 - `npm run typecheck`: clean across all 4 workspaces.
 - `npm test`: 94 passing, 1 skipped (crypto 2, shared/server 26, web 66).
-- `npm run e2e`: **8/8 passed** on the second run. The first run failed on scenario 2 (evidence/EXIF) and the 6 tests after it didn't run. The rerun passed with no code changes, so treat scenario 2 as **flaky**. Fix it before you rely on it in a live demo.
+- Later the same day, after the story space, on-device voice and counselor portal landed: `npm run e2e:prod` **9/9 passed** (voice test skipped unless built with `MATRA_VOICE_HARNESS=1`; it passes on both the CPU and the opt-in WebGPU path).
+- `npm run e2e` (morning run): **8/8 passed** on the second run. The first run failed on scenario 2 (evidence/EXIF) and the 6 tests after it didn't run. The rerun passed with no code changes, so treat scenario 2 as **flaky**. Fix it before you rely on it in a live demo.
 
 ## What it still needs, in order
 
 ### 1. Before you send outreach (days, you can do it alone)
 
 1. **A hosted demo URL.** Every template has a `[demo link]` placeholder, and "clone the repo and run npm" loses most non-engineers. `render.yaml` and the Dockerfile exist: deploy with `MATRA_DEMO_BANNER=1` and seeded fictional accounts, then put the URL in the one-pager, deck and signature.
-2. **Settle the "no AI" claim against the new story flow.** The in-progress work adds `@huggingface/transformers`, `compromise` and `chrono-node` (on-device extraction and voice). The one-pager, PRD, FAQ, demo script and every email template say *"no AI"*. Either:
-   - keep the claim and keep that flow off by default, or
-   - change the wording everywhere to something precise and true, for example: *"No AI ever rewrites her words. Optional on-device suggestions run only in her browser, nothing is sent anywhere, and she confirms or dismisses each one."*
+2. ~~**Settle the "no AI" claim against the new story flow.**~~ *Fixed 2026-10-07.* The dump-first story space has shipped with on-device voice transcription (Whisper, run in her browser; the model, about 94 MB, downloads once from Matra's own server) and on-device suggestions (`compromise`, `chrono-node`) that she keeps, changes or sets aside. The one-pager, PRD, grant boilerplate, FAQ, meeting playbook, demo script, legal memo and email templates now all use one precise line: *"Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service."* Don't shorten it back to "no AI".
 
-   Advocates and lawyers will ask about this first, and a contradiction between the deck and the demo would cost more trust than the feature gains.
 3. **A dedicated project email address** (not a personal Gmail) and a public repo link. Both are placeholders in the signature block.
 4. **Fix the flaky e2e scenario 2.**
 5. ~~**Doc drift.**~~ *Fixed 2026-10-07.* GOVERNANCE.md §2.6 said data export was "not yet built", but it is built (the "Download my data" zip is covered by e2e scenario 3). Update it, noting that §2 changes follow GOVERNANCE §6 (this one is a factual status fix, not a change to the commitment).

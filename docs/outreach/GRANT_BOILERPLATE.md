@@ -8,7 +8,7 @@
 
 ## 1. Organization summary (≈100 words)
 
-Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlled documentation and a confidential path to a lawyer for adult survivors of sexual assault in New Jersey and New York. A scripted, trauma-informed intake (no AI) records her account in her own words. It is encrypted on her device so the operator cannot read it. From that record she can produce an Incident Summary in the Survivor's Own Words, an evidence inventory, and a New Jersey crime-victim-compensation draft. She shares them with a verified pro-bono attorney only with her explicit, revocable consent. Matra is fiscally sponsored by [Sponsor / pending], takes no fees from attorneys or cases, and will not accept real survivor data until an independent security audit and licensed-counsel review are complete.
+Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlled documentation and a confidential path to a lawyer for adult survivors of sexual assault in New Jersey and New York. A trauma-informed intake records her account in her own words: she can start anywhere and type or speak, or answer one skippable question at a time. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Her account is encrypted on her device so the operator cannot read it. From that record she can produce an Incident Summary in the Survivor's Own Words, an evidence inventory, and a New Jersey crime-victim-compensation draft. She shares them with a verified pro-bono attorney only with her explicit, revocable consent. Matra is fiscally sponsored by [Sponsor / pending], takes no fees from attorneys or cases, and will not accept real survivor data until an independent security audit and licensed-counsel review are complete.
 
 ---
 
@@ -38,7 +38,7 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 **What we will do in 12 months:** take Matra from a working prototype to a safety-gated, supervised pilot with one New Jersey legal-aid or advocacy partner.
 
 **What exists today (working MVP, invented data only)**
-- Scripted, trauma-informed intake: every question skippable, non-leading sensory prompts, words stored verbatim, Quick Exit.
+- Trauma-informed, dump-first intake: she starts anywhere and types or speaks; Matra shows what it picked up (dates, places, people) for her to confirm, then offers optional topics and a story map before she seals. A one-question-at-a-time mode is a fixed script. Every question skippable, non-leading sensory prompts, words stored verbatim, Quick Exit. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. (The speech model, about 94 MB, downloads once from Matra's own server and then runs offline in her browser.)
 - Zero-knowledge vault: client-side encryption (AES-256-GCM, keys derived from her passphrase). The server stores only ciphertext.
 - Evidence handling: on-device removal of photo location data, plus SHA-256 integrity hashes.
 - A tamper-evident, append-only ledger. It is self-hosted today; external timestamp anchoring is planned.
@@ -53,7 +53,7 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 4. **Pilot-readiness engineering**: share expiry, an enforced 18+ age gate, an attorney-first route, private drafts, an attorney key-fingerprint check, MFA or passkeys, metadata minimization, and an incident-response plan.
 5. **A two-phase pilot** with [Partner]: synthetic data first, then supervised real use only if every safety gate is met.
 
-**What Matra will not do:** automatic reporting to police, schools, or employers; AI processing of survivor content; legal advice from software; serving minors; taking fees or data revenue of any kind. The experimental matching ("escrow") feature stays **disabled** throughout the pilot.
+**What Matra will not do:** automatic reporting to police, schools, or employers; AI that rewrites her words, or any AI processing of survivor content on a server or third-party service; legal advice from software; serving minors; taking fees or data revenue of any kind. The experimental matching ("escrow") feature stays **disabled** throughout the pilot.
 
 ---
 
@@ -104,7 +104,7 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 ## 6. Trauma-informed and privacy safeguards
 
 - **Survivor control:** nothing is sent anywhere without her explicit, informed choice at the moment of sending. Consent is logged verbatim, revocable, and time-limited (the share-expiry feature is due before the pilot).
-- **Her words, verbatim:** no AI rewriting. Software adds labels and structure only.
+- **Her words, verbatim:** Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Software adds labels and structure only.
 - **Trauma-informed design:** every question can be skipped; prompts are non-leading; there are no timers or progress pressure; content warnings; "take a break"; grounding resources; Quick Exit everywhere.
 - **Honest warnings** before writing, sealing, sharing, and deleting. These cover court-ordered production from her, discoverability of anything given to police, version history, unrecoverable passphrases, and the fact that revocation can't recall copies already downloaded.
 - **Zero knowledge:** the operator can't decrypt content. Metadata is minimized: logs are kept at most 30 days with truncated IPs.

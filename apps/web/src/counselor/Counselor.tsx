@@ -7,39 +7,12 @@
  * contact bundle (packages/crypto/src/matching.ts, reconstructMatchGroup). Outreach notes are encrypted under the
  * counselor's own master key before they are saved.
  */
-import { useState, type ReactNode } from 'react';
-import { Navigate, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import { decryptJSON, encryptJSON, publicKeyFingerprint, reconstructMatchGroup, type ReconstructResult } from '@matra/crypto';
 import type { CounselorMatchGroup, CounselorNote, MatchContactBundle } from '@matra/shared';
-import { SignInForm } from '../components/AuthForms';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
-import { friendlyError, useRequiredSession, useSession } from '../lib/session';
-
-/** A counselor session only ever sees the counselor portal (pathless guard around the app's routes). */
-export function CounselorGate({ children }: { children: ReactNode }) {
-  const { session } = useSession();
-  const { pathname } = useLocation();
-  if (session?.user.role === 'counselor' && !pathname.startsWith('/counselor')) return <Navigate to="/counselor/matches" replace />;
-  return <>{children}</>;
-}
-
-export function RequireCounselor({ children }: { children: ReactNode }) {
-  const { session } = useSession();
-  if (!session) return <Navigate to="/counselor" replace />;
-  if (session.user.role !== 'counselor') return <Navigate to={session.user.role === 'attorney' ? '/attorney/cases' : '/vault'} replace />;
-  return <>{children}</>;
-}
-
-export function CounselorSignIn() {
-  return (
-    <div className="stack-lg">
-      <PageTitle eyebrow="Legal options counselors" lead="For counselors Matra has verified and contracted.">
-        Counselor sign in
-      </PageTitle>
-      <SignInForm role="attorney" />
-    </div>
-  );
-}
+import { friendlyError, useRequiredSession } from '../lib/session';
+export { CounselorGate, CounselorSignIn, RequireCounselor } from './guards';
 
 export function EthicsBanner() {
   return (
@@ -57,6 +30,15 @@ export function EthicsBanner() {
         <li>
           A match is a lead, not evidence. Someone could create accounts to fake one, so check that it makes sense before
           you reach out, and never treat it as proof of what happened.
+        </li>
+        <li>
+          Before you confirm anything to anyone, do plausibility checks: does each person’s account fit the identifier,
+          the place and the time? Treat any warning on a group (decoy, new accounts, differing identifiers) as a reason
+          to slow down, and report it to Matra.
+        </li>
+        <li>
+          Be wary of a card whose own contact details are the very identifier that was named — it may be the named
+          person, not a survivor.
         </li>
         <li>Your role is to explain their options — including doing nothing. They decide everything.</li>
       </ul>
@@ -123,16 +105,28 @@ function MatchGroup({ group, index, onNote }: { group: CounselorMatchGroup; inde
   }
   const r = state.result;
   const first = r?.ok ? r.bundles[0]?.bundle.identifier : undefined;
+  const alerts = r ? r.alerts.map((a) => ALERT_WORDS[a]) : [];
+  const sig = group.signals;
   return (
     <section className="card stack" aria-labelledby={`g-${group.id}`} data-testid="counselor-group">
       <div className="section-title">
         <h2 id={`g-${group.id}`}>Match {index}</h2>
-        <span className="badge care">{group.entries.length} people</span>
+        {/* Only verified, distinct survivors are counted (L2) — never the raw number of entries the server sent. */}
+        <span className="badge care">{r?.ok ? `${r.people} ${r.people === 1 ? 'person' : 'people'}` : 'Sealed group'}</span>
       </div>
       <p className="small muted" style={{ margin: 0 }}>
         Matched {formatDate(group.matchedAt)}
         {first && <> · on {first.kind === 'social' ? 'a social media profile' : first.kind === 'phone' ? 'a phone number' : 'an email address'}</>}
       </p>
+      {sig && (sig.accountsCreatedClose || sig.newAccountEntries > 0) && (
+        <div className="card warn small" data-testid="counselor-sybil-signals">
+          <strong>Check carefully:</strong>{' '}
+          {sig.accountsCreatedClose && 'some of these reports come from accounts created within a day of each other. '}
+          {sig.newAccountEntries > 0 &&
+            `${sig.newAccountEntries === 1 ? 'One report was' : `${sig.newAccountEntries} reports were`} sealed less than a week after the account was created. `}
+          New or near-simultaneous accounts can be a sign that someone created accounts to fake a match.
+        </div>
+      )}
       {!r && (
         <div>
           <button className="btn btn-primary btn-small" onClick={() => void open()} disabled={state.busy}>
@@ -147,9 +141,23 @@ function MatchGroup({ group, index, onNote }: { group: CounselorMatchGroup; inde
           contact anyone based on it; report it to Matra.
         </ErrorNote>
       )}
+      {alerts.length > 0 && (
+        <div className="card warn stack" role="alert" data-testid="counselor-group-alert">
+          <strong>Possible decoy or tampering — do not contact anyone until you have checked this group.</strong>
+          <ul className="small" style={{ margin: 0, paddingLeft: '1.2em' }}>
+            {alerts.map((a) => (
+              <li key={a}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {r?.ok && (
         <>
-          {first && <p className="small">Identifier both named: <span className="mono">{first.canonical}</span></p>}
+          {r.canonicals.length === 1 && first && (
+            <p className="small">
+              Identifier named: <span className="mono">{first.canonical}</span>
+            </p>
+          )}
           {r.failed.length > 0 && (
             <ErrorNote>
               {r.failed.length === 1 ? 'One entry' : `${r.failed.length} entries`} in this group did not verify and {r.failed.length === 1 ? 'is' : 'are'} not
@@ -163,6 +171,7 @@ function MatchGroup({ group, index, onNote }: { group: CounselorMatchGroup; inde
             <SurvivorCard
               key={b.entryId}
               n={i + 1}
+              onLine={b.onLine}
               groupId={group.id}
               entryId={b.entryId}
               bundle={b.bundle}
@@ -178,7 +187,27 @@ function MatchGroup({ group, index, onNote }: { group: CounselorMatchGroup; inde
 
 const METHOD_WORDS: Record<string, string> = { call: 'Phone call', text: 'Text message', email: 'Email', voicemail: 'Voicemail is OK' };
 
-function SurvivorCard(props: { n: number; groupId: string; entryId: string; bundle: MatchContactBundle; notes: CounselorNote[]; onNote(): void }) {
+/** What each reconstruction alert means, in the counselor's words. */
+const ALERT_WORDS: Record<ReconstructResult['alerts'][number], string> = {
+  multiple_lines: 'More than one consistent set of reports exists under this identifier. Someone may have created accounts to plant a decoy.',
+  foreign_line: 'Some entries were built to look like a match but don’t belong to it (a likely decoy). They are not shown.',
+  off_line_share: 'At least one report opened but doesn’t line up with the others. It is marked below.',
+  duplicate_share: 'The same report appeared more than once. It is shown and counted once.',
+  identifier_mismatch: 'The reports name different identifiers (shown on each card). Check that they really refer to the same person.',
+};
+
+const contactMatchesIdentifier = (b: MatchContactBundle) => {
+  const c = b.identifier.canonical.toLowerCase();
+  const digits = (v?: string) => (v ?? '').replace(/\D/g, '');
+  if (c.startsWith('email:') && b.contact.email) return c === `email:${b.contact.email.trim().toLowerCase()}`;
+  if (c.startsWith('phone:') && b.contact.phone) {
+    const d = digits(b.contact.phone);
+    return d.length >= 7 && c.replace(/\D/g, '').endsWith(d.length === 10 ? d : d.slice(-10));
+  }
+  return false;
+};
+
+function SurvivorCard(props: { n: number; onLine: boolean; groupId: string; entryId: string; bundle: MatchContactBundle; notes: CounselorNote[]; onNote(): void }) {
   const { api, session } = useRequiredSession();
   const { bundle: b } = props;
   const notes = useAsync(
@@ -206,6 +235,19 @@ function SurvivorCard(props: { n: number; groupId: string; entryId: string; bund
   return (
     <article className="card stack" data-testid="counselor-survivor" aria-label={`Person ${props.n}`}>
       <h3 style={{ margin: 0 }}>Person {props.n}</h3>
+      <p className="small" style={{ margin: 0 }}>
+        Named: <span className="mono" data-testid="counselor-canonical">{b.identifier.canonical}</span>
+      </p>
+      {!props.onLine && (
+        <p className="card warn small" style={{ margin: 0 }}>
+          This report doesn’t line up with the others in this group. Treat it with extra care.
+        </p>
+      )}
+      {contactMatchesIdentifier(b) && (
+        <p className="card warn small" style={{ margin: 0 }} data-testid="counselor-contact-is-identifier">
+          The contact details on this card are the identifier that was named. This may be the named person, not a survivor.
+        </p>
+      )}
       <dl className="case-meta">
         {b.contact.name && (
           <div>

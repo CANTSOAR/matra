@@ -4,7 +4,6 @@ import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/sha
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { escrowLabel, finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
-import { buildDataExport, downloadBytes } from '../lib/export';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
 
 const AUDIT_TEXT: Record<string, string> = {
@@ -56,6 +55,50 @@ export function describeAudit(e: AuditEvent, kindBySeq?: Map<number, OpenedRecor
   return e.action;
 }
 
+/** One line of the activity list: a single event, or a run of consecutive identical ones (e.g. autosaves). */
+export interface ActivityLine {
+  key: string;
+  label: string;
+  count: number;
+  /** newest and oldest event in the run (equal for a single event) */
+  newest: string;
+  oldest: string;
+}
+
+/** Attorney access is never folded into a count: she should see every single time someone opened her file. */
+const neverGrouped = (e: AuditEvent) => e.action.startsWith('attorney.');
+
+/** Group consecutive events (newest first) that read the same, so twenty autosaves don't bury everything else. */
+export function groupActivity(newestFirst: AuditEvent[], label: (e: AuditEvent) => string): ActivityLine[] {
+  const out: ActivityLine[] = [];
+  let prev: AuditEvent | undefined;
+  for (const e of newestFirst) {
+    const text = label(e);
+    const last = out[out.length - 1];
+    if (last && prev && !neverGrouped(e) && !neverGrouped(prev) && last.label === text) {
+      last.count++;
+      last.oldest = e.at;
+    } else {
+      out.push({ key: e.id, label: text, count: 1, newest: e.at, oldest: e.at });
+    }
+    prev = e;
+  }
+  return out;
+}
+
+/** "Oct 7, 2026, 2:04 – 2:31 AM" (one day) or both full dates when a run spans days. */
+export function formatRange(fromIso: string, toIso: string): string {
+  const a = new Date(fromIso);
+  const b = new Date(toIso);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return `${formatDate(fromIso)} – ${formatDate(toIso)}`;
+  const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  try {
+    return fmt.formatRange(a, b);
+  } catch {
+    return `${fmt.format(a)} – ${fmt.format(b)}`;
+  }
+}
+
 const SCOPE_WORDS: Record<string, string> = { record: 'written story', evidence: 'evidence files', brief: 'summary' };
 const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).join(', ');
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -96,7 +139,10 @@ export function Dashboard() {
   const activeShares = (shares.data ?? []).filter(
     ({ share }) => share.status === 'active' && Date.parse(share.expiresAt) > Date.now(),
   );
-  const activityList = [...(audit.data ?? [])].sort((a, b) => b.at.localeCompare(a.at));
+  const activityList = groupActivity(
+    [...(audit.data ?? [])].sort((a, b) => b.at.localeCompare(a.at)),
+    (e) => describeAudit(e, kindBySeq),
+  );
 
   return (
     <div className="stack-xl">
@@ -339,10 +385,13 @@ export function Dashboard() {
         {audit.data && audit.data.length === 0 && <p className="muted">Nothing yet.</p>}
         {activityList.length > 0 && (
           <ul className="list timeline small">
-            {activityList.slice(0, showAllActivity ? 50 : 10).map((e) => (
-              <li key={e.id}>
-                <span>{describeAudit(e, kindBySeq)}</span>
-                <span className="muted">{formatDate(e.at)}</span>
+            {activityList.slice(0, showAllActivity ? 50 : 10).map((line) => (
+              <li key={line.key}>
+                <span>
+                  {line.label}
+                  {line.count > 1 && <span className="muted"> · {line.count} times</span>}
+                </span>
+                <span className="muted">{line.count > 1 ? formatRange(line.oldest, line.newest) : formatDate(line.newest)}</span>
               </li>
             ))}
           </ul>
@@ -446,6 +495,8 @@ function ExportCard() {
     setError(null);
     setDone(null);
     try {
+      // loaded on demand: most visits never export, so the zip code stays out of the home screen
+      const { buildDataExport, downloadBytes } = await import('../lib/export');
       const out = await buildDataExport(api, session.masterKey, session.user.username);
       downloadBytes(out.zip, out.fileName, 'application/zip');
       setDone(

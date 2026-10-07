@@ -144,16 +144,23 @@ export const counselorSeal = z.object({
   envelope: smallEnvelope,
 });
 
+/** Up to 200 counselors per entry (one seal each). */
+export const MAX_SEALS_PER_ENTRY = 200;
+const sealList = z
+  .array(counselorSeal)
+  .min(1)
+  .max(MAX_SEALS_PER_ENTRY)
+  .refine((a) => new Set(a.map((x) => x.counselorId)).size === a.length, 'duplicate counselorId');
+
 export const createMatchEntryRequest = z.object({
   tag: z.string().regex(/^[a-f0-9]{64}$/, 'tag must be 64 lowercase hex chars'),
   bundle: smallEnvelope,
   labelEnvelope: smallEnvelope,
-  seals: z
-    .array(counselorSeal)
-    .min(1)
-    .max(20)
-    .refine((a) => new Set(a.map((x) => x.counselorId)).size === a.length, 'duplicate counselorId'),
+  seals: sealList,
+  replacesEntryId: id.optional(),
 });
+
+export const addMatchSealsRequest = z.object({ seals: sealList });
 
 export const counselorNoteRequest = z.object({
   entryId: id.optional(),

@@ -19,7 +19,7 @@ import {
 import type { AttorneyProfile, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
-import { getProfile as loadProfileRecord, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
+import { getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
@@ -238,6 +238,9 @@ export function SessionProvider({
         } catch {
           /* best effort */
         }
+        // Keep her sealed-match entries current (re-seal after a key rotation, seal to new counselors). In the
+        // background and silent: it never reveals anything about matches, and a failure just retries next sign-in.
+        void refreshSealedMatches(new ApiClient({ getToken: () => res.token, fetchImpl }), masterKey).catch(() => undefined);
       }
       return s;
     },

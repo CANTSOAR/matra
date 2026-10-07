@@ -47,7 +47,7 @@
 ## Handoff brief (paste into a fresh chat)
 
 **What Matra is.** A nonprofit, open-source (AGPL-3.0) web app for **adult (18+)** sexual-assault survivors in **New Jersey and New York**. It has four parts:
-- A scripted, trauma-informed intake. It uses **no AI**, every question can be skipped, her words are stored verbatim, and Quick Exit is always available.
+- A trauma-informed, start-anywhere intake: every question can be skipped, her words are stored verbatim, and Quick Exit is always available. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service.
 - A **zero-knowledge vault**. Content is encrypted on her device and the server stores only ciphertext.
 - Outputs generated on her device: an **Incident Summary in the Survivor's Own Words** (renamed from "Police Evidentiary Brief"; never use the old name), an **evidence inventory** (photo location data stripped, SHA-256 hashes), and an **NJ VCCO compensation application draft**.
 - Sharing **only with her explicit, revocable consent**: an encrypted, scoped copy goes to a **verified volunteer or legal-aid attorney** she chooses. She sees every access.

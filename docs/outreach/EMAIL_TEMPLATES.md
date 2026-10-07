@@ -38,7 +38,7 @@ With thanks,
 
 Dear [Name],
 
-[Organization]'s work on [specific program, e.g., its survivor legal services project] is the reason I'm writing. I'm the founder of Matra, a nonprofit, open-source prototype for adult sexual-assault survivors. It offers scripted, trauma-informed intake with her words stored verbatim, a zero-knowledge vault, and an NJ VCCO application draft. A survivor can choose to share her account, encrypted, with a verified attorney, and she can revoke that sharing at any time.
+[Organization]'s work on [specific program, e.g., its survivor legal services project] is the reason I'm writing. I'm the founder of Matra, a nonprofit, open-source prototype for adult sexual-assault survivors. It offers trauma-informed intake with her words stored verbatim (nothing rewrites her words; voice transcription and suggestions run only on her device), a zero-knowledge vault, and an NJ VCCO application draft. A survivor can choose to share her account, encrypted, with a verified attorney, and she can revoke that sharing at any time.
 
 We are deliberately early. The demo uses invented data, there has been no security audit yet, and we won't touch real survivor data until an audit, review by licensed counsel, and a signed partnership with trained advocates are all in place. Before going further, I would value 20-30 minutes of your critique, or a colleague's. I'd especially like to know whether a tool like this could fit within VAWA and VOCA confidentiality conditions, and what would make your organization say no.
 
@@ -55,7 +55,7 @@ Respectfully,
 
 Dear [Name],
 
-I'm building Matra, a nonprofit tool that helps adult survivors of sexual assault document what happened at their own pace. Every question can be skipped. The prompts are non-leading and sensory, there's no AI, her words are kept exactly as typed, and a Quick Exit button is always available. Nothing is ever sent to police or anyone else unless she chooses.
+I'm building Matra, a nonprofit tool that helps adult survivors of sexual assault document what happened at their own pace. Every question can be skipped. The prompts are non-leading and sensory, her words are kept exactly as she gave them, and a Quick Exit button is always available. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Nothing is ever sent to police or anyone else unless she chooses.
 
 I'm not an advocate, and I don't want to ship a script that advocates haven't shaped. Would you be willing to review the intake questions (about 2 hours) and tell me what is leading, retraumatizing, or missing, especially around safety and shared devices? If it's useful to you, I'd also welcome you joining a small reviewer group, at about 2 hours a month. We'll offer an honorarium once funded and will credit you only with your permission.
 
@@ -89,7 +89,7 @@ Respectfully,
 
 Dear [Program / Intake team],
 
-I'd like to ask about fiscal sponsorship for Matra. Matra is an open-source (AGPL-3.0) software project for adult sexual-assault survivors in NJ and NY. It provides scripted, trauma-informed documentation in her own words, encrypted on her device so the operator can't read it, and optional consent-based sharing with a verified pro-bono attorney.
+I'd like to ask about fiscal sponsorship for Matra. Matra is an open-source (AGPL-3.0) software project for adult sexual-assault survivors in NJ and NY. It provides trauma-informed documentation in her own words, encrypted on her device so the operator can't read it, and optional consent-based sharing with a verified pro-bono attorney.
 
 A few facts relevant to your review:
 - It's a prototype. It holds no real survivor data and will hold none until an independent security audit and counsel review are complete.
@@ -141,7 +141,7 @@ Respectfully,
 ## 8. LinkedIn connection notes (300-character limit)
 
 - **Attorney:** "Hi [Name], I'm building a nonprofit, zero-knowledge documentation tool for adult SA survivors in NJ/NY, with consent-based sharing to pro-bono attorneys. It's a prototype on invented data. I'd value your critique of our consent language. Open to connecting?"
-- **Advocate:** "Hi [Name], I'm building a trauma-informed, skip-anything documentation tool for adult survivors (no AI, her words verbatim). I want advocates to shape the intake script before anyone uses it. Would you be open to connecting?"
+- **Advocate:** "Hi [Name], I'm building a trauma-informed, skip-anything documentation tool for adult survivors (her words verbatim; voice and suggestions run only on her device, no server-side AI). I want advocates to shape the intake script before anyone uses it. Would you be open to connecting?"
 - **Clinic faculty:** "Hi Prof. [Name], our nonprofit survivor-to-attorney tool has open NJ RPC 7.3/privilege questions that might suit a clinic project. Prototype only, no fees. May I connect and send a short note?"
 - **Security:** "Hi [Name], open-source WebCrypto E2EE vault for SA survivors, unaudited, and we want it audited before any real data. Could I ask your advice on scoping?"
 - **Funder:** "Hi [Name], I'm founder of Matra, a nonprofit, survivor-controlled documentation tool (NJ/NY). Pre-pilot, with safety gates before real data. Could I ask whether it fits your portfolio?"

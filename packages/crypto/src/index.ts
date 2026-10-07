@@ -58,6 +58,20 @@ export interface DerivedKeys {
   authKey: string;
   /** AES-GCM key; keep in memory only */
   masterKey: CryptoKey;
+  /**
+   * HMAC-SHA256 key (non-extractable), HKDF-derived from the same passphrase material with its own label. Used only
+   * for her sealed-match share x-coordinates (matching.ts survivorShareX). Also registered against `masterKey`, so code
+   * that only holds the master key can find it (matchKeyFor).
+   */
+  matchKey: CryptoKey;
+}
+
+// masterKey → matchKey, for the lifetime of the in-memory key objects only (never persisted).
+const MATCH_KEYS = new WeakMap<CryptoKey, CryptoKey>();
+
+/** The sealed-match HMAC key derived alongside `masterKey` by deriveKeys (undefined for keys from elsewhere). */
+export function matchKeyFor(masterKey: CryptoKey): CryptoKey | undefined {
+  return MATCH_KEYS.get(masterKey);
 }
 
 export function newKdfSalt(): string {
@@ -82,7 +96,9 @@ export async function deriveKeys(
     'encrypt',
     'decrypt',
   ]);
-  return { authKey: toBase64(authBits), masterKey };
+  const matchKey = await subtle.deriveKey(hk('matra/match-x'), ikm, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign']);
+  MATCH_KEYS.set(masterKey, matchKey);
+  return { authKey: toBase64(authBits), masterKey, matchKey };
 }
 
 // ───────────── symmetric content encryption ─────────────

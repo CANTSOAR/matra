@@ -13,7 +13,7 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 
 ## 2. Product principles (non-negotiable)
 1. **Survivor control.** Nothing is sent to police, schools, employers, or anyone else without an explicit, informed, logged choice made at that moment. Consent is revocable and (next phase) time-limited.
-2. **Her words, verbatim.** No AI rewriting, summarizing, or "improving." Software adds labels and structure only.
+2. **Her words, verbatim.** Nothing rewrites her words, and nothing summarizes or "improves" them. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Software adds labels and structure only.
 3. **Trauma-informed by design.** Every question can be skipped. Prompts are non-leading and use sensory, cognitive-interview-style wording ("What do you remember hearing?"), avoid language of consensual sex or doubt, and include pauses and grounding. Quick Exit is available everywhere.
 4. **Honest about limits.** We never say "subpoena-proof," "bulletproof," or "admissible." See the Legal Memo §8 for approved language.
 5. **Zero knowledge.** The operator cannot read content. Metadata is minimized.

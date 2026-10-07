@@ -1,6 +1,11 @@
 # Matra demo / production image.
 #   docker build -t matra .
-#   docker run -p 8080:8080 -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 -v matra-data:/app/apps/server/data matra
+#   docker run -p 8080:8080 -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 \
+#     -e MATRA_OPRF_KEY_A=$(openssl rand -hex 32) -e MATRA_OPRF_KEY_B=$(openssl rand -hex 32) \
+#     -v matra-data:/app/apps/server/data matra
+# The server refuses to start in production without both OPRF key shares (env, or *_FILE paths OUTSIDE the data volume).
+# Build-time pins for the web client (recommended for any non-demo build):
+#   docker build --build-arg MATRA_OPRF_PUBKEY_A=… --build-arg MATRA_OPRF_PUBKEY_B=… --build-arg MATRA_COUNSELOR_ROSTER_PUBKEY=… -t matra .
 # See docs/DEPLOY.md. Never put real survivor data on an instance before the pre-launch checklist is done.
 
 # ── build: install everything, build the web app, then drop dev dependencies ──
@@ -20,6 +25,13 @@ COPY packages packages
 COPY apps apps
 # `npm run build` first fetches + verifies the on-device speech model into apps/web/public/models (pinned, sha256-checked).
 COPY scripts scripts
+# Sealed-matching pins baked into the web build (empty = unpinned, development behaviour). See docs/DEPLOY.md.
+ARG MATRA_OPRF_PUBKEY_A=""
+ARG MATRA_OPRF_PUBKEY_B=""
+ARG MATRA_COUNSELOR_ROSTER_PUBKEY=""
+ENV MATRA_OPRF_PUBKEY_A=$MATRA_OPRF_PUBKEY_A \
+    MATRA_OPRF_PUBKEY_B=$MATRA_OPRF_PUBKEY_B \
+    MATRA_COUNSELOR_ROSTER_PUBKEY=$MATRA_COUNSELOR_ROSTER_PUBKEY
 RUN npm run build && npm prune --omit=dev --no-audit --no-fund
 
 # ── runtime: non-root, only what the server needs ──

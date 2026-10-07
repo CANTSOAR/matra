@@ -4,6 +4,7 @@ import {
   deriveKeys,
   normalizeMatchIdentifier,
   submitMatchEntry,
+  type MatchPins,
   type MatchTransport,
   encryptBlob,
   encryptJSON,
@@ -18,8 +19,9 @@ import { createApp, getDb, type CreateAppOptions } from './app.js';
 export const TEST_ITERATIONS = 1000;
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
-export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching'] } = {}) {
-  const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra });
+export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string } = {}) {
+  // Tests release matched groups immediately unless they set a delay (production default: 72 h).
+  const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra, matching: { releaseDelayHours: 0, ...extra.matching } });
   return { app, db: getDb(app) };
 }
 
@@ -114,6 +116,8 @@ export function matchTransport(app: express.Express, u: TestUser): MatchTranspor
     config: async () => ok(await request(app).get('/api/matching/config').set(u.auth)),
     evaluate: async (h, req) => ok(await request(app).post(`/api/matching/oprf-${h}`).set(u.auth).send(req)),
     createEntry: async (req) => ok(await request(app).post('/api/matching/entries').set(u.auth).send(req)),
+    listEntries: async () => ok(await request(app).get('/api/matching/entries').set(u.auth)),
+    addSeals: async (id, req) => ok(await request(app).post(`/api/matching/entries/${id}/seals`).set(u.auth).send(req)),
   };
 }
 
@@ -125,6 +129,7 @@ export async function sealMatch(
   value: string,
   platform?: string,
   contactName = u.user.username,
+  pins?: MatchPins,
 ) {
   const n = normalizeMatchIdentifier(kind, value, platform);
   if (!n.ok) throw new Error(`not matchable: ${n.reason}`);
@@ -133,6 +138,7 @@ export async function sealMatch(
     identifier: n,
     contact: { name: contactName, methods: ['text'], phone: '+12015550123' },
     consentStatement: 'If someone else names the same person, a counselor may contact me.',
-    labelEnvelope: await encryptJSON({ label: `${kind}`, canonical: n.canonical }, u.masterKey),
+    label: `${kind}`,
+    ...(pins && { pins }),
   });
 }

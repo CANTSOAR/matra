@@ -29,8 +29,28 @@ export function DemoBanner() {
 function useFocusOnNavigate() {
   const loc = useLocation();
   useEffect(() => {
-    const h = document.querySelector<HTMLElement>('main [data-autofocus]');
-    h?.focus({ preventScroll: false });
+    const find = () => document.querySelector<HTMLElement>('main [data-autofocus]');
+    const h = find();
+    if (h) {
+      h.focus({ preventScroll: false });
+      return;
+    }
+    // Screens behind a sign-in load on demand: focus their heading once it arrives (unless she has moved on).
+    const main = document.getElementById('main');
+    if (!main || typeof MutationObserver === 'undefined') return;
+    const obs = new MutationObserver(() => {
+      const el = find();
+      if (!el) return;
+      obs.disconnect();
+      const a = document.activeElement;
+      if (!a || a === document.body || a === main) el.focus({ preventScroll: false });
+    });
+    obs.observe(main, { childList: true, subtree: true });
+    const t = setTimeout(() => obs.disconnect(), 5000);
+    return () => {
+      obs.disconnect();
+      clearTimeout(t);
+    };
   }, [loc.pathname]);
 }
 

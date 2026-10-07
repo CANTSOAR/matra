@@ -16,6 +16,8 @@ When `NODE_ENV=production`:
 - The web app is served with a strict Content-Security-Policy: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. There are no inline scripts, no `eval`, and no third-party origins. `'wasm-unsafe-eval'` lets WebAssembly compile (it does not allow JavaScript `eval`) and `worker-src 'self'` allows the same-origin worker, both for on-device voice transcription. `Permissions-Policy` allows the microphone for this origin only. API responses keep `default-src 'none'`.
 - Hashed files under `/assets/` are cached as immutable. `index.html` and all API responses are `no-store`.
 - `MATRA_PEPPER` is required. The server refuses to start without it.
+- Both sealed-matching OPRF key shares (`MATRA_OPRF_KEY_A`, `MATRA_OPRF_KEY_B`) are required. They are **never generated automatically in production** and `…_FILE` paths must be outside the database directory: whoever holds both shares and the database can recover every sealed phone number by brute force in seconds.
+- The server records the two key holders' public keys in the database on first start and **refuses to start if they change**, unless you restart once with `MATRA_OPRF_ROTATE=1` (a deliberate rotation: a new key epoch begins, and each survivor's app re-seals her entries the next time she signs in).
 
 ### On-device voice transcription: the model files
 
@@ -46,7 +48,7 @@ To check the production build locally, including the full browser suite under th
 
 ```sh
 npm run build
-NODE_ENV=production MATRA_PEPPER=$(openssl rand -hex 32) MATRA_DB_PATH=/tmp/matra-demo.db npm start   # http://localhost:4000
+NODE_ENV=production MATRA_PEPPER=$(openssl rand -hex 32) MATRA_OPRF_KEY_A=$(openssl rand -hex 32) MATRA_OPRF_KEY_B=$(openssl rand -hex 32) MATRA_DB_PATH=/tmp/matra-demo.db npm start   # http://localhost:4000
 npm run e2e:prod      # the 8 demo-path scenarios against the production build on port 4300
 ```
 
@@ -60,8 +62,23 @@ npm run e2e:prod      # the 8 demo-path scenarios against the production build o
 | `MATRA_DB_PATH` | `/app/apps/server/data/matra.db` | Must be on the persistent disk |
 | `MATRA_TRUST_PROXY` | `1` | Number of proxy hops in front of the app (Render: 1). Needed for per-IP rate limiting |
 | `PORT` | set by the host | Default 4000 locally, 8080 in the Docker image. The server binds `0.0.0.0` in production |
+| `MATRA_OPRF_KEY_A`, `MATRA_OPRF_KEY_B` | two different random secrets | Sealed-matching key shares. 64 hex chars, or any secret ≥ 32 chars (the key is derived from it; Render's `generateValue` works). Or `MATRA_OPRF_KEY_A_FILE` / `_B_FILE`, which must point **outside** the database directory and at different files. **Secret.** Required in production. Ideally generated and backed up by different people |
+| `MATRA_OPRF_ROTATE` | **unset** | Set to `1` for one restart only, to accept new OPRF keys on purpose (new key epoch; survivors' apps re-seal on sign-in) |
+| `MATRA_MATCH_RELEASE_DELAY_HOURS` | `72` | A matched group reaches counselors only once its entries are this old (slows Sybil / counselor guessing). `0` only for tests |
+| `MATRA_OPRF_PUBKEY_A`, `MATRA_OPRF_PUBKEY_B` | build time | Pinned into the **web build** (Vite). base64 public keys of the two holders (`GET /api/matching/oprf-a/key`, `…-b/key`). The client refuses keys that differ. Docker: `--build-arg` |
+| `MATRA_COUNSELOR_ROSTER_PUBKEY` | build time | Pinned into the web build: base64 Ed25519 public key of the organization that signs the counselor roster. With it, survivors seal only to counselors in the signed roster. Docker: `--build-arg` |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | **unset** | Development only. On a demo, verify attorneys explicitly (see below) |
 | `MATRA_SERVE_WEB`, `MATRA_WEB_DIR` | unset | Advanced: turn web serving on or off, or serve from another directory |
+
+## Sealed matching: keys, pins and the counselor roster
+
+1. **OPRF key shares.** Set `MATRA_OPRF_KEY_A` and `MATRA_OPRF_KEY_B` to two different secrets (`openssl rand -hex 32` each). Keep them out of the database volume and its backups. On Render the blueprint generates both; that is fine for a demo, but both still sit with one operator — for real data, run holder B as a separate service held by a separate organisation (SECURITY_WHITEPAPER.md §4a).
+2. **Pin the holder keys in the web build.** After the first start, read `GET /api/matching/oprf-a/key` and `…/oprf-b/key` and rebuild with `MATRA_OPRF_PUBKEY_A` / `MATRA_OPRF_PUBKEY_B` set (Docker `--build-arg`). If you ever rotate keys, rebuild with the new pins in the same release.
+3. **Counselor roster key.** Once, offline: `npm run -w @matra/server sign-roster -- --generate`. Keep the secret on the machine (or hardware token) of the person who verifies counselors — never on the server or in its environment. Build the web app with `MATRA_COUNSELOR_ROSTER_PUBKEY` set to the printed public key.
+4. **Sign the roster** after every counselor verification or removal: `MATRA_COUNSELOR_ROSTER_SIGNING_KEY=<secret> npm run -w @matra/server sign-roster` against the production database (for example from the host's maintenance shell, typing the key only for that command; `--dry-run` prints without storing). The server serves the signed roster; seals for counselors who are no longer listed are deleted, and survivors' apps add seals for new counselors on their next sign-in.
+5. Without pins (development, the e2e suite) everything works, and the app logs one warning that the counselor list is not pinned.
+
+Upgrading an existing instance: database schema v5 **drops all sealed-matching data** (entries, seals, groups, counselor notes, OPRF quotas), because the matching format changed and old entries can't be converted. Matching only ever held demo data; survivors can seal again.
 
 ## Option A: Render (Blueprint)
 
@@ -69,7 +86,7 @@ The repository includes [`render.yaml`](../render.yaml). It defines one Docker w
 
 - a 1 GB persistent disk mounted at `/app/apps/server/data` (SQLite database),
 - a health check on `/api/health`,
-- `MATRA_PEPPER` generated by Render on first deploy (`generateValue`),
+- `MATRA_PEPPER`, `MATRA_OPRF_KEY_A` and `MATRA_OPRF_KEY_B` generated by Render on first deploy (`generateValue`, three separate secrets),
 - `MATRA_DEMO_BANNER=1` and `MATRA_TRUST_PROXY=1`,
 - auto-deploy off, so nothing ships without a deliberate click.
 
@@ -94,13 +111,15 @@ docker build -t matra .
 docker volume create matra-data
 docker run -d --name matra -p 8080:8080 \
   -e MATRA_PEPPER="$(openssl rand -hex 32)" \
+  -e MATRA_OPRF_KEY_A="$(openssl rand -hex 32)" \
+  -e MATRA_OPRF_KEY_B="$(openssl rand -hex 32)" \
   -e MATRA_DEMO_BANNER=1 \
   -v matra-data:/app/apps/server/data \
   matra
 docker exec matra node --import tsx apps/server/src/seed.ts
 ```
 
-Store the pepper you generated somewhere safe (for example, your host's secret manager). You must pass the same value on every restart.
+Store the pepper and the two OPRF key shares you generated somewhere safe, **separately from the data volume** (for example, your host's secret manager). You must pass the same value on every restart.
 
 The image is a multi-stage build on `node:22-slim`. It runs as the non-root `node` user, declares a volume at `/app/apps/server/data`, and has a Docker `HEALTHCHECK` against `/api/health`. Put TLS in front of it with a reverse proxy, and set `MATRA_TRUST_PROXY` to the number of proxy hops.
 

@@ -27,6 +27,8 @@ export const test = base.extend<{ consoleProblems: string[] }>({
       if (/Failed to load resource: the server responded with a status of 401/.test(text)) return;
       // React DevTools hint (dev builds only).
       if (/Download the React DevTools/.test(text)) return;
+      // Dev/e2e builds don't pin the counselor-roster key; the sealed-matching client says so once (expected).
+      if (/no pinned counselor-roster key in this build/.test(text)) return;
       consoleProblems.push(`[${m.type()}] ${text}`);
     });
     page.on('pageerror', (e) => consoleProblems.push(`[pageerror] ${e.message}`));

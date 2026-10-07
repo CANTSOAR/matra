@@ -10,7 +10,8 @@
     "seed": "tsx src/seed.ts",
     "test": "vitest run",
     "typecheck": "tsc -p .",
-    "verify-attorney": "tsx src/verify-attorney.ts"
+    "verify-attorney": "tsx src/verify-attorney.ts",
+    "sign-roster": "tsx src/sign-roster.ts"
   },
   "dependencies": {
     "@matra/crypto": "*",
