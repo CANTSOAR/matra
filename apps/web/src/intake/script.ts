@@ -1,0 +1,1040 @@
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  MATRA — INTAKE INTERVIEW SCRIPT
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ *  Every word the intake assistant says lives in this file, so attorneys and
+ *  advocates can review and change it without touching any screen code.
+ *
+ *  HOW TO EDIT (no programming needed):
+ *   • Change only the text inside quotes: 'like this' or "like this".
+ *     If your text contains an apostrophe ( ' ), use double quotes around it:
+ *     "I'm not sure".
+ *   • `say:`   lines are what the assistant says, one chat bubble per line.
+ *   • `label:` is the short name of the answer box (read aloud by screen
+ *              readers and shown on the review screen).
+ *   • `hint:`  is the small helper text under an answer box.
+ *   • `bullets:` are shown as a short list inside a bubble.
+ *   • Do NOT change `id:`, `kind:`, `phase:`, `value:`, or `key:` — the app
+ *     uses them to file each answer in the right place.
+ *   • To reorder questions inside a section, move the whole { ... } block.
+ *   • `showIf` lines decide when a follow-up question appears. Leave them as-is
+ *     unless you are working with an engineer.
+ *
+ *  STYLE GUIDE (please keep to it):
+ *   • Short sentences. Plain words. About a 6th–8th grade reading level.
+ *   • Warm, calm, never judging. Open invitations, not interrogation.
+ *   • Never use the word "alleged". Never ask "why". Never ask
+ *     "why didn't you…". Never suggest an answer (no leading questions).
+ *   • Every question can be skipped. Say so often. "Not sure" is always okay.
+ *   • Fuzzy order, gaps, and sensory details are normal after trauma, and are
+ *     valid on their own.
+ *
+ *  Interview design draws on: the Cognitive Interview (Fisher & Geiselman —
+ *  report everything, context reinstatement, varied retrieval order),
+ *  trauma-informed / FETI principles (open invitations, no "why" questions,
+ *  sensory and peripheral detail), and self-paced "Seek Then Speak" style intake.
+ */
+import type { IncidentType } from '@shield/shared';
+import type { IntakeDraft } from './draft';
+import { answerOf } from './draft';
+
+// ───────────────────────── Sections (shown in the progress bar) ─────────────────────────
+
+export type PhaseId =
+  | 'welcome'
+  | 'about'
+  | 'whenWhere'
+  | 'yourWords'
+  | 'remembering'
+  | 'beforeAfter'
+  | 'person'
+  | 'people'
+  | 'medical'
+  | 'priorReports'
+  | 'evidence'
+  | 'safety'
+  | 'costs'
+  | 'wishes'
+  | 'review';
+
+export interface Phase {
+  id: PhaseId;
+  /** Shown in the progress bar and section list. */
+  title: string;
+}
+
+export const PHASES: Phase[] = [
+  { id: 'welcome', title: 'Welcome' },
+  { id: 'about', title: 'About you' },
+  { id: 'whenWhere', title: 'When and where' },
+  { id: 'yourWords', title: 'In your words' },
+  { id: 'remembering', title: 'What you remember' },
+  { id: 'beforeAfter', title: 'Before and after' },
+  { id: 'person', title: 'The person responsible' },
+  { id: 'people', title: 'People who know' },
+  { id: 'medical', title: 'Medical care' },
+  { id: 'priorReports', title: 'Earlier reports' },
+  { id: 'evidence', title: 'Evidence' },
+  { id: 'safety', title: 'Your safety' },
+  { id: 'costs', title: 'Costs and losses' },
+  { id: 'wishes', title: 'What you want' },
+  { id: 'review', title: 'Review' },
+];
+
+// ───────────────────────── Words used on buttons and around the screen ─────────────────────────
+
+export const UI = {
+  appTitle: 'Your account',
+  progress: (n: number, total: number, title: string) => `Part ${n} of ${total}: ${title}`,
+  sectionsMenu: 'All sections',
+  takeBreak: 'Take a break',
+  back: 'Back',
+  skip: 'Skip for now',
+  skipSection: 'Skip this part',
+  continue: 'Continue',
+  saveContinue: 'Save and continue',
+  change: 'Change',
+  backToReview: 'Back to review',
+  skippedBubble: 'Skipped for now',
+  youSaid: 'You said',
+  assistantSaid: 'Matra said',
+  optional: 'Optional',
+  notAnswered: 'Not answered yet',
+  skippedReview: 'Skipped',
+  edit: 'Edit',
+  remove: 'Remove',
+  leaveNow: 'Leave this page now',
+  keepGoing: "I'd like to keep going",
+  date: {
+    knowDate: 'Pick a date',
+    describe: 'Describe it in words',
+    notSure: "I'm not sure",
+    dateLabel: 'Date',
+    approximate: 'This date is approximate',
+    describeLabel: 'Describe when, in your own words',
+    describeHint: "For example: 'summer 2023' or 'the weekend of my cousin's wedding'.",
+    notSureSaved: "Not sure — that's okay.",
+    approxSuffix: ' (approximate)',
+  },
+  escrow: {
+    yes: 'Yes, check for matches',
+    no: 'No, thank you',
+    unsure: "I'm not sure yet",
+    noIdentifiers: 'No email, phone, or handle given',
+  },
+  evidence: {
+    requested: 'You chose to add files.',
+  },
+  review: {
+    title: 'Here is everything you shared',
+    intro: [
+      'Take your time to look it over. Your words are shown exactly as you wrote them.',
+      'You can change any section. Nothing is sent to anyone when you seal it.',
+    ],
+    sealExplain:
+      'Sealing locks this version of your account on this device. It is still only yours. You can add to it later, and this version will stay as it is.',
+    seal: 'Seal my account',
+    sealedTitle: 'Your account is sealed.',
+    sealedBody: [
+      'It is locked and stored safely. Only you can open it.',
+      'Nothing has been sent to anyone. You decide what happens next, when you are ready.',
+      'Thank you for trusting us with your story.',
+    ],
+  },
+} as const;
+
+// ───────────────────────── Help resources ─────────────────────────
+
+export const RESOURCES = {
+  heading: 'Help is available any time, for free:',
+  items: [
+    { label: 'If you are in danger right now', text: 'Call 911', href: 'tel:911' },
+    {
+      label: 'National Sexual Assault Hotline (24/7, private)',
+      text: 'Call 1-800-656-4673',
+      href: 'tel:+18006564673',
+    },
+    { label: 'Chat online with a trained helper', text: 'online.rainn.org', href: 'https://online.rainn.org' },
+  ],
+};
+
+// ───────────────────────── "Take a break" panel ─────────────────────────
+
+export const BREAK = {
+  title: 'Take a break',
+  reassure: [
+    'Your progress is kept. Nothing you shared is lost.',
+    'You can rest here, or close this and come back any time.',
+  ],
+  groundingTitle: 'If it helps, try this. Go slowly.',
+  grounding: [
+    'Name 5 things you can see.',
+    'Notice 4 things you can feel, like your feet on the floor.',
+    'Listen for 3 things you can hear.',
+    'Notice 2 things you can smell.',
+    'Take 1 slow breath in… and out.',
+  ],
+  breathe: 'Breathe in… and out.',
+  resume: "I'm ready to keep going",
+};
+
+// ───────────────────────── Answer choices ─────────────────────────
+
+export interface Option {
+  value: string;
+  label: string;
+}
+
+export const YES_NO_UNSURE: Option[] = [
+  { value: 'yes', label: 'Yes' },
+  { value: 'no', label: 'No' },
+  { value: 'unsure', label: "I'm not sure" },
+];
+
+export const INCIDENT_TYPE_OPTIONS: Array<Option & { value: IncidentType }> = [
+  { value: 'sexual_assault', label: 'Sexual assault' },
+  { value: 'rape', label: 'Rape' },
+  { value: 'attempted_sexual_assault', label: 'Someone tried to sexually assault me' },
+  { value: 'unwanted_touching', label: 'Unwanted touching' },
+  { value: 'drugging_suspected', label: 'I think I was drugged' },
+  { value: 'stalking', label: 'Stalking or being followed' },
+  { value: 'harassment', label: 'Harassment' },
+  { value: 'dating_violence', label: 'Harm by someone I was dating' },
+  { value: 'domestic_violence', label: 'Harm by a partner or family member' },
+  { value: 'image_based_abuse', label: 'Private images shared or threatened' },
+  { value: 'other', label: 'Something else' },
+];
+
+export const CONTACT_OPTIONS: Option[] = [
+  { value: 'phone', label: 'Phone call' },
+  { value: 'text', label: 'Text message' },
+  { value: 'email', label: 'Email' },
+  { value: 'voicemail', label: 'Voicemail' },
+];
+
+export const PLATFORM_OPTIONS: Option[] = [
+  { value: 'instagram', label: 'Instagram' },
+  { value: 'snapchat', label: 'Snapchat' },
+  { value: 'tiktok', label: 'TikTok' },
+  { value: 'facebook', label: 'Facebook' },
+  { value: 'x', label: 'X (Twitter)' },
+  { value: 'discord', label: 'Discord' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'telegram', label: 'Telegram' },
+  { value: 'linkedin', label: 'LinkedIn' },
+  { value: 'dating_app', label: 'A dating app' },
+  { value: 'other', label: 'Other' },
+];
+
+export const TOLD_METHOD_OPTIONS: Option[] = [
+  { value: 'in_person', label: 'In person' },
+  { value: 'phone', label: 'Phone call' },
+  { value: 'text', label: 'Text message' },
+  { value: 'social_media', label: 'Social media' },
+  { value: 'email', label: 'Email' },
+  { value: 'other', label: 'Other' },
+];
+
+export const US_STATES: Option[] = [
+  ['AL', 'Alabama'], ['AK', 'Alaska'], ['AZ', 'Arizona'], ['AR', 'Arkansas'], ['CA', 'California'],
+  ['CO', 'Colorado'], ['CT', 'Connecticut'], ['DE', 'Delaware'], ['DC', 'District of Columbia'],
+  ['FL', 'Florida'], ['GA', 'Georgia'], ['HI', 'Hawaii'], ['ID', 'Idaho'], ['IL', 'Illinois'],
+  ['IN', 'Indiana'], ['IA', 'Iowa'], ['KS', 'Kansas'], ['KY', 'Kentucky'], ['LA', 'Louisiana'],
+  ['ME', 'Maine'], ['MD', 'Maryland'], ['MA', 'Massachusetts'], ['MI', 'Michigan'], ['MN', 'Minnesota'],
+  ['MS', 'Mississippi'], ['MO', 'Missouri'], ['MT', 'Montana'], ['NE', 'Nebraska'], ['NV', 'Nevada'],
+  ['NH', 'New Hampshire'], ['NJ', 'New Jersey'], ['NM', 'New Mexico'], ['NY', 'New York'],
+  ['NC', 'North Carolina'], ['ND', 'North Dakota'], ['OH', 'Ohio'], ['OK', 'Oklahoma'], ['OR', 'Oregon'],
+  ['PA', 'Pennsylvania'], ['RI', 'Rhode Island'], ['SC', 'South Carolina'], ['SD', 'South Dakota'],
+  ['TN', 'Tennessee'], ['TX', 'Texas'], ['UT', 'Utah'], ['VT', 'Vermont'], ['VA', 'Virginia'],
+  ['WA', 'Washington'], ['WV', 'West Virginia'], ['WI', 'Wisconsin'], ['WY', 'Wyoming'],
+  ['AS', 'American Samoa'], ['GU', 'Guam'], ['MP', 'Northern Mariana Islands'], ['PR', 'Puerto Rico'],
+  ['VI', 'U.S. Virgin Islands'],
+].map(([value, label]) => ({ value, label }));
+
+// ───────────────────────── Step types (engineers only) ─────────────────────────
+
+export type FieldType = 'text' | 'tel' | 'email' | 'longtext' | 'select' | 'choice';
+
+export interface FieldDef {
+  key: string;
+  label: string;
+  type: FieldType;
+  hint?: string;
+  options?: Option[];
+  autoComplete?: string;
+}
+
+interface BaseStep {
+  /** Do not change. */
+  id: string;
+  phase: PhaseId;
+  /** What the assistant says — one bubble per line. */
+  say: string[];
+  /** Short list shown inside the last bubble. */
+  bullets?: string[];
+  /** When to show this step. Leave alone unless working with an engineer. */
+  showIf?: (d: IntakeDraft) => boolean;
+}
+
+export interface InfoStep extends BaseStep {
+  kind: 'info';
+  continueLabel?: string;
+  /** Show 911 / hotline / online chat. */
+  showResources?: boolean;
+  /** Show a "Leave this page now" button. */
+  showLeave?: boolean;
+  /** Offer a "Skip this part" button that jumps to the next section. */
+  offerSkipSection?: boolean;
+}
+export interface TextStep extends BaseStep {
+  kind: 'text';
+  label: string;
+  hint?: string;
+  inputType?: 'text' | 'tel' | 'email';
+  autoComplete?: string;
+}
+export interface LongTextStep extends BaseStep {
+  kind: 'longtext';
+  label: string;
+  hint?: string;
+  /** Bigger box for the main account. */
+  large?: boolean;
+}
+export interface DateStep extends BaseStep {
+  kind: 'date';
+  label: string;
+  hint?: string;
+}
+export interface ApproxDateStep extends BaseStep {
+  kind: 'approxDate';
+  label: string;
+  hint?: string;
+}
+export interface ChoiceStep extends BaseStep {
+  kind: 'choice';
+  label: string;
+  options: Option[];
+}
+export interface MultiStep extends BaseStep {
+  kind: 'multi';
+  label: string;
+  hint?: string;
+  options: Option[];
+}
+export interface SelectStep extends BaseStep {
+  kind: 'select';
+  label: string;
+  hint?: string;
+  options: Option[];
+  placeholder: string;
+}
+export interface FormStep extends BaseStep {
+  kind: 'form';
+  label: string;
+  fields: FieldDef[];
+}
+export interface GroupStep extends BaseStep {
+  kind: 'group';
+  label: string;
+  /** e.g. "Person" → "Person 1", "Person 2" */
+  itemLabel: string;
+  addLabel: string;
+  fields: FieldDef[];
+}
+export interface EscrowStep extends BaseStep {
+  kind: 'escrow';
+  label: string;
+}
+export interface EvidenceStep extends BaseStep {
+  kind: 'evidence';
+  label: string;
+  uploadLabel: string;
+  laterLabel: string;
+}
+export interface ReviewStep extends BaseStep {
+  kind: 'review';
+}
+
+export type ScriptStep =
+  | InfoStep
+  | TextStep
+  | LongTextStep
+  | DateStep
+  | ApproxDateStep
+  | ChoiceStep
+  | MultiStep
+  | SelectStep
+  | FormStep
+  | GroupStep
+  | EscrowStep
+  | EvidenceStep
+  | ReviewStep;
+
+// Helpers used by `showIf` lines.
+const is = (id: string, ...values: string[]) => (d: IntakeDraft) => {
+  const a = answerOf(d, id);
+  return typeof a === 'string' && values.includes(a);
+};
+const isNot = (id: string, value: string) => (d: IntakeDraft) => answerOf(d, id) !== value;
+const includesAny = (id: string, ...values: string[]) => (d: IntakeDraft) => {
+  const a = answerOf(d, id);
+  return Array.isArray(a) && a.some((v) => typeof v === 'string' && values.includes(v));
+};
+const PERSON_IDENTIFIER_KEYS = ['name', 'email', 'phone', 'handle', 'otherId'];
+const anyPersonHasIdentifier = (d: IntakeDraft) => {
+  const a = answerOf(d, 'person.list');
+  return (
+    Array.isArray(a) &&
+    a.some((p) => typeof p === 'object' && PERSON_IDENTIFIER_KEYS.some((k) => (p.values[k] ?? '').trim() !== ''))
+  );
+};
+
+// ───────────────────────── THE INTERVIEW ─────────────────────────
+
+export const STEPS: ScriptStep[] = [
+  // ── Welcome: safety first, then what happens with her data ──
+  {
+    id: 'safety.now',
+    phase: 'welcome',
+    kind: 'choice',
+    say: ['Hi. Before anything else, I want to check on you.', 'Are you safe right now?'],
+    label: 'Are you safe right now?',
+    options: [
+      { value: 'yes', label: "Yes, I'm safe" },
+      { value: 'no', label: 'No' },
+      { value: 'unsure', label: "I'm not sure" },
+    ],
+  },
+  {
+    id: 'safety.help',
+    phase: 'welcome',
+    kind: 'info',
+    showIf: is('safety.now', 'no', 'unsure'),
+    say: [
+      'Thank you for telling me. Your safety comes first.',
+      'If you are in danger, please call 911. You can also talk to someone right now.',
+      'When you are ready, you can keep going here, or leave this page.',
+    ],
+    showResources: true,
+    showLeave: true,
+    continueLabel: "I'd like to keep going",
+  },
+  {
+    id: 'privacy',
+    phase: 'welcome',
+    kind: 'info',
+    say: ['I am here to help you write down what happened, one time, in your own words.', 'Here is what happens with what you share:'],
+    bullets: [
+      'It is locked (encrypted) on this device before it is saved.',
+      'Nobody else can read it. Not us, not the police, not your school or job.',
+      'Nothing is sent to anyone unless you say so, at that moment.',
+      'Your words are kept exactly as you write them. Nothing is changed.',
+    ],
+    continueLabel: 'Okay',
+  },
+  {
+    id: 'howItWorks',
+    phase: 'welcome',
+    kind: 'info',
+    say: [
+      'You set the pace.',
+      'You can skip any question, go back, or take a break at any time. Your progress is kept.',
+      "There are no wrong answers. It's okay if you don't remember everything, or if things are out of order. That's normal.",
+    ],
+    continueLabel: "I'm ready",
+  },
+
+  // ── (a) About you & safe contact ──
+  {
+    id: 'about.name',
+    phase: 'about',
+    kind: 'text',
+    say: ["Let's start with you.", 'What name would you like me to use for you?'],
+    label: 'Name to use for you',
+    hint: 'This can be a nickname.',
+    autoComplete: 'nickname',
+  },
+  {
+    id: 'about.legalName',
+    phase: 'about',
+    kind: 'text',
+    say: ['If you are comfortable, what is your full legal name?', 'Police or a lawyer may need it later. You can leave it for now.'],
+    label: 'Full legal name',
+    autoComplete: 'name',
+  },
+  {
+    id: 'about.dob',
+    phase: 'about',
+    kind: 'date',
+    say: ['What is your date of birth?'],
+    label: 'Date of birth',
+    hint: 'This helps a lawyer know which rules apply to you.',
+  },
+  {
+    id: 'about.pronouns',
+    phase: 'about',
+    kind: 'text',
+    say: ['What pronouns do you use, if you would like to share?'],
+    label: 'Pronouns',
+    hint: 'For example: she/her, they/them, he/him.',
+  },
+  {
+    id: 'about.language',
+    phase: 'about',
+    kind: 'text',
+    say: ['What language do you feel most comfortable using?'],
+    label: 'Preferred language',
+  },
+  {
+    id: 'about.contactMethods',
+    phase: 'about',
+    kind: 'multi',
+    say: ['If someone you choose needs to reach you later, which ways are safe for you?'],
+    label: 'Safe ways to contact you',
+    hint: 'Choose all that are safe. Only you decide who gets this.',
+    options: CONTACT_OPTIONS,
+  },
+  {
+    id: 'about.phone',
+    phase: 'about',
+    kind: 'text',
+    showIf: includesAny('about.contactMethods', 'phone', 'text', 'voicemail'),
+    say: ['What phone number is safe to use?'],
+    label: 'Safe phone number',
+    inputType: 'tel',
+    autoComplete: 'tel',
+  },
+  {
+    id: 'about.email',
+    phase: 'about',
+    kind: 'text',
+    showIf: includesAny('about.contactMethods', 'email'),
+    say: ['What email address is safe to use?'],
+    label: 'Safe email address',
+    inputType: 'email',
+    autoComplete: 'email',
+  },
+  {
+    id: 'about.contactNotes',
+    phase: 'about',
+    kind: 'text',
+    say: ['Is there anything people should know about contacting you safely?'],
+    label: 'Notes about contacting you',
+    hint: "For example: 'only text after 6pm' or 'please don't leave messages'.",
+  },
+  {
+    id: 'about.home',
+    phase: 'about',
+    kind: 'form',
+    say: ['Where do you live now? Just the state and county is enough.', 'This helps match you with help near you.'],
+    label: 'Where you live',
+    fields: [
+      { key: 'state', label: 'State', type: 'select', options: US_STATES },
+      { key: 'county', label: 'County', type: 'text' },
+    ],
+  },
+
+  // ── (b) When and where ──
+  {
+    id: 'when.date',
+    phase: 'whenWhere',
+    kind: 'approxDate',
+    say: ['Thank you. Now, a little about when and where.', 'When did this happen?', "An exact date, a rough idea, or 'I'm not sure' are all okay."],
+    label: 'When it happened',
+  },
+  {
+    id: 'when.repeated',
+    phase: 'whenWhere',
+    kind: 'choice',
+    say: ['Did this happen more than once, or over a period of time?'],
+    label: 'Happened more than once',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'when.lastDate',
+    phase: 'whenWhere',
+    kind: 'approxDate',
+    showIf: is('when.repeated', 'yes'),
+    say: ['When was the most recent time?'],
+    label: 'Most recent time',
+  },
+  {
+    id: 'when.ongoing',
+    phase: 'whenWhere',
+    kind: 'choice',
+    showIf: is('when.repeated', 'yes', 'unsure'),
+    say: ['Is it still happening now?'],
+    label: 'Still happening',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'when.time',
+    phase: 'whenWhere',
+    kind: 'text',
+    say: ['Do you remember about what time of day it was?'],
+    label: 'Time of day',
+    hint: "Anything helps, like 'late at night' or 'after dinner'.",
+  },
+  {
+    id: 'where.place',
+    phase: 'whenWhere',
+    kind: 'longtext',
+    say: ['Where did it happen? Describe the place any way you can.'],
+    label: 'Where it happened',
+    hint: "For example: 'his apartment', 'a party at a friend's house', or 'in a car'.",
+  },
+  {
+    id: 'where.address',
+    phase: 'whenWhere',
+    kind: 'text',
+    say: ['If you know the address or the name of the place, you can add it here.'],
+    label: 'Address or name of the place',
+  },
+  {
+    id: 'where.area',
+    phase: 'whenWhere',
+    kind: 'form',
+    say: ['What city and state was it in?', 'If it was at a school or college, you can add that too.'],
+    label: 'City, county, state, school',
+    fields: [
+      { key: 'city', label: 'City or town', type: 'text' },
+      { key: 'county', label: 'County', type: 'text' },
+      { key: 'state', label: 'State', type: 'select', options: US_STATES },
+      { key: 'campus', label: 'School or college (if any)', type: 'text' },
+    ],
+  },
+
+  // ── (c) Free recall — her account, uninterrupted ──
+  {
+    id: 'story.intro',
+    phase: 'yourWords',
+    kind: 'info',
+    say: [
+      'This next part is yours.',
+      'In a moment, I will ask you to tell me what happened, in your own words.',
+      'Please include anything you remember, even small things, even if they seem unimportant or out of order.',
+      'Write as much or as little as you want. I will not interrupt, and I will not change your words.',
+      'You can start wherever feels easiest.',
+    ],
+    continueLabel: "I'm ready",
+  },
+  {
+    id: 'story.freeRecall',
+    phase: 'yourWords',
+    kind: 'longtext',
+    large: true,
+    say: ['Whenever you are ready, tell me what happened.'],
+    label: 'What happened, in your own words',
+    hint: 'Take all the time you need. There is no length limit. Your words are saved exactly as you write them.',
+  },
+
+  // ── (d) Context reinstatement & senses ──
+  {
+    id: 'recall.intro',
+    phase: 'remembering',
+    kind: 'info',
+    say: [
+      'Thank you.',
+      'Sometimes memories come back through the senses. Some people remember sounds or smells more clearly than the order things happened in. That is normal, and it matters.',
+      'If it feels okay, take a slow breath and picture the place where you were. You can close your eyes, or keep them open.',
+      'I will ask about each sense. Skip any you do not remember, or do not want to answer.',
+    ],
+    offerSkipSection: true,
+  },
+  {
+    id: 'recall.sight',
+    phase: 'remembering',
+    kind: 'longtext',
+    say: ['What do you remember seeing?', 'It could be the room, the light, colors, clothing, or anything else.'],
+    label: 'What you saw',
+  },
+  {
+    id: 'recall.sound',
+    phase: 'remembering',
+    kind: 'longtext',
+    say: ['What do you remember hearing?', 'Voices, music, a TV, traffic — anything at all.'],
+    label: 'What you heard',
+  },
+  {
+    id: 'recall.smell',
+    phase: 'remembering',
+    kind: 'longtext',
+    say: ['Do you remember any smells?', 'For example: smoke, alcohol, cologne, or food.'],
+    label: 'What you smelled',
+  },
+  {
+    id: 'recall.touch',
+    phase: 'remembering',
+    kind: 'longtext',
+    say: [
+      'Do you remember how anything felt? Like the temperature, a surface, or fabric.',
+      'Only share what you are comfortable with.',
+    ],
+    label: 'What you felt',
+  },
+  {
+    id: 'recall.taste',
+    phase: 'remembering',
+    kind: 'longtext',
+    say: ['Do you remember any tastes?', 'For example, a drink that tasted different than usual.'],
+    label: 'What you tasted',
+  },
+  {
+    id: 'recall.more',
+    phase: 'remembering',
+    kind: 'longtext',
+    say: [
+      'Sometimes thinking about it in a different order brings back new details.',
+      'If you want, try starting from the last thing you remember and thinking backward. Or start from a moment that stands out.',
+      'Is there anything else that comes to mind? Even small things.',
+    ],
+    label: 'Anything else you remember',
+  },
+
+  // ── (e) Before / after / words spoken ──
+  {
+    id: 'context.before',
+    phase: 'beforeAfter',
+    kind: 'longtext',
+    say: ['What was happening earlier, before this happened?', 'For example, where you were and who you were with.'],
+    label: 'Before it happened',
+  },
+  {
+    id: 'context.after',
+    phase: 'beforeAfter',
+    kind: 'longtext',
+    say: ['What happened afterward? Where did you go, and what did you do?', 'There is no right way to react. Whatever you did is okay.'],
+    label: 'After it happened',
+  },
+  {
+    id: 'context.words',
+    phase: 'beforeAfter',
+    kind: 'longtext',
+    say: [
+      'Do you remember anything that was said — by the person who did this, or by anyone else?',
+      'Write it the way you remember it, word for word if you can. It is okay to write words that are hard to read.',
+    ],
+    label: 'Words that were said',
+  },
+  {
+    id: 'context.types',
+    phase: 'beforeAfter',
+    kind: 'multi',
+    say: [
+      'Some people find it helpful to choose words for what happened. Some do not.',
+      'If you want, choose any that fit. You do not need to put a label on it.',
+    ],
+    label: 'Words that fit what happened',
+    hint: 'Choose any, or none.',
+    options: INCIDENT_TYPE_OPTIONS,
+  },
+
+  // ── (f) The person / people responsible ──
+  {
+    id: 'person.intro',
+    phase: 'person',
+    kind: 'info',
+    say: [
+      'Next, I will ask about the person or people who did this.',
+      'Share only what you know and feel okay sharing. Some people know the person well. Some do not know them at all. Both are okay.',
+    ],
+    offerSkipSection: true,
+  },
+  {
+    id: 'person.list',
+    phase: 'person',
+    kind: 'group',
+    say: ['What can you tell me about them? Fill in only what you know.'],
+    label: 'Person or people responsible',
+    itemLabel: 'Person',
+    addLabel: 'Add another person',
+    fields: [
+      { key: 'name', label: 'Name, or what you call them', type: 'text' },
+      { key: 'known', label: 'Did you know this person before?', type: 'choice', options: YES_NO_UNSURE },
+      { key: 'relationship', label: 'How you know them', type: 'text', hint: 'For example: coworker, ex-partner, classmate, someone I just met.' },
+      { key: 'description', label: 'What they look like', type: 'longtext', hint: 'Anything you remember: height, hair, clothes, tattoos, voice.' },
+      { key: 'email', label: 'Their email', type: 'email' },
+      { key: 'phone', label: 'Their phone number', type: 'tel' },
+      { key: 'handle', label: 'Their social media name or handle', type: 'text', hint: 'For example: @name' },
+      { key: 'platform', label: 'Which app or site?', type: 'select', options: PLATFORM_OPTIONS },
+      { key: 'otherId', label: 'Anything else that identifies them', type: 'text', hint: 'For example: a username, license plate, or where they work.' },
+    ],
+  },
+  {
+    id: 'person.escrow',
+    phase: 'person',
+    kind: 'escrow',
+    showIf: anyPersonHasIdentifier,
+    say: [
+      'There is one more thing you can choose, if you want. It is called a sealed match.',
+      'If you turn it on, the name, email, phone, or handle you gave is turned into a sealed code on this device. Nobody can read it — not us, not anyone.',
+      'If someone else, on their own, names the same person, you will both get a message that you are not alone. Nobody sees your name or what you wrote.',
+      'Nothing else happens unless you decide. It is completely okay to say no.',
+    ],
+    label: 'Sealed match',
+  },
+
+  // ── (g) Witnesses & people she told ──
+  {
+    id: 'people.witnesses',
+    phase: 'people',
+    kind: 'group',
+    say: [
+      'Was anyone else there, or nearby, before, during, or after?',
+      'Even someone who only saw you that day or night can matter.',
+    ],
+    label: 'People who were there or nearby',
+    itemLabel: 'Person',
+    addLabel: 'Add another person',
+    fields: [
+      { key: 'name', label: 'Their name', type: 'text' },
+      { key: 'contact', label: 'How to reach them, if you know', type: 'text' },
+      { key: 'relationship', label: 'How you know them', type: 'text' },
+      { key: 'whatTheyKnow', label: 'What they saw or know', type: 'longtext' },
+    ],
+  },
+  {
+    id: 'people.toldIntro',
+    phase: 'people',
+    kind: 'info',
+    say: [
+      'Have you told anyone about what happened? A friend, family member, counselor, or anyone else?',
+      'This can matter, because the people you told can sometimes help support your account later.',
+      'It is okay if you have not told anyone. Many people wait a long time, or never tell. That is normal.',
+    ],
+  },
+  {
+    id: 'people.told',
+    phase: 'people',
+    kind: 'group',
+    say: ['If you told someone, you can add them here.'],
+    label: 'People you told',
+    itemLabel: 'Person you told',
+    addLabel: 'Add another person',
+    fields: [
+      { key: 'toWhom', label: 'Who you told', type: 'text' },
+      { key: 'when', label: 'About when', type: 'text', hint: "For example: 'the next morning' or 'March 2024'." },
+      { key: 'method', label: 'How you told them', type: 'select', options: TOLD_METHOD_OPTIONS },
+      { key: 'whatWasSaid', label: 'What you remember saying', type: 'longtext' },
+    ],
+  },
+
+  // ── (h) Medical care ──
+  {
+    id: 'medical.care',
+    phase: 'medical',
+    kind: 'choice',
+    say: ['Did you get any medical care after this happened?', 'It is okay if you did not.'],
+    label: 'Got medical care',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'medical.facility',
+    phase: 'medical',
+    kind: 'text',
+    showIf: is('medical.care', 'yes'),
+    say: ['Where did you get care?'],
+    label: 'Hospital, clinic, or doctor',
+  },
+  {
+    id: 'medical.date',
+    phase: 'medical',
+    kind: 'approxDate',
+    showIf: is('medical.care', 'yes'),
+    say: ['About when was that?'],
+    label: 'When you got care',
+  },
+  {
+    id: 'medical.exam',
+    phase: 'medical',
+    kind: 'choice',
+    showIf: is('medical.care', 'yes'),
+    say: ['Did you have a forensic exam? This is sometimes called a SANE exam or a "rape kit".'],
+    label: 'Had a forensic exam',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'medical.examInfo',
+    phase: 'medical',
+    kind: 'info',
+    showIf: isNot('medical.care', 'yes'),
+    say: [
+      'Something you may want to know: if this happened recently, you can still get a forensic exam. It is often free, and is usually possible up to about 5 days after.',
+      'You do not have to report to police to get one. The hotline at 1-800-656-4673 can help you find a hospital near you.',
+    ],
+  },
+  {
+    id: 'medical.injuries',
+    phase: 'medical',
+    kind: 'longtext',
+    say: ['Were you hurt in any way? This includes things that have healed, like bruises or soreness.', 'Only share what you are comfortable with.'],
+    label: 'Injuries',
+  },
+
+  // ── (i) Earlier reports ──
+  {
+    id: 'prior.any',
+    phase: 'priorReports',
+    kind: 'choice',
+    say: ['Have you already reported this anywhere?', 'For example, to police, a school, an employer, or an app.'],
+    label: 'Reported before',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'prior.list',
+    phase: 'priorReports',
+    kind: 'group',
+    showIf: is('prior.any', 'yes', 'unsure'),
+    say: ['What do you remember about that report? Fill in only what you know.'],
+    label: 'Earlier reports',
+    itemLabel: 'Report',
+    addLabel: 'Add another report',
+    fields: [
+      { key: 'agency', label: 'Who you reported to', type: 'text', hint: "For example: 'city police' or 'my school's Title IX office'." },
+      { key: 'date', label: 'About when', type: 'text' },
+      { key: 'reportNumber', label: 'Report or case number, if you have it', type: 'text' },
+      { key: 'outcome', label: 'What happened after', type: 'longtext' },
+    ],
+  },
+
+  // ── (j) Evidence ──
+  {
+    id: 'evidence.tips',
+    phase: 'evidence',
+    kind: 'info',
+    say: [
+      'Things like messages, photos, call logs, or posts can help. You do not need to have any. Your words matter on their own.',
+      'If you do have some, here are a few ways to keep it safe:',
+    ],
+    bullets: [
+      'Try not to delete messages, even upsetting ones.',
+      'Take screenshots that show the date, the time, and who sent it.',
+      'If you still have clothing from that day and want to keep it, a paper bag is best.',
+      'Write down where things are, like which phone or account.',
+    ],
+  },
+  {
+    id: 'evidence.upload',
+    phase: 'evidence',
+    kind: 'evidence',
+    say: ['Would you like to add photos, screenshots, or files now?', 'They are locked (encrypted) on this device before they are saved.'],
+    label: 'Add evidence files',
+    uploadLabel: 'Add files',
+    laterLabel: 'Maybe later',
+  },
+
+  // ── (k) Safety & protective order ──
+  {
+    id: 'safety.access',
+    phase: 'safety',
+    kind: 'choice',
+    say: ['Now a few questions about your safety.', 'Does the person who did this know where you live, work, or go to school?'],
+    label: 'They know where you live, work, or study',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'safety.protective',
+    phase: 'safety',
+    kind: 'choice',
+    say: [
+      'A protective order is a court order that tells someone to stay away from you.',
+      'Do you think you might want one?',
+    ],
+    label: 'Might want a protective order',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'safety.notes',
+    phase: 'safety',
+    kind: 'longtext',
+    say: ['Is there anything else about your safety you want to write down?', 'For example: threats, messages, or places you avoid now.'],
+    label: 'Safety notes',
+  },
+
+  // ── (l) Costs & losses ──
+  {
+    id: 'costs.intro',
+    phase: 'costs',
+    kind: 'info',
+    say: [
+      'Many states have a fund that helps pay for costs caused by a crime — like medical bills, counseling, or lost pay. It is called victim compensation.',
+      'These questions help with that. Rough amounts or short notes are fine.',
+    ],
+    offerSkipSection: true,
+  },
+  {
+    id: 'costs.amounts',
+    phase: 'costs',
+    kind: 'form',
+    say: ['Have you had any of these costs? Fill in any that apply.'],
+    label: 'Costs and losses',
+    fields: [
+      { key: 'medical', label: 'Medical costs', type: 'text' },
+      { key: 'counseling', label: 'Counseling or therapy costs', type: 'text' },
+      { key: 'wages', label: 'Lost pay from work', type: 'text' },
+      { key: 'relocation', label: 'Moving or changing locks', type: 'text' },
+      { key: 'other', label: 'Other costs', type: 'text' },
+    ],
+  },
+  {
+    id: 'costs.insurance',
+    phase: 'costs',
+    kind: 'choice',
+    say: ['Do you have health insurance?'],
+    label: 'Has health insurance',
+    options: YES_NO_UNSURE,
+  },
+
+  // ── (m) What she wants ──
+  {
+    id: 'goals.intro',
+    phase: 'wishes',
+    kind: 'info',
+    say: [
+      'Last part. What would you like to happen next?',
+      'You do not have to decide anything today. "Not sure" is a perfectly good answer.',
+      'Nothing happens unless you say so, at that moment. You can change your mind later.',
+    ],
+  },
+  {
+    id: 'goals.police',
+    phase: 'wishes',
+    kind: 'choice',
+    say: ['Would you like help making a police report?'],
+    label: 'Help with a police report',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'goals.attorney',
+    phase: 'wishes',
+    kind: 'choice',
+    say: ['Would you like to talk with a free (pro bono) lawyer about your options?'],
+    label: 'Talk with a free lawyer',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'goals.compensation',
+    phase: 'wishes',
+    kind: 'choice',
+    say: ['Would you like help asking for victim compensation?'],
+    label: 'Help with victim compensation',
+    options: YES_NO_UNSURE,
+  },
+  {
+    id: 'goals.protective',
+    phase: 'wishes',
+    kind: 'choice',
+    say: ['Would you like help asking for a protective order?'],
+    label: 'Help with a protective order',
+    options: YES_NO_UNSURE,
+  },
+
+  // ── (n) Review ──
+  {
+    id: 'review',
+    phase: 'review',
+    kind: 'review',
+    say: ['Thank you. You did something hard today.'],
+  },
+];
