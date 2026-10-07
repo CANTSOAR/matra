@@ -1,0 +1,20 @@
+{
+  "name": "janes-shield",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Jane's Shield — One-Touch Justice Pipeline (MVP)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @shield/server\" \"npm run dev -w @shield/web\"",
+    "test": "npm test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "seed": "npm run seed -w @shield/server"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "typescript": "^7.0.2"
+  }
+}
