@@ -12,8 +12,13 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/nunito-sans": "^5.3.0",
+    "@huggingface/transformers": "^4.3.1",
     "@matra/crypto": "*",
     "@matra/shared": "*",
+    "chrono-node": "^2.10.2",
+    "compromise": "^14.18.0",
     "pdf-lib": "^1.17.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
