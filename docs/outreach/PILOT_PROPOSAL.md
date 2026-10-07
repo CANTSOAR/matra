@@ -85,7 +85,7 @@ If any gate isn't met, Phase B doesn't start. The pilot continues in Phase A or 
 
 ## 10. Exit and data-deletion plan
 - **Either party may exit** on [30] days' written notice, or immediately for a safety concern.
-- **Survivors keep control.** Each survivor can export her data and crypto-shred her account at any time. On pilot end, survivors receive at least **90 days' notice** and step-by-step help (from advocates) to export and delete. Matra never decrypts or transfers content, because it can't.
+- **Survivors keep control.** Each survivor can export her data and crypto-shred her account at any time. On pilot end, survivors receive at least **90 days' notice** and step-by-step help (from advocates) to export and delete. Matra never decrypts content, because it can't. Encrypted data moves to another organization only if Matra itself closes, and then only to the Designated Successor and only with that survivor's individual opt-in. Silence is never consent ([Succession and Data Promise](../SUCCESSION_AND_DATA_PROMISE.md)).
 - **After the notice period**, remaining accounts are crypto-shredded: ciphertext and keys are destroyed. **Ledger entries (hashes only, no content) remain** by design, and the ledger will show that records existed and were deleted. Advocates should tell survivors with pending or anticipated litigation to speak with a lawyer **before** deleting (spoliation risk).
 - **Attorneys** handle downloaded copies under the MOU: delete within [10] days if no attorney-client relationship formed, otherwise follow the engagement and retention rules.
 - **Server logs** are kept at most [30] days with truncated IPs, then deleted. Backups are deleted on the same schedule.

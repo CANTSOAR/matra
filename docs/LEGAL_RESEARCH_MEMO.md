@@ -3,7 +3,7 @@
 **To:** Matra founding team, advisory council, and prospective partner counsel
 **Re:** Evidentiary, privilege, ethics, funding, reporting, and privacy issues raised by the Matra MVP
 **Jurisdictions:** New Jersey (primary), New York (secondary), federal
-**Research date:** 2026-10-06
+**Research date:** 2026-10-06 (§7A, Callisto updates and §9 additions: 2026-10-07)
 
 > **Not legal advice.** This memo was prepared by a non-lawyer research function to help counsel review the product. It has not been reviewed by a licensed attorney. Every conclusion must be checked by licensed New Jersey and New York counsel before anyone relies on it, especially before we make statements to survivors. Citations were checked against primary or official sources where we could reach them. Items we could not confirm are marked **[VERIFY]**.
 
@@ -20,6 +20,7 @@
 | 5 | UPL and referrals | Compiling the survivor's own words into a document is low-risk scrivener work. Advising her on charges, elements, or which forms to file is not. New Jersey forbids **for-profit** lawyer referral and fee sharing (RPC 5.4(a), 7.2(c), 7.3(d); ACPE 732/CAA 44/UPL 54 (2017)). Any matching function should be run by a **nonprofit**, charge no per-referral fees, and be registered as a legal service plan under RPC 7.3(e)(4)(vii) if counsel concludes it is one. The blueprint's PBC/equity option is incompatible with the attorney-routing feature unless that feature is run by a separate nonprofit. |
 | 6 | Privacy | HIPAA almost certainly does not apply. The New Jersey breach statute applies, and the NJ Data Privacy Act has **no nonprofit exemption**, although its thresholds will not be met during a pilot. If we accept VAWA or VOCA funds, **VAWA confidentiality** (34 U.S.C. 12291(b)(2)) applies. It forbids disclosure of personally identifying information **"regardless of whether the information has been encoded, encrypted, hashed"**, and it requires consent to be **"reasonably time-limited"**. This affects escrow hashes and how long shares last. |
 | 7 | Escrow | A match is a **lead, not evidence**. New Jersey has **no counterpart to FRE 413**. Other-acts evidence goes through N.J.R.E. 404(b) and the four-part *Cofield* test. The original MVP let anyone who knew an identifier **probe whether it had been reported**, including a perpetrator checking his own phone number. **That self-check is now mitigated:** survivors never see match results, and matches go only to the verified attorney a survivor has actively shared with. Residual risks remain (see section 7 and the Security Whitepaper). |
+| 7A | Legal Options Counselor | Matching is being rebuilt so a **Matra-contracted attorney counselor** reviews matched groups and contacts each matched survivor who opted in. Keep the counselor an **attorney**: Callisto's design rested on attorney-client privilege, and its April 2026 move to advocates came with an explicit warning that privilege no longer applied. Because she opted in and the counselor takes no fee, the contact is probably not prohibited solicitation under **NJ RPC 7.3**. That conclusion depends on structure (no pecuniary motive, prior specific consent, respect for her state of mind) and **must be confirmed by counsel**. |
 
 ---
 
@@ -204,6 +205,8 @@ Does an automated brief or form generator risk UPL? How must "auto-routing to a 
 
 ## 7. Blind escrow: legal status of a "match"
 
+> **Status update (2026-10-07).** The matching feature is being rebuilt to a Callisto-style design: an OPRF with split keys, unique identifiers only (names are never matched), and a **Legal Options Counselor** who reviews a matched group and contacts each matched survivor separately through the safe contact method she chose. The discussion below of attorney-count release describes the earlier demo. The counselor model and its privilege and solicitation questions are in §7A. Escrow stays off for real data until the GOVERNANCE.md §5 gates are met.
+
 ### Question
 What is a match worth legally? Does it create a "prosecutable pattern"?
 
@@ -226,6 +229,39 @@ A match is a **confidential lead** that two different accounts entered the same 
 - Replace "prosecutable pattern" and "bulletproof" in all materials with: *"a confidential signal that may help a survivor and her attorney decide whether to come forward, together or separately."*
 - Done: matches are no longer displayed to users. They reach only the verified attorney with an active share, as counts.
 - Before any non-demo use: verify and rate-limit survivor accounts, decide whether a trained counselor should also be able to reach the other survivor, and add the OPRF roadmap.
+
+---
+
+## 7A. Legal Options Counselor model: privilege and solicitation
+
+*Flag for counsel. Everything in this section is a research view, not a conclusion.*
+
+### The model
+- When a survivor lodges a matching entry, she consents to a specific statement: *if another person names the same person, a Matra Legal Options Counselor (a licensed NJ or NY attorney) may open this entry and contact you by the method you chose.* The entry holds unique identifiers, jurisdiction, and her chosen safe contact method. Names are never matched.
+- When a match occurs, the counselor (the demo account is `counselor.demo`) sees the **matched group**: which entries name the same person. The counselor reviews it for plausibility (fake or Sybil entries, a "survivor" who seems to be the named person himself). The counselor then contacts **each survivor separately**, explains her options (criminal, civil, protective orders, campus or workplace processes, restorative approaches, or doing nothing), and introduces survivors to each other **only with both consents**. Survivors never see a match in the app.
+- The counselor is engaged by contract or MOU, ideally through a legal-aid partner. The counselor is paid by Matra or the partner, not by survivors, and gives limited-scope options counseling (RPC 1.2(c)). For representation, she chooses her own attorney.
+- This follows the model in Rajan et al., COMPASS 2018 (§3.2), which Callisto ran with attorney counselors until April 2026 (see [research/callisto.md](research/callisto.md) §3, §7).
+
+### Privilege: attorney counselor versus advocate
+- **Callisto's theory.** The counselor is an attorney, so what the counselor decrypts is a communication from a prospective client seeking legal advice. That makes it privileged, and Callisto, which held no keys, had nothing to produce (P1 §3.2). Callisto's April 2026 privacy policy moved matched survivors to advocates from a partner organization and stated that attorney-client privilege **no longer applies** ([privacy policy, updated 17 Apr 2026](https://www.projectcallisto.org/privacy-policy)).
+- **Attorney counselor (Matra's choice).** The duty of confidentiality to a prospective client applies even if no relationship forms (RPC 1.18; RPC 1.6). The evidentiary privilege (N.J.R.E. 504) covers communications between lawyer and client "in the course of that relationship and in professional confidence". Whether it reaches an entry written **before** any particular attorney was identified, sent to a counselor role, is untested **[VERIFY]**. Two limits hold either way. The underlying facts, including the named person's identifiers, are not privileged (*Upjohn*). And a pre-existing document does not become privileged by being sent to counsel (*Fisher*). Drafting the consent so that the entry is expressly a request for legal advice from the counselor strengthens the claim **[VERIFY]**.
+- **Advocate counselor (not recommended).** An advocate creates no attorney-client privilege. The NJ victim-counselor privilege (N.J.S.A. 2A:84A-22.15; N.J.R.E. 517) covers only trained counselors at a qualifying victim counseling centre (§2). A partnered county program's CSVA might qualify, but the scope and waiver rules differ. NY's analogue is CPLR 4510 **[VERIFY]**. Using advocates would weaken the legal protection survivors were promised.
+- **Commitment.** Matra keeps the counselor an attorney. If that ever changes, the [Succession and Data Promise](SUCCESSION_AND_DATA_PROMISE.md) D7 applies: survivors are told at least 90 days before the change, can withdraw first, and entries lodged under the attorney model are never released to a non-attorney.
+
+### Solicitation: NJ RPC 7.3
+NJ RPC 7.3(b) bars a lawyer from contacting a prospective client "for the purpose of obtaining professional employment" in listed circumstances. These include where the lawyer knows or reasonably should know that the person's physical, emotional or mental state means she could not exercise reasonable judgment in employing a lawyer; where she has made known a desire not to be contacted; where the contact involves coercion, duress or harassment; and unsolicited direct contact about a specific event when pecuniary gain is a significant motive (regular-mail letters excepted) **[VERIFY current subsection text and numbering]**. Applied to the counselor:
+1. **Purpose.** The counselor does not seek employment or a fee from the survivor. The counselor is paid a fixed amount by Matra or the partner and offers options, not representation. That points away from RPC 7.3. It holds only if the counselor is barred from taking **paid** representation of the survivors they contact (for example, contingency civil matters or VCCO-reimbursed work). We recommend that bar, with representation handled through her own choice of attorney.
+2. **Not unsolicited.** She opted in, at lodging time, to contact by a specific method if a match occurs. Consent should be specific, renewable (VAWA's "reasonably time-limited" standard, §6), and revocable by withdrawing the entry at any time. A contact she has opted out of, or a method she did not choose, would fail RPC 7.3(b).
+3. **State of mind.** Contacting a sexual-assault survivor about the person who harmed her is exactly where RPC 7.3(b)'s state-of-mind clause bites. The counselor protocol should give one neutral, low-pressure contact; an easy "not now" or "never"; no follow-up after a decline; and no persuasion toward any course of action. It should be trauma-informed and written with advocates.
+4. **Constitutional backdrop.** Non-pecuniary contact by a nonprofit about legal rights gets First Amendment protection (*In re Primus*, 436 U.S. 412 (1978)). In-person contact for pecuniary gain does not (*Ohralik v. Ohio State Bar Ass'n*, 436 U.S. 447 (1978)). Matra's structure should stay clearly on the *Primus* side.
+5. **Related rules.** RPC 1.8(f) and 5.4(c): a third-party payer must not interfere with the counselor's judgment, and the survivor's informed consent to the payment arrangement is required. RPC 1.7: the counselor should not represent two matched survivors jointly, and an introduction is not representation. RPC 1.18 may disqualify the counselor from adverse matters. RPC 7.2(c) and 7.3(d): nothing of value goes to anyone for a recommendation. RPC 7.3(e): a counselor program makes the legal-service-plan question (§5) sharper. Labelling rules for written solicitations (an "ADVERTISEMENT" legend) probably do not apply to non-employment contact **[VERIFY]**.
+6. **New York.** NY Rule 7.3 defines "solicitation" by reference to a primary purpose of retention for pecuniary gain, and bars most in-person and telephone solicitation. A fee-free, opt-in counselor contact is probably outside it, but filing and retention rules should be checked **[VERIFY]**.
+
+### Product implications
+- Consent text at lodging names the counselor role, the profession (attorney), the contact method, and that a match is a lead, not evidence. It is renewable and withdrawable.
+- The counselor gets no OPRF access, sees only server-released matched entries, and every decryption is logged (security research A7).
+- Budget counselor hours. If the budget runs out, matched entries stay sealed and nobody is contacted until funding resumes. Disclose this at consent ([SUSTAINABILITY_PLAN.md](SUSTAINABILITY_PLAN.md) §5).
+- Counselor engagement terms go into the MOU, covering scope, the bar on paid representation of contacted survivors, a contact protocol, conflicts, and deletion.
 
 ---
 
@@ -256,6 +292,8 @@ A match is a **confidential lead** that two different accounts entered the same 
 7. Does N.J.R.E. 902 permit self-authentication of ledger output analogous to FRE 902(13)-(14)?
 8. Status of S1294 (VCCO forensic-exam exception).
 9. VAWA confidentiality and VOCA conditions if a partner uses grant funds for Matra costs.
+10. **Legal Options Counselor (§7A).** Does a pre-identified-counselor matching entry receive N.J.R.E. 504 / RPC 1.18 protection? Is counselor contact with an opted-in survivor outside NJ RPC 7.3 and NY Rule 7.3, and what consent and contact protocol makes that clear? Does RPC 1.8(f) consent need to be in the lodging flow? Does a counselor program make Matra a legal service plan under RPC 7.3(e)?
+11. **Succession (Promise D2, D6, D7).** Is end-of-life crypto-shred after notice, disclosed at signup, adequate consent? How do preservation orders interact with it? What must a successor-migration opt-in say? Can matching entries lodged under the attorney-counselor terms be migrated to a successor's counselor without re-consent?
 
 ---
 
@@ -265,7 +303,7 @@ A match is a **confidential lead** that two different accounts entered the same 
 
 | Product | One line | Relevance to Matra | Source |
 |---|---|---|---|
-| **Callisto (Callisto Vault)** | Nonprofit. Encrypted, timestamped incident log plus a matching escrow. Matches go to a lawyer "Legal Options Counselor", not to users. Uses OPRF, key federation, and Shamir sharing. Historically for college students (.edu). | Closest precedent for zero knowledge and matching. Its cryptography and counselor model are ahead of Matra's MVP. Its privacy policy candidly says it "would simply be unable to produce" encrypted data. | https://www.projectcallisto.org/ · https://par.nsf.gov/biblio/10061833 · https://www.projectcallisto.org/privacy-policy |
+| **Callisto (Callisto Vault)** | Nonprofit. Encrypted, timestamped incident log plus a matching escrow, for users with a .edu email. Matches went to an attorney "Legal Options Counselor" and, from April 2026, to partner advocates without attorney-client privilege. **Closing:** the board announced closure on 22 Jul 2026, with new accounts disabled and existing users able to download or delete. It is looking for a new home for its technology (status as of 2026-10-07: no successor announced, **UNVERIFIED** absence). | The precedent Matra's matching design follows (OPRF, key federation, Shamir sharing, counselor review). Its closure lessons shape Matra's [Succession and Data Promise](SUCCESSION_AND_DATA_PROMISE.md) and [Sustainability Plan](SUSTAINABILITY_PLAN.md). Its privacy policy candidly says it "would simply be unable to produce" encrypted data. | https://www.projectcallisto.org/blog/closing · https://par.nsf.gov/biblio/10061833 · https://www.projectcallisto.org/privacy-policy · [research/callisto.md](research/callisto.md) |
 | **Seek Then Speak** (EVAWI) | Free online tool. "Seek" lets survivors explore options privately. "Speak" is a self-guided series of questions that prepares documentation for an initial police report. Deployed by local and state agencies (e.g., Washington AG). Ages 13+. | Law-enforcement-oriented. Matra is attorney- and advocate-oriented and does not route to police. | https://evawintl.org/ (program info: https://laurenmccluskey.org/about/news/seekthenspeak-wa-attorney-general/) |
 | **#NotMe** | Employer-purchased whistleblowing and misconduct-reporting app with an employer dashboard. Founded by an employment lawyer. | Institution-facing. Matra is survivor-owned and never reports to employers. | https://www.nbcbayarea.com/news/tech/notme-tech-company-launches-app-to-report-harassment-anonymously/2223910/ |
 | **Spot** (talktospot.com) | AI chatbot (All Turtles) that uses cognitive-interview techniques to help people record workplace harassment. Reports can be kept private or sent to the employer. | Uses NLP/AI. Matra deliberately uses no AI on survivor content. | https://techtarget.com/searchhrsoftware/feature/Reporting-harassment-at-work-eased-by-new-enterprise-chatbot |

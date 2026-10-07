@@ -7,12 +7,17 @@ Matra is a survivor-controlled, zero-knowledge documentation tool with a consent
 | Document | Audience | What it covers |
 |---|---|---|
 | [PITCH_ONE_PAGER.md](PITCH_ONE_PAGER.md) | Lawyers, funders | Problem, what the MVP does today, honest limits, pilot phases, asks |
-| [LEGAL_RESEARCH_MEMO.md](LEGAL_RESEARCH_MEMO.md) | Counsel, advisors | Confrontation and hearsay, discoverability and privilege, VCCO fees ($275/hr verdict), mandatory reporting, UPL and referral rules, privacy, escrow, and a table of blueprint corrections |
+| [LEGAL_RESEARCH_MEMO.md](LEGAL_RESEARCH_MEMO.md) | Counsel, advisors | Confrontation and hearsay, discoverability and privilege, VCCO fees ($275/hr verdict), mandatory reporting, UPL and referral rules, privacy, escrow, the Legal Options Counselor (privilege, RPC 7.3), and a table of blueprint corrections |
 | [SECURITY_WHITEPAPER.md](SECURITY_WHITEPAPER.md) | Security reviewers, partners | Architecture, key hierarchy, ledger, threat model, known limitations, roadmap |
+| [SUCCESSION_AND_DATA_PROMISE.md](SUCCESSION_AND_DATA_PROMISE.md) | Survivors, partners, counsel | Public commitments on data ownership, notice, export, successor migration, no silent confidentiality downgrade. Items marked for board and counsel adoption |
+| [SUSTAINABILITY_PLAN.md](SUSTAINABILITY_PLAN.md) | Board, funders, fiscal sponsor | Lessons from Callisto, revenue mix (no funder above about 30%), reserves, low burn, privacy-preserving impact measurement, the "if funding fails" runbook |
 | [PRD.md](PRD.md) | Team, partners | Personas, user stories, functional and non-functional requirements, out of scope, pilot metrics, open questions |
 | [ATTORNEY_PARTNER_MOU_TEMPLATE.md](ATTORNEY_PARTNER_MOU_TEMPLATE.md) | Partner orgs, counsel | Draft MOU covering verification, response times, conflicts, confidentiality, no fee sharing, data handling, termination (template; counsel review required) |
 | [DEMO_SCRIPT.md](DEMO_SCRIPT.md) | Presenter | 10-minute live demo with talking points and honest answers to hard questions |
 | [DEPLOY.md](DEPLOY.md) | Engineering | Deploying a demo instance (Docker, Render), the DEMO banner, production CSP |
+| [outreach/README.md](outreach/README.md) | Founder | Outreach kit: targets, emails, meeting playbook, lawyer FAQ, grant boilerplate, pilot proposal, draft letter to Callisto |
+| [MVP_STATUS.md](MVP_STATUS.md) | Founder | Build status and gap list |
+| [research/callisto.md](research/callisto.md) | Everyone | Callisto's history, closure (22 Jul 2026), sustainability lessons, product and cryptographic design |
 | [research/brief-fields.md](research/brief-fields.md) | Engineering, counsel | Source research behind the incident-summary PDF and NJ VCCO draft fields |
 | [research/outreach-and-governance-playbook.md](research/outreach-and-governance-playbook.md) | Founder | Advisor outreach and governance |
 | [threat-model.md](threat-model.md) | Engineering | Known-weakness tracker (W1 to W12); a supplement to the Security Whitepaper, which is primary |

@@ -110,7 +110,7 @@ Thank you,
 
 Hello [Name / team],
 
-Matra is an open-source (AGPL-3.0) web app for adult sexual-assault survivors. Survivors encrypt their records client-side with WebCrypto: PBKDF2-600k into HKDF, AES-256-GCM per object, and RSA-OAEP-3072 for sharing with an attorney. A Node/SQLite server stores only ciphertext, and an append-only hash-chain ledger records each sealed item. There is also a demo-only identifier-matching "escrow" (PBKDF2 plus a server HMAC pepper) that we know needs to move to an OPRF.
+Matra is an open-source (AGPL-3.0) web app for adult sexual-assault survivors. Survivors encrypt their records client-side with WebCrypto: PBKDF2-600k into HKDF, AES-256-GCM per object, and RSA-OAEP-3072 for sharing with an attorney. A Node/SQLite server stores only ciphertext, and an append-only hash-chain ledger records each sealed item. There is also a demo-only identifier-matching "escrow" (PBKDF2 plus a server HMAC pepper). We are now moving it to an RFC 9497 OPRF with a split key and a counselor threshold layer, following Callisto's published design.
 
 We have not been audited. We will not accept real survivor data until an independent audit is done and its findings are fixed or disclosed. We will publish the results. Our whitepaper lists the known weaknesses: web E2EE malicious-update and key-substitution risk, the pepper holder's ability to test identifiers, ciphertext not being key-committed, an unanchored ledger, and metadata exposure.
 

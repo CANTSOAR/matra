@@ -1,6 +1,6 @@
 # Matra: Meeting Playbook
 
-*How to run a 20-minute first meeting with each audience. Updated 2026-10-06.*
+*How to run a 20-minute first meeting with each audience. Updated 2026-10-07.*
 
 Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and setup), [FAQ_FOR_LAWYERS.md](FAQ_FOR_LAWYERS.md), [EMAIL_TEMPLATES.md](EMAIL_TEMPLATES.md).
 
@@ -20,7 +20,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 - **A. Intake:** skip a question; show a sensory, non-leading prompt; show the **disclosures** section; Quick Exit.
 - **B. Outputs:** the Incident Summary PDF (verbatim sections, evidence inventory with hashes, ledger references, notices) and the NJ VCCO draft (9-month report rule, 5-year deadline, $275/hr up to $10k only if eligible).
 - **C. Consent and control:** share to a verified demo attorney with the verbatim consent text; attorney opens it; survivor sees the access in her log; revoke; access denied.
-- **D. (Only if asked or for security audiences) Escrow:** second survivor seals the same handle, still sees "Sealed"; only the attorney with an active share sees a count. Frame it as a demo-only prototype.
+- **D. (Only if asked, or for security and legal audiences) Matching:** two survivors name the same Instagram profile in different forms. Both still see "Sealed". `counselor.demo` sees one matched group. Frame it as a demo-only prototype following Callisto's published design (DEMO_SCRIPT step 10).
 
 ### Default 20-minute agenda (adjust per audience)
 | Time | Segment |
@@ -79,7 +79,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 - *"VAWA confidentiality?"* PII is protected even if encrypted or hashed; consent must be time-limited. Shares are currently open-ended until revoked, which is a known blocker; share expiry is on the pre-pilot list. Funders never get individual-level data.
 - *"Is it audited?"* No. An independent audit is a gate before any real data.
 - *"Who's behind this? Is there an entity?"* A founder-led open-source project. We're securing a 501(c)(3) fiscal sponsor before any partnership agreement. Governance commitments are public (GOVERNANCE.md).
-- *"Sustainability: what if you disappear?"* Grant-funded, no data business. Governance requires 90 days' notice and export on shutdown; the code is AGPL so a partner could self-host.
+- *"Sustainability: what if you disappear?"* We've written it down. See the [Succession and Data Promise](../SUCCESSION_AND_DATA_PROMISE.md): no deletion without her consent; at least 90 days' notice in the app and through her chosen safe contact; export always; encrypted data moves to a pre-arranged successor nonprofit only if she opts in; no silent confidentiality downgrade; and a ring-fenced wind-down reserve to pay for all of it. The code is AGPL, so a partner could self-host. *Then ask:* "Would your organization ever consider being named as a successor?"
 - *"Is your directory a referral service under RPC 7.3?"* Open question; we're seeking counsel. Survivor chooses; no assignment; no fees. We'd register if required.
 - *"Our staff are already stretched."* Agreed, and that's why Phase A is synthetic and asks for a few hours of review, not operations.
 
@@ -107,7 +107,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 - *"Will this make me a mandatory reporter or break my privilege?"* Matra doesn't change your obligations. Matra itself has no counselors, so the victim-counselor privilege doesn't attach to Matra. Whether your communications through it could be covered is a question for counsel. We'd never make you an institutional reporter.
 - *"Forgotten passphrase?"* Data is gone; nobody can recover it. Optional recovery shares held by a trusted advocate are on the roadmap, with the risk that a share-holder could be subpoenaed.
 - *"Is it in Spanish?"* Not yet. Native-speaking advocates would need to review any translation (PRD N13).
-- *"Do you use AI?"* No. A fixed script, her words stored exactly as typed.
+- *"Do you use AI?"* Nothing ever rewrites her words, and nothing goes to an outside AI. Optional voice transcription and topic suggestions run only on her device, and she confirms or dismisses each suggestion. The one-question-at-a-time mode is a fixed script. *Ask them:* would they want the voice option on or off by default?
 
 ---
 
@@ -174,7 +174,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 
 **Known weaknesses to state up front (from Whitepaper §5-6)**
 - Web-based E2EE: a malicious or compromised server can serve modified JavaScript or substitute an attorney's public key. Planned: build hashes, SRI, strict CSP, key-fingerprint UI, later a packaged client.
-- Escrow: the pepper holder can test low-entropy identifiers (phone numbers). Planned: OPRF (RFC 9497) with threshold key. Demo-only until then.
+- Matching: being rebuilt from HMAC+pepper (where the pepper holder could test phone numbers) to RFC 9497 OPRF with a 2-of-2 split key, plus a counselor threshold layer modelled on Callisto (COMPASS 2018). Open issues: Sybil and framing entries, key-server independence, counselor-key misuse, and metadata (π equality classes). Ask for a design review before code audit. Demo-only until then.
 - AES-GCM isn't key-committing; ledger hashes cover ciphertext. Planned: plaintext commitments or a key-committing AEAD.
 - Ledger isn't externally anchored (operator controls clock).
 - Metadata exposure in a database leak: usernames, sizes, timestamps, share relationships, plaintext alias, escrow status.
@@ -200,9 +200,25 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 **Hard questions and honest answers**
 - *"What's your traction?"* A working prototype, research memo, whitepaper, and draft agreements. No users yet, deliberately: no real data until the safety gates are met.
 - *"How will you measure success?"* Safety gates first (0 plaintext incidents, 100% verbatim consent on shares, advocate sign-off), then survivor-reported control (≥80% "felt in control"), attorney response time (≤3 business days median), and intake time saved. Police reports filed and escrow matches are **deliberately not** success metrics.
-- *"Sustainability?"* Grants and donations, a small team, open source; partners with VOCA or OVW LAV funding can carry their own use costs. No revenue from attorneys, cases, or data.
-- *"Will we get data?"* Aggregate, de-identified metrics only, with small-cell suppression (n<10). No individual-level data, ever.
-- *"Why not just fund Callisto?"* Different population and pipeline: adults in NJ/NY, documentation to attorney, VCCO drafting. We'd be glad to coordinate with them.
+- *"Sustainability?"* See the [Sustainability Plan](../SUSTAINABILITY_PLAN.md). Access-to-justice and victim-services framing. No funder above about 30%. A 6–12-month reserve before real data. Low burn: open source, counselor time through partner organizations, no campus licensing. No revenue from attorneys, cases, or data. A funded runbook if money fails.
+- *"Will we get data?"* Aggregate, de-identified metrics only, with small-cell suppression. Survivor-experience numbers come from an opt-in, unlinkable survey. No individual-level data, ever (plan §6).
+- *"Callisto just closed. Why would you survive?"* Use the respectful answer below, then the plan. Never suggest Callisto did something wrong.
+
+---
+
+## "What happened to Callisto, and how is Matra different?" (all audiences)
+
+**Rules.** Be respectful and factual. Never be opportunistic. Never say "we replace Callisto." Never offer to take its users, and never imply its technology failed. Never quote its unpublished outcome statistics (the 5×, 6×, and 11→4-month reporting figures) as evidence for anything. Don't speculate about its internal decisions. If someone shares inside information, don't repeat it. Sources: [research/callisto.md](../research/callisto.md).
+
+**Say (about 45 seconds):**
+> "Callisto spent more than a decade proving that survivors want private, survivor-controlled ways to document what happened and to find out they're not alone, and our matching design follows its published research. In July its board announced it's closing because of funding. In their words, adult survivors are left 'without a clear home in anyone's portfolio.' That's a loss for everyone in this field.
+> We've tried to learn from its experience rather than compete with it. We serve adults anywhere in NJ and NY, not only people with a .edu address. We don't depend on campus licensing. We frame the work as legal access and victim services, cap any one funder at about 30%, and hold reserves before real data. Our counselor stays an attorney, and we've promised never to change that without telling survivors first. And we've published a succession promise: at least 90 days' notice, export always, and her data moves to a successor only if she says yes."
+
+**If asked "Would you take over Callisto's users or technology?"**
+> "That's entirely Callisto's decision and its users' choice. We'd be glad to listen if they ever wanted to talk, but we're not approaching their users and we won't."
+
+**If asked "Isn't Matra just going to close too?"**
+> "It might. Any small nonprofit can. That's why we wrote down what happens if we do, and set aside the money to do it properly." Then point to the Succession and Data Promise and the runbook in the Sustainability Plan §7.
 
 ---
 
@@ -220,12 +236,15 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 | VCCO | $275/hr up to $10k in $25k cap, only if eligible (report within 9 months); not pro bono; Matra takes none. | Memo §3 |
 | Mandatory reporting | 18+ only; NJ universal child-abuse reporting; partners follow own duties; campus independence. | Memo §4 |
 | VAWA confidentiality | Encrypted/hashed PII still covered; time-limited consent needed (share expiry is a blocker). | Memo §6 |
-| Escrow abuse | Survivors never see matches; only the actively shared attorney sees counts; pepper-holder and attorney-relay risks remain; demo-only. | Memo §7; Whitepaper §5 |
+| Matching abuse | Survivors never see matches. An attorney Legal Options Counselor reviews matched groups and contacts each opted-in survivor separately. Sybil, key-server and metadata risks remain. Demo-only. | Memo §7, §7A; Whitepaper §5 |
+| Counselor privilege / solicitation | Attorney, not advocate, to preserve privilege. The contact is opt-in and fee-free, so probably not RPC 7.3 solicitation. Counsel to confirm. | Memo §7A |
+| Callisto | Respectful, factual. We learned from it, we don't replace it, and we don't approach its users. | This playbook, section above; research/callisto.md |
 | Ledger | Integrity, not independent proof of time, until external anchoring. | Whitepaper §4 |
 | Audit status | None yet; required before real data. | Whitepaper status line |
 | Coercion / device access | Can't be defended cryptographically; Quick Exit has residue limits. | Whitepaper §5 |
 | Lost passphrase | Unrecoverable by design; advocate-held recovery shares on roadmap. | Whitepaper §3, §6 |
-| Sustainability | Grants/donations via fiscal sponsor; AGPL; 90-day shutdown notice and export. | GOVERNANCE.md |
+| Sustainability | Diversified (no funder above about 30%), 6–12-month reserve, low burn, funded wind-down runbook. AGPL. | SUSTAINABILITY_PLAN.md |
+| "What if you shut down?" | No deletion without her consent, at least 90 days' notice, export always, opt-in-only successor migration, no silent downgrade. | SUCCESSION_AND_DATA_PROMISE.md |
 
 ---
 

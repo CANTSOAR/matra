@@ -1,6 +1,6 @@
 # Matra: Grant Boilerplate
 
-*Reusable sections for letters of inquiry and proposals. Updated 2026-10-06. Adapt the length to each funder's limits. Every statistic is cited; re-check the figures before submission, because single-year estimates change. Nothing here is legal advice.*
+*Reusable sections for letters of inquiry and proposals. Updated 2026-10-07 (sustainability, Callisto lessons, wind-down reserve). Adapt the length to each funder's limits. Every statistic is cited; re-check the figures before submission, because single-year estimates change. Nothing here is legal advice.*
 
 > **Before using any section:** confirm the fiscal sponsor's name and EIN, the partner names (only with written permission), and the funder's restrictions (e.g., federal grant conditions, VAWA/VOCA confidentiality). Never include survivor stories or individual data.
 
@@ -63,6 +63,7 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 - Obj 1.1: Complete an independent security audit by Month 4. Fix all high and critical findings and publish the report (fixed or disclosed) by Month 5.
 - Obj 1.2: Complete the pre-pilot security items (share expiry, key-fingerprint check, attorney MFA, metadata minimization, incident-response plan) by Month 4.
 - Obj 1.3: Obtain an outside cryptographer's review of the threat model by Month 4.
+- Obj 1.4: Adopt the [Succession and Data Promise](../SUCCESSION_AND_DATA_PROMISE.md), name a Designated Successor organization under a signed succession MOU, and adopt a board reserve policy by Month 6.
 - *Outcome measure:* all GOVERNANCE.md §5 gates met and published before any real data (yes/no).
 
 **Goal 2: Center survivors and advocates in the design.**
@@ -117,12 +118,33 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 
 ## 7. Sustainability
 
-- **Funding model:** grants and individual donations through a 501(c)(3) fiscal sponsor. No revenue from attorneys, cases, survivors, or data, by binding governance commitment.
-- **Low operating cost:** after the one-time audit and pilot-readiness work, running costs are modest (hosting, maintenance, periodic re-audit, a part-time coordinator). See the budget assumptions.
+*Full plan: [SUSTAINABILITY_PLAN.md](../SUSTAINABILITY_PLAN.md). Data commitments: [SUCCESSION_AND_DATA_PROMISE.md](../SUCCESSION_AND_DATA_PROMISE.md).*
+
+- **Funding model:** grants and individual donations through a 501(c)(3) fiscal sponsor. By binding governance commitment, Matra takes no revenue from attorneys, cases, survivors, data, or institutions with a conflict of interest. That rules out campus and employer licensing.
+- **Diversified by design:** no single funder above about 30% of the annual budget once past Year 1. The target mix is access-to-justice funders (bar foundations, IOLTA/IOLA), victim-services funding through partners (Matra as a VOCA or OVW LAV subrecipient or tech partner), tech-safety and public-interest-tech funders, individual donors, and in-kind credits.
+- **Reserve before real data:** at least 6 months of operating reserve (target 12) before any real survivor data, plus a ring-fenced **wind-down reserve** that pays for a full, safe shutdown.
+- **Low operating cost:** open-source code and standard cryptography, a small stack one engineer can maintain, Legal Options Counselor time contracted through partner organizations, and pro-bono attorneys for representation. Illustrative steady-state cost is about $145–170k a year (assumptions in the plan).
 - **Partner-carried costs:** legal-aid partners with VOCA or OVW Legal Assistance for Victims funding may treat Matra as an intake-efficiency tool within their own projects, subject to their grant conditions.
 - **Attorney capacity:** pro-bono attorneys and clinics provide representation. Some NJ matters may be eligible for VCCO-funded representation paid **directly to the attorney** (see §9).
-- **Open-source continuity:** under AGPL-3.0 a partner can self-host. Governance requires 90 days' notice and data export if the project ever winds down.
+- **Impact you can see without surveillance:** quarterly aggregate counts with small-cell suppression, an opt-in unlinkable survey (randomized response for sensitive items), and partner-reported aggregate outcomes (plan §6).
+- **If funding fails:** a published runbook with Green/Amber/Red triggers. At least 90 days' notice in-app and through her chosen safe contact method, export throughout, encrypted data moves to a pre-arranged successor organization **only with each survivor's opt-in**, and everything else is crypto-shredded at the end of notice. The code stays open source (AGPL-3.0).
 - **Year 2 plan:** re-audit, a second NJ partner, and a New York partner. Seek multi-year operating support.
+
+---
+
+## 7A. Lessons from Callisto (use when a funder asks, or in a "landscape" section)
+
+*Respectful and factual. Never present Callisto's closure as a failure of its technology or an opening for Matra. Do not cite Callisto's unpublished outcome statistics. Sources: [research/callisto.md](../research/callisto.md).*
+
+**Short version (≈120 words).** For more than a decade, Callisto showed that survivors want private, survivor-controlled ways to document harm and to learn they are not alone. Matra builds on its published research. In July 2026 Callisto's board announced it was closing because of funding. The board described adult sexual assault as having no clear home in funders' portfolios ([Callisto, 22 Jul 2026](https://www.projectcallisto.org/blog/closing)). Its closure is a loss for the field. We have taken four lessons from it: build in a funded category (access to justice and victim services); never depend on payers with a conflict of interest; hold reserves and treat surges as reserves rather than run-rate; and write the data-succession promise before holding any data. We ask funders to help close that category gap, not only to fund Matra.
+
+**Longer version, for a sustainability or budget narrative.**
+- *Revenue swings.* Public filings show Callisto's revenue reached $3.93M in 2018, then ran at roughly $0.5–1M in most later years, while spending stayed near $1M ([ProPublica 990 data](https://projects.propublica.org/nonprofits/organizations/454011283)). **Matra:** the windfall rule and a 6–12-month reserve.
+- *Institutional licensing.* University licensing revenue never exceeded about $208k a year (2017). **Matra:** no campus or employer licensing. Adults anywhere in NJ and NY are eligible, without a .edu gate.
+- *Category gap.* The board's own words: adult survivors are "without a clear home in anyone's portfolio." **Matra:** we frame the work as legal access and victim services, and we use partner subrecipient routes for VOCA and OVW funds.
+- *Trust during change.* A 2020 plan to delete older records was reported as a breach of survivors' trust ([Stanford Daily](https://stanforddaily.com/2020/04/16/callisto-campus-tool-for-documenting-sexual-assault-at-colleges-discontinued/)). An April 2026 policy change moved match follow-up from attorneys to advocates, and privilege no longer applied ([privacy policy](https://www.projectcallisto.org/privacy-policy)). **Matra:** no deletion without individual consent, at least 90 days' notice, no silent confidentiality downgrade, and opt-in-only migration to a named successor.
+- *Measuring impact under encryption.* Callisto's CEO said it could not publish detailed impact data because of encryption ([Tech Matters](https://techmatters.org/callisto-helping-assault-survivors/)). **Matra:** privacy-preserving measurement designed in from the start.
+- *Budget line that follows from this:* a restricted wind-down / data-succession reserve (§8).
 
 ---
 
@@ -142,10 +164,11 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 | Insurance (cyber liability; D&O/GL if not covered by sponsor) | $5,000 | **Assumption.** Confirm what the fiscal sponsor's policy covers. Cyber premiums vary widely. |
 | Spanish translation + native-speaker advocate review | $4,000 | **Assumption.** Intake script, warnings, consent text. |
 | Evaluation (survey tools without trackers, analysis) | $3,000 | **Assumption.** |
-| Contingency (5%) | $6,350 | |
-| **Subtotal** | **$133,350** | |
-| Fiscal sponsor fee (assume 8%; confirm) | $10,668 | **Assumption.** Sponsor fees commonly fall in the 5-15% range. |
-| **Total request** | **≈$144,000** | |
+| Contingency (5% of the lines above) | $6,350 | |
+| Wind-down / data-succession reserve (restricted, first tranche) | $10,000 | **Assumption.** Starts the ring-fenced reserve that pays for 90+ days' notice, export, opt-in migration to the successor and secure destruction if Matra ever closes (full target ≈$25–40k; [SUSTAINABILITY_PLAN.md](../SUSTAINABILITY_PLAN.md) §4). If this funder cannot fund reserves, cover it from unrestricted donations and drop the line. |
+| **Subtotal** | **$143,350** | |
+| Fiscal sponsor fee (assume 8%; confirm) | $11,468 | **Assumption.** Sponsor fees commonly fall in the 5-15% range. |
+| **Total request** | **≈$155,000** | Without the reserve line: ≈$144,000. |
 
 *Leaner version (pro-bono audit and counsel, volunteer engineering):* roughly $40,000-60,000, covering advocate honoraria, coordinator, hosting, insurance, translation, and the sponsor fee.
 

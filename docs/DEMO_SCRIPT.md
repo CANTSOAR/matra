@@ -10,17 +10,19 @@
 - Start the server and seed demo accounts (`npm run seed -w @matra/server`). The seed creates:
   - Survivor **`jane.demo`**, passphrase `demo-survivor-passphrase`, with no records. The demo creates them live.
   - Verified attorneys **`attorney.nj1`** (NJ), **`attorney.ny1`** (NY), and **`attorney.nj2`** (NJ/NY), all with passphrase `demo-attorney-passphrase`. Names and organizations are labelled "Demo —".
+  - Legal Options Counselor **`counselor.demo`**, passphrase `demo-counselor-passphrase`, for the matching demo. *(Comes with the matching rebuild. If the seed doesn't print it yet, skip step 10 or describe it verbally.)*
   - *If the seed names have changed, use whatever the seed script prints.*
 - Prepare a second survivor account for the escrow demo (for example, register `sam.demo` live, or pre-create it).
 - Have a **sample photo with GPS EXIF** on the desktop (for example, one taken with a phone that has location on) and an EXIF viewer ready (`exiftool` or an online viewer used **only** with the demo photo).
-- Use two browser profiles: Profile A for the survivor, Profile B for the attorney.
+- Use two browser profiles: Profile A for the survivor, Profile B for the attorney and, later, the counselor.
 - Have a fictional intake narrative ready to paste (below). **Never use a real account.**
 
 **Fictional sample data**
 - Preferred name: "J." · State: NJ · County: Middlesex · Date: "around March 14, not sure of the exact day"
 - Free recall: *"We were at a party at a coworker's apartment. I remember the music was too loud and the hallway smelled like cologne. He said he'd walk me to my car…"*
 - Disclosure: told roommate "M." by text the next morning, and said "something bad happened last night."
-- Person responsible: "R.", coworker, Instagram `@demo_handle_123`, phone `(555) 010-0199`. Escrow opt-in: yes.
+- Person responsible: "R.", coworker, Instagram `@demo_handle_123`, phone `(555) 010-0199`. Matching opt-in: yes. Safe contact for the counselor: "email, weekday afternoons" (fictional).
+- Second survivor (`sam.demo`): names the same Instagram profile as a URL, `https://www.instagram.com/Demo_Handle_123/`, and opts in to matching.
 
 ---
 
@@ -73,19 +75,21 @@
 ### 9. Revoke (8:00-8:30)
 - As the survivor, **revoke**. In Profile B, refresh: access is denied.
 - **Talking point (be explicit):** *"Revocation stops future access. It can't un-download what the attorney already saved. That's why the partner MOU has deletion duties."*
+- Log out of `attorney.nj1` in Profile B before step 10.
 
-### 10. Escrow match (8:30-9:30), **framed as a prototype**
-- As `jane.demo`, seal the Instagram handle in escrow. Status: *sealed*.
-- Log in as the second survivor (`sam.demo`). Enter the same handle in a different format (`@Demo_Handle_123`). Her status still says **Sealed**. That is on purpose.
-- Matches reach only an attorney with an **active** share, and step 9 revoked Jane's. So, as `jane.demo` in Profile A, share again with `attorney.nj1`. Then in Profile B, open Jane's case file. A notice says another person independently named someone this client also named, with no identity attached.
+### 10. Confidential matching (8:30-9:30), **framed as a prototype**
+- As `jane.demo`, opt in to matching for the Instagram handle `@demo_handle_123`. Read the consent line aloud: if someone else names the same person, a Legal Options Counselor, who is a licensed attorney, may open this entry and contact her by the method she chose. Status: *Sealed*.
+- As `sam.demo`, name the same profile in a different form: `https://www.instagram.com/Demo_Handle_123/`. Her status also says **Sealed**. That is on purpose. Neither survivor ever sees a match.
+- In Profile B, log in as **`counselor.demo`** (`demo-counselor-passphrase`). The counselor sees **one matched group** with two entries: the two forms normalized to the same profile. The counselor sees each survivor's chosen contact method and jurisdiction, and nothing about either survivor's account or records.
 - **Talking points:**
-  - *"Neither survivor ever sees a match. If they could, the person himself could sign up, type in his own handle, and learn he's been reported. Now the only person told is the verified attorney the survivor chose, and only as a count."*
-  - *"Neither survivor learns who the other is. The server never sees the raw handle. Nothing extra is written to the public ledger when a match happens, so the ledger can't be watched either."*
+  - *"Only unique identifiers are matched: phone, email, social handles. Never names, because names aren't unique enough. The handle and the URL are normalized to the same profile on her device before anything is sealed."*
+  - *"Neither survivor sees a match. If they could, the person himself could sign up, type in his own handle, and find out he's been named."*
+  - *"The counselor is an attorney, and that's deliberate. Callisto's design rested on attorney-client privilege. When Callisto moved this role to advocates in 2026, it told users privilege no longer applied. We commit never to make that kind of change without telling survivors first ([Succession and Data Promise](SUCCESSION_AND_DATA_PROMISE.md) D7). The counselor reviews the group for anything implausible, then contacts each survivor separately, by the method she chose, once, with no pressure. Introductions happen only if both say yes."*
   - *"A match is a lead, not evidence. In New Jersey other-acts evidence goes through Rule 404(b), and there's no equivalent of federal Rule 413."*
-  - **Say this before anyone asks:** *"We fixed the self-check flaw: users never see matches. Two limits remain. Whoever holds our server secret could still test phone numbers. And someone posing as a survivor who gets a verified attorney to accept his file could hear about a match from that attorney. We rely on attorney verification and professional duty for that. Before any real use we move to OPRF-based cryptography like Callisto's and add account verification. Until then this stays demo-only."*
+  - **Say this before anyone asks:** *"This follows the published Callisto design: an OPRF with the key split across two servers, so the server never sees the raw handle. It's demo-only. Before real use it needs an outside cryptographic review, account verification so one person can't create fake accounts to force a match, and counsel's view on privilege and on the solicitation rules for a counselor contacting survivors who opted in."*
 
 ### 11. Close and ask (9:30-10:00)
-*"We're asking for three things. Attorneys willing to pilot under our MOU. Advocates to co-own the intake script. And a security auditor. We take no fees and no referral money, ever."*
+*"We're asking for three things. Attorneys willing to pilot under our MOU. Advocates to co-own the intake script. And a security auditor. We take no fees and no referral money, ever. And because survivors deserve tools that outlast the organization that built them, we've published a succession and data promise: at least 90 days' notice, export at all times, and nothing moves without her yes."*
 
 ---
 
@@ -127,5 +131,8 @@ Not yet. An independent audit is a gate before any real survivor uses it.
 **"Mandatory reporting? Minors? Campus?"**
 Adults only. Registration requires "I am 18 or older". Anyone who says they're under 18 sees a kind message with Childhelp (1-800-422-4453) and RAINN (800-656-4673), and nothing is saved. It's self-attestation, not verification. New Jersey requires *anyone* to report suspected child abuse. For campuses, Matra stays independent of the school, so it never creates Title IX "actual knowledge" or Clery CSA reports. Schools would get de-identified aggregates at most.
 
-**"How is this different from Callisto?"**
-Callisto pioneered encrypted matching with lawyer counselors and stronger cryptography (OPRF with key splitting), mostly for campuses. Our focus is the documentation-to-attorney pipeline in NJ and NY. Our matching is behind theirs and stays demo-only until it catches up.
+**"What happened to Callisto, and how is Matra different?"**
+Answer with respect, and keep to the facts. *"Callisto spent more than a decade proving survivors want this, and our matching design follows its published research. Its board announced in July 2026 that it's closing for lack of funding, and said adult sexual assault has no clear home in funders' portfolios. That's a loss for the field. We're not replacing it. We've tried to learn from it: adults anywhere in NJ and NY rather than .edu only, no campus licensing, diversified funding with reserves, an attorney counselor we won't silently downgrade, and a written succession promise so survivors are never stranded."* Don't comment on its users, don't use its unpublished statistics, and don't speculate about its internal decisions. Sources: [research/callisto.md](research/callisto.md).
+
+**"What if Matra runs out of money?"**
+At least 90 days' notice in the app and through her chosen safe contact, export throughout, encrypted data moves to a named successor nonprofit only if she opts in, and everything else is destroyed at the end. That's funded by a ring-fenced wind-down reserve. See [SUCCESSION_AND_DATA_PROMISE.md](SUCCESSION_AND_DATA_PROMISE.md) and [SUSTAINABILITY_PLAN.md](SUSTAINABILITY_PLAN.md).

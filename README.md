@@ -1,6 +1,6 @@
 # Matra
 
-Matra is open-source, non-profit software for adult (18+) survivors of sexual assault. A survivor writes down what happened once, through a scripted, trauma-informed intake (every question can be skipped). Her record and evidence files are encrypted in her browser, so the operator cannot read them. She can then choose to share a record, with explicit and revocable consent, with a verified attorney. The attorney's portal decrypts only what she shared. Matra also generates an incident-summary PDF and an NJ VCCO draft on her device, keeps a hash-chain integrity ledger, and has a demo-only "blind escrow" for perpetrator identifiers. Escrow matches are never shown to survivors. A verified attorney with an active share sees only a count, and should treat it as a lead, not evidence.
+Matra is open-source, non-profit software for adult (18+) survivors of sexual assault. A survivor writes down what happened once, through a warm, trauma-informed intake: she can start anywhere and tell it her way, typed or spoken (transcribed on her device), or answer one question at a time. Every question can be skipped, and her words are never rewritten. Her record and evidence files are encrypted in her browser, so the operator cannot read them. She can then choose to share a record, with explicit and revocable consent, with a verified attorney. The attorney's portal decrypts only what she shared. Matra also generates an incident-summary PDF and an NJ VCCO draft on her device, keeps a hash-chain integrity ledger, and lets her download all her data at any time. A demo-only matching feature (being rebuilt along the lines of Callisto's published OPRF design) matches unique identifiers, never names. Matches are never shown to survivors. A Legal Options Counselor, a licensed attorney, sees the matched group and contacts each survivor who opted in. A match is a lead, not evidence.
 
 **Status: MVP / pre-pilot prototype. Do not use it with real survivor data.** It has had no independent security audit and no review by licensed counsel. The integrity ledger is self-hosted and not yet externally anchored. Matra cannot decrypt records, but the survivor (and anyone she shares with) can still be compelled to produce them, and metadata is visible to the operator. See [docs/SECURITY_WHITEPAPER.md](docs/SECURITY_WHITEPAPER.md) and [docs/threat-model.md](docs/threat-model.md).
 
@@ -12,6 +12,8 @@ Written down so they can be held against us. Full text in [GOVERNANCE.md](GOVERN
 - Licensed under [AGPL-3.0-only](LICENSE). Every deployment must offer its users the source.
 - The operator cannot read survivor records. Where the operator can still see something (metadata), we say so in the security docs.
 - Attorney routing is run on a non-profit basis with no referral fees and no fee sharing ([docs/LEGAL_RESEARCH_MEMO.md](docs/LEGAL_RESEARCH_MEMO.md) section 5).
+- Survivors' data is theirs. We never delete it without her individual consent. She gets at least 90 days' notice of any shutdown or material change, export always, migration to a named successor only if she opts in, and no silent confidentiality downgrade. See [docs/SUCCESSION_AND_DATA_PROMISE.md](docs/SUCCESSION_AND_DATA_PROMISE.md) (parts still need board and counsel adoption).
+- Built to last: diversified funding, reserves before real data, and a funded wind-down plan ([docs/SUSTAINABILITY_PLAN.md](docs/SUSTAINABILITY_PLAN.md)).
 - No claims we can't back. If a document here overstates something, that is a bug. Please file it.
 
 ## Quickstart
@@ -47,6 +49,7 @@ Deploying a demo instance (Docker / Render): see [docs/DEPLOY.md](docs/DEPLOY.md
 | `attorney.nj1` | Verified attorney (NJ) | `demo-attorney-passphrase` |
 | `attorney.ny1` | Verified attorney (NY) | `demo-attorney-passphrase` |
 | `attorney.nj2` | Verified attorney (NJ/NY) | `demo-attorney-passphrase` |
+| `counselor.demo` | Legal Options Counselor (matching demo; arrives with the matching rebuild) | `demo-counselor-passphrase` |
 
 All names and organizations are fictional and labelled "Demo —". For a guided walkthrough, see [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
@@ -80,6 +83,9 @@ Don't deploy it for real use yet.
 | Document | For |
 |---|---|
 | [docs/PITCH_ONE_PAGER.md](docs/PITCH_ONE_PAGER.md) | Lawyers and funders: problem, what the MVP does, honest limits, asks |
+| [docs/SUCCESSION_AND_DATA_PROMISE.md](docs/SUCCESSION_AND_DATA_PROMISE.md) | Survivors and partners: what happens to her data if Matra changes or closes |
+| [docs/SUSTAINABILITY_PLAN.md](docs/SUSTAINABILITY_PLAN.md) | Board, funders, fiscal sponsor: revenue mix, reserves, privacy-preserving impact measurement, the "if funding fails" runbook |
+| [docs/research/callisto.md](docs/research/callisto.md) | Everyone: what Callisto built, why it closed, and what Matra learned |
 | [docs/LEGAL_RESEARCH_MEMO.md](docs/LEGAL_RESEARCH_MEMO.md) | Counsel and advisors. Research memo, **not reviewed by a lawyer** and not legal advice |
 | [docs/SECURITY_WHITEPAPER.md](docs/SECURITY_WHITEPAPER.md) | Security reviewers: architecture, key hierarchy, ledger, threat model, roadmap |
 | [docs/threat-model.md](docs/threat-model.md) | Engineering: known-weakness tracker (supplement to the whitepaper) |
