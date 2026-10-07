@@ -14,5 +14,6 @@ e2e/.screens
 compiled_resources/**
 !compiled_resources/*/
 !compiled_resources/README.md
+!compiled_resources/READING_GUIDE.md
 !compiled_resources/*/SOURCES.md
 !compiled_resources/05_advisory_board_governance/CONTACTS.md

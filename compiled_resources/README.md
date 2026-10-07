@@ -13,6 +13,9 @@ Reading material for the domain list in the original outreach playbook ([`../doc
 | `03_legal_ethics_privilege_statutes/` | CVRA, UVCA, NJ VCCO statute + N.J.A.C. 13:75 + forms/FAQ, NJ victims' bill of rights, *Upjohn*, *Smith*, *Miller*, *Carpenter*, FRCrP 17, NJ victim-counselor privilege + *State v. J.G.*, MA *Dwyer* line, ABA 1.6 + Op. 477R |
 | `04_cryptographic_escrow_privacy/` | Callisto (Rajan et al. 2018), WhoToo (2019), SAE (Arun et al. 2020), hashing-pitfalls papers, RFC 9497 (OPRF), PSI review, OWASP cheat sheets |
 | `05_advisory_board_governance/` | FAST agreement (.docx; equity-based, not for Matra's use), sample advisory charters, `CONTACTS.md` (org pages only) |
+| `06_statistics_and_landscape/` | CDC NISVS (2023/24 brief, 2016/17 report, sexual orientation), BJS victimization + non-reporting reports, AAU 2019, NIJ case-attrition study, EVAWI false reports, LSC Justice Gap, NJSP crime data, NJ VCCO FY2020 report, RAINN page captures. `SOURCES.md` has a stats cheat sheet and commonly misquoted stats |
+| `07_survivor_experience_and_barriers/` | Why survivors don't report (Ahrens, Ullman, BJS), institutional betrayal, DARVO, defamation and anti-SLAPP (NJ UPEPA), disparities, CDC STOP SV prevention, pornography evidence (citations), trauma-informed computing, NNEDV Safety Net |
+| `08_legal_landscape_and_pitfalls/` | NJ sexual offense law + *M.T.S.*, statutes of limitations, SASPA, rape shield, Title IX status, NJ UPL/referral opinions, VAWA confidentiality, Callisto history, Spot/LegalFling, tech-facilitated abuse (CHI/USENIX), Flo + Nebraska data cases, ABA Op. 512 + *Mata*. `SOURCES.md` has the top 15 pitfalls |
 
 ## Open these in a browser (free, but blocked automated download)
 
@@ -31,20 +34,6 @@ Reading material for the domain list in the original outreach playbook ([`../doc
 5. **Interviewing.** CI-AT is real but from Quebec Provincial Police + Fisher/Hopper, not EVAWI. Fisher & Geiselman's therapeutic-jurisprudence paper is **2010**, not 2014.
 6. **Advisory.** FAST vests monthly over 2 years (3-mo cliff), tiers 0.10–1.00%, option-based, and allows publicizing names during the term. It doesn't fit Matra: no equity, and a for-profit entity can't run attorney routing in NJ (Legal Memo §5). Use `docs/legal/advisor-agreement.md`. Add **NJCASA** (sexual-assault coalition) alongside NJCEDV.
 
-## Suggested reading order (~2–3 weeks part-time)
+## How to read this
 
-1. **Week 1 — what you're protecting.** EVAWI neurobiology bulletin → Campbell transcript → CI-AT manuscript → EVAWI *Effective Victim Interviewing* (skim; read the question-technique chapters closely). Memon 2010 for the evidence base.
-2. **Week 1–2 — the threat model.** Callisto paper → Signal contact-discovery post → Demir 2018 → SAE (Arun 2020) critique → RFC 9497 sections 1–3 only. Then OWASP cryptographic storage.
-3. **Week 2 — the legal exposure.** NJ victim-counselor privilege + *State v. J.G.* → *Miller*, *Smith*, then *Carpenter* (majority only) → FRCrP 17(c) → *Upjohn* (short; it's about corporate privilege, mostly to understand why it *doesn't* save you).
-4. **Week 2–3 — evidence.** FRE 902 LII page (committee notes for 902(13)/(14)) → 901 → 803(5) → Grimm/Capra/Joseph → *Lorraine* (long; read the intro + ESI authentication section). SP 800-86 and FIPS 180-4 are reference, not reading.
-5. **Week 3 — money & governance.** VCCO FAQ → application instructions → N.J.A.C. 13:75-4.10 (fees) → CVRA. Then the charters and `docs/legal/advisor-agreement.md` before any outreach.
-
-## How to take notes on this
-
-- **Read with a design question in hand.** Each source should answer "what does this change in our code, question tree, or pitch?" Keep a running `decisions.md` (in `docs/`) with entries like: *Decision → Source (file + page) → Why → Open question for advisor.* That file becomes your advisor-meeting agenda and proof of diligence.
-- **Two-pass reading for papers.** Pass 1: abstract, figures, conclusion — write 3 sentences. Pass 2 only if it affects design: the method section, noting assumptions and threat model.
-- **Legal sources: brief them.** For cases: facts / question / holding / reasoning / *what it means for us*. For statutes: who it applies to, what it requires, deadlines/caps, exceptions. Copy exact quotes with pin cites (rule subsection or page) — paraphrase drifts, and lawyers will check.
-- **Build a glossary** as you go (tonic immobility, testimonial, OPRF, PSI, self-authentication, recorded recollection…). Defining a term in your own words is the fastest test of whether you understand it.
-- **Explain it back.** After each folder, write a one-page plain-English explainer as if for a teammate. Gaps show up immediately; bring them to advisors as specific questions — which is exactly the "technical humility" the outreach plan calls for.
-- **Track contradictions.** When sources disagree with each other or with the README, log it. Those are the highest-value questions for your legal and clinical advisors.
-- **Tools:** Zotero (free) handles PDF annotation + citations well; Obsidian works if you want linked notes alongside the repo. Either is fine — the `decisions.md` habit matters more than the tool.
+See [`READING_GUIDE.md`](READING_GUIDE.md): a staged path through all eight folders (about 6 weeks part-time), with core vs. skim reading, self-check questions, and note-taking methods.
