@@ -1,0 +1,78 @@
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { friendlyError } from '../lib/session';
+
+export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]) {
+  const [state, setState] = useState<{ loading: boolean; data?: T; error?: string }>({ loading: true });
+  const seq = useRef(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const run = useCallback(fn, deps);
+  const reload = useCallback(async () => {
+    const my = ++seq.current;
+    setState((s) => ({ ...s, loading: true, error: undefined }));
+    try {
+      const data = await run();
+      if (my === seq.current) setState({ loading: false, data });
+    } catch (e) {
+      if (my === seq.current) setState({ loading: false, error: friendlyError(e) });
+    }
+  }, [run]);
+  useEffect(() => {
+    void reload();
+    return () => {
+      seq.current++;
+    };
+  }, [reload]);
+  return { ...state, reload };
+}
+
+export function Loading({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <p className="row muted" role="status" aria-live="polite">
+      <span className="spinner" aria-hidden="true" /> {label}
+    </p>
+  );
+}
+
+export function ErrorNote({ children }: { children: ReactNode }) {
+  return (
+    <p className="error" role="alert">
+      {children}
+    </p>
+  );
+}
+
+export function VerifyBadge({ verified }: { verified: boolean | undefined }) {
+  if (verified === undefined) return <span className="badge neutral">Not checked</span>;
+  return verified ? (
+    <span className="badge ok" title="We recomputed the fingerprint of the sealed file and it matches the tamper-evident ledger.">
+      Verified ✓
+    </span>
+  ) : (
+    <span className="badge warn" title="The recomputed fingerprint does not match. Please contact support.">
+      Could not verify
+    </span>
+  );
+}
+
+export function formatDate(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+export function PageTitle({ children, lead }: { children: ReactNode; lead?: ReactNode }) {
+  return (
+    <header className="stack" style={{ marginBottom: 20 }}>
+      <h1 tabIndex={-1} data-autofocus>
+        {children}
+      </h1>
+      {lead && <p className="muted">{lead}</p>}
+    </header>
+  );
+}
+
+export const US_STATES = [
+  'AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS',
+  'MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+];
