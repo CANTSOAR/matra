@@ -2,6 +2,9 @@ import request from 'supertest';
 import type express from 'express';
 import {
   deriveKeys,
+  normalizeMatchIdentifier,
+  submitMatchEntry,
+  type MatchTransport,
   encryptBlob,
   encryptJSON,
   generateContentKey,
@@ -9,13 +12,13 @@ import {
   newKdfSalt,
   wrapKeyWithMaster,
 } from '@matra/crypto';
-import type { AttorneyProfile, AuthResponse, Envelope, RegisterRequest, Role } from '@matra/shared';
-import { createApp, getDb } from './app.js';
+import type { AttorneyProfile, AuthResponse, Envelope, IdentifierKind, RegisterRequest, Role } from '@matra/shared';
+import { createApp, getDb, type CreateAppOptions } from './app.js';
 
 export const TEST_ITERATIONS = 1000;
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
-export function makeApp(extra: { autoVerifyAttorneys?: boolean } = {}) {
+export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching'] } = {}) {
   const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra });
   return { app, db: getDb(app) };
 }
@@ -58,11 +61,14 @@ export async function registerUser(
     wrappedPrivateKey: id.wrappedPrivateKey,
     ...(role === 'survivor' && opts.ageConfirmed18 !== null && { ageConfirmed18: (opts.ageConfirmed18 ?? true) as true }),
     ...(role === 'attorney' && { attorneyProfile: opts.profile ?? defaultProfile }),
+    ...(role === 'counselor' && { counselorProfile: { displayName: `Counselor ${username}`, organization: 'Test LOC', jurisdictions: ['NJ'] } }),
   };
   const res = await request(app).post('/api/auth/register').send(body);
   if (res.status !== 201) throw new Error(`register failed ${res.status} ${JSON.stringify(res.body)}`);
   if (role === 'attorney' && opts.verify !== false)
     getDb(app).prepare('UPDATE attorney_profiles SET verified = 1 WHERE user_id = ?').run(res.body.user.id);
+  if (role === 'counselor' && opts.verify !== false)
+    getDb(app).prepare('UPDATE counselor_profiles SET verified = 1 WHERE user_id = ?').run(res.body.user.id);
   return {
     token: res.body.token,
     user: res.body.user,
@@ -96,4 +102,37 @@ export async function uploadBlob(app: express.Express, u: TestUser, bytes = new 
     .set('X-Owner-Wrapped-Key', Buffer.from(JSON.stringify(wrapped)).toString('base64'))
     .send(Buffer.from(ct));
   return { res, key, ct };
+}
+
+/** The survivor client's network calls, over supertest (same code path as the web app's ApiClient). */
+export function matchTransport(app: express.Express, u: TestUser): MatchTransport {
+  const ok = <T>(r: request.Response): T => {
+    if (r.status >= 300) throw Object.assign(new Error(`${r.status} ${r.body?.code}`), { status: r.status, code: r.body?.code });
+    return r.body as T;
+  };
+  return {
+    config: async () => ok(await request(app).get('/api/matching/config').set(u.auth)),
+    evaluate: async (h, req) => ok(await request(app).post(`/api/matching/oprf-${h}`).set(u.auth).send(req)),
+    createEntry: async (req) => ok(await request(app).post('/api/matching/entries').set(u.auth).send(req)),
+  };
+}
+
+/** Survivor names `value` (kind/platform) for sealed matching, with a contact bundle. */
+export async function sealMatch(
+  app: express.Express,
+  u: TestUser,
+  kind: IdentifierKind,
+  value: string,
+  platform?: string,
+  contactName = u.user.username,
+) {
+  const n = normalizeMatchIdentifier(kind, value, platform);
+  if (!n.ok) throw new Error(`not matchable: ${n.reason}`);
+  return submitMatchEntry(matchTransport(app, u), {
+    masterKey: u.masterKey,
+    identifier: n,
+    contact: { name: contactName, methods: ['text'], phone: '+12015550123' },
+    consentStatement: 'If someone else names the same person, a counselor may contact me.',
+    labelEnvelope: await encryptJSON({ label: `${kind}`, canonical: n.canonical }, u.masterKey),
+  });
 }

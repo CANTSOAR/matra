@@ -12,6 +12,7 @@ import {
   type IntakeDraft,
 } from './draft';
 import {
+  MATCHABLE_KEYS,
   UI,
   type ApproxDateStep,
   type ChoiceStep,
@@ -370,7 +371,7 @@ export function SelectInput({ step, initial, onPending, onSubmit, onSkip }: Inpu
 
 // ───────────── generic field (used by form + group) ─────────────
 
-function Field({ def, value, onChange, idPrefix }: { def: FieldDef; value: string; onChange: (v: string) => void; idPrefix: string }) {
+export function Field({ def, value, onChange, idPrefix }: { def: FieldDef; value: string; onChange: (v: string) => void; idPrefix: string }) {
   const id = `${idPrefix}-${def.key}`;
   const hintId = def.hint ? `${id}-hint` : undefined;
   if (def.type === 'choice') {
@@ -529,6 +530,11 @@ export function GroupInput({ step, initial, onPending, onSubmit, onSkip }: Input
 
 // ───────────── sealed escrow opt-in, per person ─────────────
 
+/** A person can be matched only by a unique identifier — never by name alone. */
+export function isMatchable(p: GroupItem): boolean {
+  return MATCHABLE_KEYS.some((k) => (p.values[k] ?? '').trim() !== '');
+}
+
 export function EscrowInput({ step, initial, onPending, onSubmit, onSkip, draft }: InputProps<EscrowStep> & { draft: IntakeDraft }) {
   const people = asGroup(draft.answers['person.list']);
   const [choices, setChoices] = useState<Record<string, string>>(asRecord(initial));
@@ -553,6 +559,14 @@ export function EscrowInput({ step, initial, onPending, onSubmit, onSkip, draft 
     >
       {people.map((p, i) => {
         const name = p.values.name?.trim() || `Person ${i + 1}`;
+        if (!isMatchable(p)) {
+          return (
+            <div key={p.id} className="intake-fieldset intake-card">
+              <p className="intake-label">{name}</p>
+              <p className="intake-hint">{UI.escrow.notMatchable}</p>
+            </div>
+          );
+        }
         return (
           <fieldset key={p.id} className="intake-fieldset intake-card">
             <legend className="intake-label">{name}</legend>

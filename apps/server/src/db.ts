@@ -180,7 +180,96 @@ const MIGRATIONS: string[] = [
   ALTER TABLE users ADD COLUMN age_confirmed_18 INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE users ADD COLUMN age_confirmed_at TEXT;
   `,
+  // ── v4: Callisto-style sealed matching + Legal Options Counselor role. ──────────────────────────────────
+  // The old demo-only "blind escrow" (escrow_entries: HMAC-peppered PBKDF2 hashes) is DROPPED: it only ever held demo
+  // data, and its hashes cannot be converted to OPRF tags (that would need the plaintext identifiers).
+  // users is rebuilt to widen the role CHECK (SQLite cannot ALTER a CHECK); runs with foreign_keys OFF (see FK_OFF).
+  `
+  CREATE TABLE users_v4 (
+    id                  TEXT PRIMARY KEY,
+    username            TEXT NOT NULL UNIQUE,
+    role                TEXT NOT NULL CHECK (role IN ('survivor','attorney','counselor')),
+    auth_hash           BLOB NOT NULL,
+    auth_salt           BLOB NOT NULL,
+    kdf_salt            TEXT NOT NULL,
+    kdf_iterations      INTEGER NOT NULL,
+    public_key          TEXT NOT NULL,
+    wrapped_private_key TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    age_confirmed_18    INTEGER NOT NULL DEFAULT 0,
+    age_confirmed_at    TEXT
+  );
+  INSERT INTO users_v4 (id, username, role, auth_hash, auth_salt, kdf_salt, kdf_iterations, public_key, wrapped_private_key,
+                        created_at, age_confirmed_18, age_confirmed_at)
+    SELECT id, username, role, auth_hash, auth_salt, kdf_salt, kdf_iterations, public_key, wrapped_private_key,
+           created_at, age_confirmed_18, age_confirmed_at FROM users;
+  DROP TABLE users;
+  ALTER TABLE users_v4 RENAME TO users;
+
+  DROP TABLE IF EXISTS escrow_entries;
+
+  CREATE TABLE counselor_profiles (
+    user_id       TEXT PRIMARY KEY REFERENCES users(id),
+    display_name  TEXT NOT NULL,
+    organization  TEXT,
+    jurisdictions TEXT NOT NULL,                -- JSON array of USPS codes
+    verified      INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- One row per (survivor, perpetrator identifier). The server sees only the pseudorandom tag, never the identifier,
+  -- its hash, or anything a counselor could open without a second survivor's share.
+  CREATE TABLE match_entries (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES users(id),
+    tag             TEXT NOT NULL,              -- π (64 hex)
+    bundle          TEXT NOT NULL,              -- Envelope JSON: contact bundle under the per-entry key
+    label_envelope  TEXT NOT NULL,              -- Envelope JSON: her own label, under her master key
+    created_at      TEXT NOT NULL,
+    ledger_entry_id TEXT NOT NULL REFERENCES ledger(id),
+    UNIQUE (user_id, tag)
+  );
+  CREATE INDEX match_entries_tag ON match_entries(tag);
+
+  -- One seal per (entry, counselor): {π, x, y, ce} encrypted to that counselor. Released only for matched groups.
+  CREATE TABLE match_seals (
+    entry_id     TEXT NOT NULL REFERENCES match_entries(id) ON DELETE CASCADE,
+    counselor_id TEXT NOT NULL REFERENCES users(id),
+    seal         TEXT NOT NULL,                 -- CounselorSeal JSON
+    PRIMARY KEY (entry_id, counselor_id)
+  );
+  CREATE INDEX match_seals_counselor ON match_seals(counselor_id);
+
+  -- Created the first time a tag has entries from 2 distinct survivors. Released while that remains true.
+  CREATE TABLE match_groups (
+    id         TEXT PRIMARY KEY,
+    tag        TEXT NOT NULL UNIQUE,
+    matched_at TEXT NOT NULL
+  );
+
+  CREATE TABLE counselor_notes (
+    id           TEXT PRIMARY KEY,
+    group_id     TEXT NOT NULL REFERENCES match_groups(id),
+    counselor_id TEXT NOT NULL REFERENCES users(id),
+    entry_id     TEXT,
+    envelope     TEXT NOT NULL,                 -- encrypted under the counselor's own master key
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX counselor_notes_group ON counselor_notes(group_id, counselor_id);
+
+  -- OPRF rate limits: only today's count and a lifetime total per (account, key holder); no per-call timestamps.
+  CREATE TABLE oprf_quota (
+    user_id        TEXT NOT NULL,
+    holder         TEXT NOT NULL CHECK (holder IN ('a','b')),
+    day            TEXT NOT NULL,
+    day_count      INTEGER NOT NULL,
+    lifetime_count INTEGER NOT NULL,
+    PRIMARY KEY (user_id, holder)
+  );
+  `,
 ];
+
+/** Migrations (0-based index) that rebuild a referenced table and must run with foreign_keys OFF. */
+const FK_OFF = new Set([3]);
 
 export function openDb(dbPath: string): DB {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
@@ -195,9 +284,20 @@ export function openDb(dbPath: string): DB {
 function migrate(db: DB): void {
   const current = db.pragma('user_version', { simple: true }) as number;
   for (let v = current; v < MIGRATIONS.length; v++) {
-    db.transaction(() => {
-      db.exec(MIGRATIONS[v]!);
-      db.pragma(`user_version = ${v + 1}`);
-    })();
+    // SQLite's documented table-rebuild procedure: FKs off (outside the transaction), rebuild, check, FKs on.
+    const fkOff = FK_OFF.has(v);
+    if (fkOff) db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        db.exec(MIGRATIONS[v]!);
+        if (fkOff) {
+          const bad = db.pragma('foreign_key_check') as unknown[];
+          if (bad.length) throw new Error(`migration v${v + 1}: foreign key check failed`);
+        }
+        db.pragma(`user_version = ${v + 1}`);
+      })();
+    } finally {
+      if (fkOff) db.pragma('foreign_keys = ON');
+    }
   }
 }

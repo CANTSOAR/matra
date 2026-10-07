@@ -71,7 +71,9 @@ describe('understand: sample stories', () => {
   it('4. long rambling account', () => {
     const { s } = run(SAMPLES.rambling);
     expect(find(s, 'when.date')).toMatchObject({ value: { mode: 'date', date: '2026-09-12', approximate: false }, confidence: 'high' });
-    expect(find(s, 'where.place', (v) => v === 'his frat house')).toBeDefined();
+    // "a party at his frat house" is one place, not two.
+    expect(find(s, 'where.place', (v) => v === 'a party at his frat house')).toBeDefined();
+    expect(find(s, 'where.place', (v) => v === 'a party')).toBeUndefined();
     expect(find(s, 'person.list', (v) => has(v, 'name', 'Tyler'))?.kind).toBe('person_responsible');
     // Dana is the friend she went with — a witness, never the person responsible.
     expect(find(s, 'person.list', (v) => has(v, 'name', 'Dana'))).toBeUndefined();
@@ -438,6 +440,70 @@ describe('withEntries', () => {
     expect(r.narrative.freeRecall).toBe(OUT_OF_ORDER.map((e) => e.text).join('\n\n'));
     expect(r.narrative.entries?.map((e) => e.source)).toEqual(['typed', 'typed', 'voice']);
     expect(rec.narrative.entries).toBeUndefined();
+  });
+});
+
+describe('places: generic vs specific', () => {
+  const PARTY =
+    "It was around March 14, at a party at my coworker's apartment. The music was too loud and the hallway smelled like cologne.\n\n" +
+    'He said he\'d walk me to my car. I said "no thanks, I\'m fine" — twice.';
+
+  it('joins "a party at my coworker\'s apartment" into one place suggestion', () => {
+    const { e, s } = run(PARTY);
+    const places = s.filter((x) => x.target === 'where.place');
+    expect(places.map((p) => p.value)).toContain("a party at my coworker's apartment");
+    expect(places.map((p) => p.value)).not.toContain('a party');
+    expect(places.map((p) => p.value)).not.toContain("my coworker's apartment");
+    expect(src([e], places.find((p) => p.value === "a party at my coworker's apartment")!)).toBe("a party at my coworker's apartment");
+  });
+
+  it('offers "my coworker" as a gentle person / relationship suggestion', () => {
+    const { e, s } = run(PARTY);
+    const rel = find(s, 'person.list', (v) => has(v, 'relationship', 'my coworker'))!;
+    expect(rel).toBeDefined();
+    expect(rel.kind).toBe('relationship');
+    expect(rel.confidence).toBe('low');
+    expect(src([e], rel)).toBe('my coworker');
+    expect(rel.label).toMatch(/your coworker/);
+  });
+
+  it('suppresses a generic place when a specific one is in the same sentence', () => {
+    const { s } = run('We met at a bar and later he drove me to his apartment.');
+    const places = s.filter((x) => x.target === 'where.place').map((p) => p.value);
+    expect(places).toContain('his apartment');
+    expect(places).not.toContain('a bar');
+  });
+
+  it('still offers a generic place when that is all there is', () => {
+    const { s } = run('It happened at a party. He would not let me leave.');
+    expect(find(s, 'where.place')?.value).toBe('a party');
+  });
+});
+
+describe('dates: "the 14th"', () => {
+  it('resolves a day of the month to the nearest month where it already happened', () => {
+    // NOW is 2026-10-07: the 14th has not happened yet this month, so it is September 14.
+    const { e, s } = run('it was the 14th, he came over late.');
+    const d = find(s, 'when.date')!;
+    expect(d.value).toEqual({ mode: 'date', date: '2026-09-14', approximate: true });
+    expect(src([e], d)).toBe('the 14th');
+    expect(d.label).toMatch(/may have happened around Monday, September 14, 2026/);
+  });
+
+  it('uses this month when the day has passed', () => {
+    const { s } = run('it happened on the 3rd at his place.');
+    expect(find(s, 'when.date')?.value).toEqual({ mode: 'date', date: '2026-10-03', approximate: true });
+  });
+
+  it('uses a month she named earlier', () => {
+    const { s } = run('This was back in July. I think it was the 21st when he came over.');
+    expect(find(s, 'when.date', (v) => has(v, 'date', '2026-07-21'))).toBeDefined();
+  });
+
+  it('skips a day the month never has, and ordinals that are not dates', () => {
+    const { s } = run('it was the 31st. he lives on the 5th floor and it was the 2nd time he did it.');
+    const dates = s.filter((x) => x.target === 'when.date').map((x) => x.value);
+    expect(dates).toEqual([{ mode: 'date', date: '2026-08-31', approximate: true }]);
   });
 });
 

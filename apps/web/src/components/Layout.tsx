@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { runBeforeLock } from '../lib/beforeLock';
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import type { Role } from '@matra/shared';
 import { NEUTRAL_TITLE, QuickExitButton } from '../lib/quickExit';
@@ -18,8 +19,8 @@ export function DemoBanner() {
   if (!isDemoInstance()) return null;
   return (
     <div className="demo-banner" role="note" aria-label="Demo notice">
-      <strong>DEMO — do not enter real information.</strong> This is a demonstration server for partners and funders.
-      Use made-up details only; anything entered here may be deleted at any time.
+      <strong>DEMO — please don’t enter real information.</strong> This is a demonstration server for partners and
+      funders. Use made-up details only. Anything entered here may be deleted at any time.
     </div>
   );
 }
@@ -57,46 +58,60 @@ export function Layout() {
       <QuickExitButton />
       <DemoBanner />
       <header className="app-header">
-        <Link className="brand" to={role === 'attorney' ? '/attorney/cases' : session ? '/vault' : '/'}>
-          <span className="brand-mark" aria-hidden="true" />
-          Matra
-        </Link>
-        {role === 'survivor' && (
-          <nav className="nav" aria-label="Main">
-            <NavLink to="/vault" end>Your vault</NavLink>
-            <NavLink to="/vault/story">Your account</NavLink>
-            <NavLink to="/vault/evidence">Evidence</NavLink>
-            <NavLink to="/vault/brief">Incident summary</NavLink>
-            <NavLink to="/vault/share">Legal shield</NavLink>
-          </nav>
-        )}
-        {role === 'attorney' && (
-          <nav className="nav" aria-label="Main">
-            <NavLink to="/attorney/cases">Shared with you</NavLink>
-          </nav>
-        )}
-        <span className="header-spacer" />
-        {session && (
-          <button
-            type="button"
-            className="btn btn-quiet btn-small"
-            onClick={() => {
-              // land on a neutral page, not a "Welcome back" sign-in form that shows this device has an account
-              navigate(role === 'attorney' ? '/attorney' : '/', { replace: true });
-              void logout();
-            }}
-          >
-            Lock &amp; sign out
-          </button>
-        )}
+        <div className="app-header-inner">
+          <Link className="brand" to={role === 'attorney' ? '/attorney/cases' : session ? '/vault' : '/'}>
+            <span className="brand-mark" aria-hidden="true" />
+            Matra
+          </Link>
+          {role === 'survivor' && (
+            <nav className="nav" aria-label="Main">
+              <NavLink to="/vault" end data-testid="nav-home">Home</NavLink>
+              <NavLink to="/vault/story" data-testid="nav-story">My story</NavLink>
+              <NavLink to="/vault/evidence" data-testid="nav-evidence">Evidence</NavLink>
+              <NavLink to="/vault/brief" data-testid="nav-summary">Summary</NavLink>
+              <NavLink to="/vault/share" data-testid="nav-sharing">Sharing</NavLink>
+            </nav>
+          )}
+          {role === 'attorney' && (
+            <nav className="nav" aria-label="Main">
+              <NavLink to="/attorney/cases" data-testid="nav-cases">Shared with you</NavLink>
+            </nav>
+          )}
+          <span className="header-spacer" />
+          {session && (
+            <button
+              type="button"
+              className="btn btn-quiet btn-small lock-btn"
+              data-testid="lock-signout"
+              aria-label="Lock & sign out"
+              title="Lock your space and sign out"
+              onClick={async () => {
+                // finish a quick save of her draft first (bounded), then lock
+                await runBeforeLock();
+                // land on a neutral page, not a "Welcome back" sign-in form that shows this device has an account
+                navigate(role === 'attorney' ? '/attorney' : '/', { replace: true });
+                void logout();
+              }}
+            >
+              <span>Lock</span>
+              <span className="lock-long"> &amp; sign out</span>
+            </button>
+          )}
+        </div>
       </header>
       <main id="main" className="page" tabIndex={-1}>
         <Outlet />
       </main>
       <footer className="app-footer">
+        {role === 'attorney' ? (
+          <p className="footer-lead">Resources you can share with clients</p>
+        ) : (
+          <p className="footer-lead">You don’t have to go through this alone.</p>
+        )}
         <p>
-          Need help now? Call <a href="tel:911">911</a> · National Sexual Assault Hotline{' '}
-          <a href="tel:18006564673">1-800-656-4673</a> · <a href="https://online.rainn.org" target="_blank" rel="noreferrer noopener">online.rainn.org</a> ·{' '}
+          In danger right now? Call <a href="tel:911">911</a> · Free, private support 24/7:{' '}
+          <a href="tel:18006564673" style={{ whiteSpace: 'nowrap' }}>1-800-656-4673</a> or{' '}
+          <a href="https://online.rainn.org" target="_blank" rel="noreferrer noopener">online.rainn.org</a> ·{' '}
           <Link to="/safety">Safety tips</Link>
         </p>
       </footer>

@@ -26,11 +26,4 @@ describe('@matra/crypto', () => {
     const blob = await c.encryptBlob(new Uint8Array([1, 2, 3]), recordKey);
     expect(Array.from(await c.decryptBlob(blob, k3))).toEqual([1, 2, 3]);
   });
-
-  it('normalizes escrow identifiers so equivalent inputs match', async () => {
-    expect(await c.escrowIdentifierHash('email', ' John.Doe+x@GMAIL.com')).toBe(await c.escrowIdentifierHash('email', 'johndoe@gmail.com'));
-    expect(await c.escrowIdentifierHash('phone', '(201) 555-0100')).toBe(await c.escrowIdentifierHash('phone', '+1 201 555 0100'));
-    expect(await c.escrowIdentifierHash('social_handle', '@Bad_Guy', 'Instagram')).toBe(await c.escrowIdentifierHash('social_handle', 'bad_guy', 'instagram'));
-    expect(await c.escrowIdentifierHash('social_handle', 'bad_guy', 'tiktok')).not.toBe(await c.escrowIdentifierHash('social_handle', 'bad_guy', 'instagram'));
-  });
 });

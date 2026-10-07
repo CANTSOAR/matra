@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { createApp } from './app.js';
-import { WEB_DIST_DIR, loadPepper, resolveDbPath } from './config.js';
+import { WEB_DIST_DIR, loadOprfKey, loadOprfLimits, loadPepper, resolveDbPath } from './config.js';
 
 const production = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT) || 4000;
@@ -30,6 +30,9 @@ const app = createApp({
   webDir,
   demoBanner,
   trustProxy,
+  // Both OPRF key shares are loaded into this process for the MVP. See docs/SECURITY_WHITEPAPER.md for running them
+  // as separate services with separately held keys.
+  matching: { keyA: loadOprfKey('a'), keyB: loadOprfKey('b'), limits: loadOprfLimits() },
 });
 
 const onListen = () => {

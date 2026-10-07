@@ -9,24 +9,26 @@ import {
   QUICK_EXIT_HOST,
   RUN,
   SURVIVOR_PASS,
-  click,
   expect,
-  fields,
   hasExifGps,
   jpegWithGps,
   nav,
-  primary,
   registerSurvivor,
-  runIntake,
   sealFromReview,
+  storySafety,
+  addToStory,
+  openTopic,
+  chip,
+  fill,
+  savePage,
+  enough,
+  moreDetails,
+  storyMap,
   shot,
   signIn,
   signOut,
-  skip,
   test,
   tinyPdf,
-  type,
-  type Act,
 } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
@@ -40,94 +42,15 @@ const NARRATIVE =
   "We were at a party at a coworker's apartment. I remember the music was too loud and the hallway smelled like cologne.\n\n" +
   'He said he\'d walk me to my car… I said "no thanks, I\'m fine" — twice.\nI don\'t remember the drive home clearly.';
 
-const PERSON = (handle: string, name = 'R.'): Act =>
-  fields({
-    'Name, or what you call them': name,
-    'Did you know this person before?': { chip: 'Yes' },
-    'How you know them': 'coworker',
-    'Their phone number': '(555) 010-0199',
-    'Their social media name or handle': handle,
-    'Which app or site?': { select: 'instagram' },
-  });
-
-const sealYes: Act = async (page) => {
-  await page.locator('.intake-answer-area').getByRole('button', { name: 'Yes, seal it' }).click();
-  await primary(page);
-};
-
-const FULL_PLAN: Record<string, Act> = {
-  'safety.now': click("Yes, I'm safe"),
-  'about.name': type('J.'),
-  'about.pronouns': type('she/her'),
-  'about.language': type('English'),
-  'about.contactMethods': async (page) => {
-    await page.locator('.intake-answer-area').getByRole('button', { name: 'Text message' }).click();
-    await primary(page);
-  },
-  'about.phone': type('(555) 010-0100'),
-  'about.home': fields({ State: { select: 'NJ' }, County: 'Middlesex' }),
-  'when.date': async (page) => {
-    const a = page.locator('.intake-answer-area');
-    await a.getByRole('button', { name: 'Describe it in words' }).click();
-    await a.getByLabel('Describe when, in your own words').fill('around March 14, not sure of the exact day');
-    await primary(page);
-  },
-  'when.repeated': click('No'),
-  'when.time': type('late at night'),
-  'where.place': type("A party at a coworker's apartment"),
-  'where.area': fields({ 'City or town': 'New Brunswick', County: 'Middlesex', State: { select: 'NJ' } }),
-  'story.freeRecall': type(NARRATIVE),
-  'recall.sight': type('A dim hallway with a blue rug.'),
-  'recall.sound': type('The music was too loud.'),
-  'recall.smell': type('The hallway smelled like cologne.'),
-  'context.before': type('I was at the party with my roommate M.'),
-  'context.after': type('I got home and went to sleep. I texted M. the next morning.'),
-  'details.force': async (page) => {
-    await page.locator('.intake-answer-area').getByRole('button', { name: 'Being held, tied, or blocked from leaving' }).click();
-    await primary(page);
-  },
-  'details.forceWords': type('He stood in the doorway so I could not leave.'),
-  'details.strangulation': click("I'm not sure"),
-  'details.substances': async (page) => {
-    await page.locator('.intake-answer-area').getByRole('button', { name: 'I had been drinking' }).click();
-    await primary(page);
-  },
-  'details.incapacitated': click('No'),
-  'person.list': PERSON('@demo_handle_123'),
-  'person.escrow': sealYes,
-  'people.told': fields({
-    'Who you told': 'M. (roommate)',
-    'About when': 'the next morning',
-    'How you told them': { select: 'text' },
-    'What you remember saying': 'something bad happened last night',
-  }),
-  'medical.care': click('No'),
-  'prior.any': click('Yes'),
-  'prior.list': fields({
-    'Who you reported to': 'HR at my job',
-    'What kind of place was it?': { select: 'employer' },
-    'About when': 'a week later',
-  }),
-  'safety.access': click('Yes'),
-  'safety.protective': click("I'm not sure"),
-  'costs.intro': click('Skip this part'),
-  'goals.police': click("I'm not sure"),
-  'goals.attorney': click('Yes'),
-  'goals.compensation': click('Yes'),
-  'comp.mailing': fields({ 'City or town': 'New Brunswick', State: { select: 'NJ' }, 'ZIP code': '08901' }),
-  'comp.claimant': click('Yes, for myself'),
-  'goals.protective': click("I'm not sure"),
-  // deliberately skipped: legal name, date of birth, address, touch/taste, words said, witnesses, injuries, safety notes
-  'about.legalName': skip,
-  'about.dob': skip,
-};
+const COUNSELOR = 'counselor.demo';
+const COUNSELOR_PASS = 'demo-counselor-passphrase';
 
 async function openStory(page: Page) {
-  await nav(page, 'Your account');
-  await expect(page.locator('.intake-answer-area')).toBeVisible({ timeout: 60_000 });
+  await nav(page, 'My story');
+  await expect(page.locator('.space-root')).toBeVisible({ timeout: 60_000 });
 }
 
-test('1. survivor registers (18+ gate), completes intake (skips + a break), seals; dashboard shows ledger + verified', async ({ page }) => {
+test('1. survivor registers (18+ gate), tells her story "dump first", answers topics in any order, seals; dashboard shows ledger + verified', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Tell it once/ })).toBeVisible();
   await shot(page, '01-welcome');
@@ -147,44 +70,151 @@ test('1. survivor registers (18+ gate), completes intake (skips + a break), seal
   await shot(page, '02-dashboard-empty', { mobile: false });
   await openStory(page);
 
-  const seen = await runIntake(page, FULL_PLAN, {
-    'recall.sound': async (p) => {
-      await shot(p, '03-intake-midway');
-      await p.getByRole('button', { name: 'Take a break' }).click();
-      const dialog = p.getByRole('dialog', { name: 'Take a break' });
-      await expect(dialog).toBeVisible();
-      await shot(p, '04-take-a-break', { mobile: false });
-      await dialog.getByRole('button', { name: "I'm ready to keep going" }).click();
-      await expect(dialog).toBeHidden();
-    },
-  });
-  expect(seen).toContain('person.escrow');
+  // Safety first, before anything else.
+  await shot(page, '03-story-safety');
+  await storySafety(page, 'Yes');
 
-  // Review: words verbatim, skipped questions marked
-  const review = page.locator('.intake-review');
+  // Start anywhere: her words, verbatim.
+  await expect(page.getByRole('heading', { name: 'Start wherever feels right.' })).toBeVisible();
+  await addToStory(page, NARRATIVE);
+  expect(await page.locator('.space-journal .space-entry-text').first().textContent()).toBe(NARRATIVE);
+
+  // What I picked up: suggestions show the words they came from; she keeps one and sets one aside.
+  const picked = page.getByRole('region', { name: /what I picked up/i });
+  await expect(picked).toBeVisible({ timeout: 30_000 });
+  await expect(picked.locator('mark').first()).toBeVisible();
+  await shot(page, '03b-picked-up');
+  const cards = picked.locator('[data-suggestion-id]');
+  const dismissedId = (await cards.nth(1).getAttribute('data-suggestion-id'))!;
+  await cards.nth(1).getByRole('button', { name: 'Not right' }).click();
+  await expect(page.locator(`[data-suggestion-id="${dismissedId}"]`)).toHaveCount(0);
+  await cards.first().getByRole('button', { name: 'Keep' }).click();
+
+  // Her draft saves itself to her private space, quietly (no "save" card to remember).
+  await expect(page.getByTestId('vault-status')).toContainText('Saved to your private space', { timeout: 30_000 });
+
+  // A break is always one tap away.
+  await page.getByRole('button', { name: 'Take a break' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Take a break' });
+  await expect(dialog).toBeVisible();
+  await shot(page, '04-take-a-break', { mobile: false });
+  await dialog.getByRole('button', { name: "I'm ready to keep going" }).click();
+  await expect(dialog).toBeHidden();
+
+  // Only if she wants: topics in any order (a "later" one first).
+  await openTopic(page, 'details');
+  await chip(page, 'Were any of these part of what happened?', 'Being held, tied, or blocked from leaving');
+  await fill(page, { 'If you want, describe it in your own words.': 'He stood in the doorway so I could not leave.' });
+  await chip(page, /press on your neck or throat/, "I'm not sure");
+  await expect(page.locator('[data-topic-panel] .space-note').first()).toBeVisible(); // the gentle health note
+  await chip(page, /alcohol, drugs, or medicine/, 'I had been drinking');
+  await shot(page, '04b-topic-details');
+  await savePage(page);
+  await chip(page, /could not move, speak, or remember/, 'No');
+  await enough(page);
+
+  await openTopic(page, 'person');
+  await fill(page, { 'Name, or what you call them': 'R.', 'How you know them': 'coworker' });
+  await chip(page, 'Did you know this person before?', 'Yes');
+  await moreDetails(page);
+  await fill(page, {
+    'Their phone number': '(555) 010-0199',
+    'Their social media name or handle': '@demo_handle_123',
+    'Which app or site?': { select: 'instagram' },
+  });
+  await savePage(page);
+  await chip(page, 'R.', 'Yes, seal it');
+  await savePage(page);
+  await chip(page, 'Best way to reach you', 'Text message');
+  // how a legal options counselor may reach her if there is ever a match (sealed into her contact bundle)
+  await fill(page, { 'Phone number or email to use': '(555) 010-0100' });
+  await savePage(page);
+  await expect(page.getByText('That’s everything here. Thank you.')).toBeVisible();
+  await page.locator('[data-topic-panel]').getByRole('button', { name: 'Back to your story' }).last().click();
+
+  await openTopic(page, 'people');
+  await fill(page, {
+    'Who you told': 'M. (roommate)',
+    'About when': 'the next morning',
+    'How you told them': { select: 'text' },
+    'What you remember saying': 'something bad happened last night',
+  });
+  await savePage(page);
+  await enough(page);
+
+  await openTopic(page, 'reports');
+  await chip(page, 'Have you reported this anywhere?', 'Yes');
+  await savePage(page);
+  await fill(page, { 'Who you reported to': 'HR at my job', 'What kind of place was it?': { select: 'employer' }, 'About when': 'a week later' });
+  await savePage(page);
+
+  await openTopic(page, 'safety');
+  await chip(page, /know where you live, work, or go to school/, 'Yes');
+  await chip(page, 'Do you think you might want a protective order?', "I'm not sure");
+  await savePage(page);
+  await enough(page);
+
+  await openTopic(page, 'next');
+  await chip(page, 'Would you like help making a police report?', "I'm not sure");
+  await chip(page, 'Would you like to talk with a free lawyer about your options?', 'Yes');
+  await chip(page, 'Would you like help asking for victim compensation?', 'Yes');
+  await savePage(page);
+  await fill(page, { 'City or town': 'New Brunswick', State: { select: 'NJ' }, 'ZIP code': '08901' });
+  await savePage(page);
+  await chip(page, 'Are you applying for yourself?', 'Yes, for myself');
+  await savePage(page);
+  await enough(page);
+
+  await openTopic(page, 'you');
+  await fill(page, { 'What name would you like us to use for you?': 'J.', 'What pronouns do you use, if you would like to share?': 'she/her' });
+  await enough(page);
+
+  // A topic she chooses to skip says so.
+  await openTopic(page, 'costs');
+  await page.getByRole('button', { name: 'Skip this part' }).click();
+  if (!(await page.locator('[data-topic="costs"]').count())) await page.getByRole('button', { name: /Show all \d+ topics/ }).click();
+  await expect(page.locator('[data-topic="costs"]')).toContainText('Skipped');
+
+  // The story map shows where things stand, in words, and jumps anywhere.
+  const map = storyMap(page);
+  await expect(map.getByRole('button', { name: /^Your words\s*Filled$/ })).toBeVisible();
+  await expect(map.getByRole('button', { name: /^The person\s*Filled$/ })).toBeVisible();
+  if (await page.locator('[data-topic-panel]').count()) await enough(page);
+  await map.getByRole('button', { name: /^When & where/ }).click();
+  // (the date may already be filled from what she kept above — the topic opens at the first open question)
+  if (await page.locator('[data-topic-panel]').getByRole('group', { name: 'When did this happen?' }).count()) {
+    await chip(page, 'When did this happen?', 'Describe it in words');
+    await fill(page, { 'Describe when, in your own words': 'around March 14, not sure of the exact day' });
+  }
+  await chip(page, 'Did it happen more than once, or over a period of time?', 'No');
+  await fill(page, { 'Do you remember about what time of day it was?': 'late at night' });
+  await savePage(page);
+  await enough(page);
+  await shot(page, '04c-story-home');
+
+  // Review: her words verbatim, first.
+  await map.getByRole('button', { name: /^Review/ }).click();
+  const review = page.getByRole('region', { name: 'Here is everything you shared' });
   await expect(review).toBeVisible();
+  expect(await review.locator('.space-review-entry .space-verbatim').first().textContent()).toBe(NARRATIVE);
   await expect(review.getByText('Skipped', { exact: true }).first()).toBeVisible();
-  const narrativeDd = review.locator('dd.intake-verbatim').filter({ hasText: 'He said he' });
-  expect(await narrativeDd.textContent()).toBe(NARRATIVE);
   await shot(page, '05-review');
 
   await sealFromReview(page);
   await expect(page.getByText(/ledger entry #\d+/)).toBeVisible();
   await shot(page, '06-sealed', { mobile: false });
-  expect(seen).toEqual(expect.arrayContaining(['details.strangulationInfo', 'comp.mailing', 'wishes.access']));
-  expect(seen.indexOf('details.force')).toBeGreaterThan(seen.indexOf('story.freeRecall'));
 
-  await nav(page, 'Your vault');
-  const acct = page.locator('section', { has: page.getByRole('heading', { name: 'Your account of what happened' }) });
-  await expect(acct.getByText('Current sealed account')).toBeVisible({ timeout: 60_000 });
+  await nav(page, 'Home');
+  const acct = page.getByTestId('home-story');
+  await expect(acct.getByText('Current sealed version')).toBeVisible({ timeout: 60_000 });
   await expect(acct.getByText('Verified ✓')).toBeVisible();
   await expect(acct.getByText(/ledger entry #\d+/)).toBeVisible();
-  const escrow = page.locator('section', { has: page.getByRole('heading', { name: 'Sealed escrow' }) });
+  const escrow = page.getByTestId('home-escrow');
   // phone + handle; a bare initial ("R.") is too weak to seal
   await expect(escrow.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
   await expect(escrow.getByText('R. · social media handle (instagram)')).toBeVisible();
   // the client labels the seal (it can decrypt its own records); the server only knows "saved"
-  const activity = page.locator('section', { has: page.getByRole('heading', { name: 'Activity' }) });
+  const activity = page.getByTestId('home-activity');
   await expect(activity.getByText('You sealed your account')).toBeVisible();
   await shot(page, '07-dashboard');
 });
@@ -198,11 +228,11 @@ test('2. evidence: JPEG GPS is stripped and hashed; PDF warns metadata kept; re-
   expect(hasExifGps(jpeg)).toBe(true);
   await page.getByLabel('What is it? (optional)').fill('Photo of the hallway (fictional)');
   await page.getByLabel('Choose evidence files').setInputFiles({ name: 'hallway.jpg', mimeType: 'image/jpeg', buffer: jpeg });
-  const added = page.locator('section', { has: page.getByRole('heading', { name: 'Added just now' }) });
+  const added = page.getByTestId('evidence-just-added');
   const jpgRow = added.locator('li', { hasText: 'hallway.jpg' });
   await expect(jpgRow.getByText('Hidden details removed')).toBeVisible({ timeout: 60_000 });
   await expect(jpgRow.getByText(/SHA-256: [0-9a-f]{64}/)).toBeVisible();
-  await expect(page.getByText('Saved to your vault and attached to your draft account.')).toBeVisible();
+  await expect(page.getByText('Saved to your space and added to your draft story.')).toBeVisible();
 
   await page.getByLabel('Choose evidence files').setInputFiles({ name: 'texts-export.pdf', mimeType: 'application/pdf', buffer: tinyPdf() });
   const pdfRow = added.locator('li', { hasText: 'texts-export.pdf' });
@@ -211,10 +241,10 @@ test('2. evidence: JPEG GPS is stripped and hashed; PDF warns metadata kept; re-
   await shot(page, '08-evidence');
 
   // The stored copy really has no EXIF: decrypt it from the vault and download it.
-  await nav(page, 'Your vault');
+  await nav(page, 'Home');
   await nav(page, 'Evidence');
-  const vaultRow = page.locator('section', { has: page.getByRole('heading', { name: 'In your vault' }) }).locator('li', { hasText: 'hallway.jpg' });
-  await vaultRow.getByRole('button', { name: 'Decrypt & view' }).click();
+  const vaultRow = page.getByTestId('evidence-in-space').locator('li', { hasText: 'hallway.jpg' });
+  await vaultRow.getByRole('button', { name: 'Unlock & view' }).click();
   await expect(vaultRow.getByText('Verified ✓')).toBeVisible();
   const dl = page.waitForEvent('download');
   await vaultRow.getByRole('link', { name: 'Download' }).click();
@@ -224,18 +254,18 @@ test('2. evidence: JPEG GPS is stripped and hashed; PDF warns metadata kept; re-
 
   // Re-seal so the files are part of the sealed account (and shareable).
   await openStory(page);
-  await expect(page.getByText('2 evidence file(s) will be attached when you seal.')).toBeVisible();
-  await expect(page.locator('.intake-review')).toBeVisible();
+  await expect(page.getByText('2 files kept safely')).toBeVisible();
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
   await sealFromReview(page);
-  await nav(page, 'Your vault');
-  const acct = page.locator('section', { has: page.getByRole('heading', { name: 'Your account of what happened' }) });
-  await expect(acct.getByText('Current sealed account')).toBeVisible({ timeout: 60_000 });
-  await expect(acct.getByText(/2 evidence item\(s\)/).first()).toBeVisible();
+  await nav(page, 'Home');
+  const acct = page.getByTestId('home-story');
+  await expect(acct.getByText('Current sealed version')).toBeVisible({ timeout: 60_000 });
+  await expect(acct.getByText(/2 evidence files/).first()).toBeVisible();
 });
 
 test('3. incident summary: her words verbatim; summary + VCCO draft download as PDFs; "Download my data" zip', async ({ page }) => {
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
-  await nav(page, 'Incident summary');
+  await nav(page, 'Summary');
   const preview = page.locator('.brief-doc');
   await expect(preview).toBeVisible({ timeout: 60_000 });
   await expect(preview.getByRole('heading', { name: 'Incident Summary in the Survivor’s Own Words' })).toBeVisible();
@@ -264,8 +294,8 @@ test('3. incident summary: her words verbatim; summary + VCCO draft download as 
   }
 
   // Download my data: warned first, then one .zip decrypted on the device
-  await nav(page, 'Your vault');
-  const data = page.locator('section', { has: page.getByRole('heading', { name: 'Your data' }) });
+  await nav(page, 'Home');
+  const data = page.getByTestId('home-data');
   await data.getByRole('button', { name: 'Download my data' }).click();
   await expect(data.getByText('The downloaded file is not encrypted.')).toBeVisible();
   const dl = page.waitForEvent('download');
@@ -277,12 +307,12 @@ test('3. incident summary: her words verbatim; summary + VCCO draft download as 
   expect(zbuf.includes(Buffer.from('records.json'))).toBe(true);
   expect(zbuf.includes(Buffer.from('hallway.jpg'))).toBe(true);
   expect(zbuf.includes(Buffer.from('He said he'))).toBe(true); // her words, decrypted
-  await expect(data.getByText(/Downloaded matra-my-data-.*2 evidence file\(s\)/)).toBeVisible();
+  await expect(data.getByText(/Downloaded matra-my-data-.*2 evidence files/)).toBeVisible();
 });
 
 test('4. share with attorney → attorney decrypts + verifies → survivor sees access → revoke → attorney blocked', async ({ page }) => {
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
-  await nav(page, 'Legal shield');
+  await nav(page, 'Sharing');
   const card = page.locator('li.card', { hasText: ATTORNEY_NAME });
   await expect(card).toBeVisible({ timeout: 60_000 });
   await shot(page, '10-attorney-directory', { mobile: false });
@@ -317,12 +347,12 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
 
   // Survivor sees the access, then revokes
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
-  const activity = page.locator('section', { has: page.getByRole('heading', { name: 'Activity' }) });
+  const activity = page.getByTestId('home-activity');
   await expect(activity.getByText('Attorney opened your file').first()).toBeVisible({ timeout: 60_000 });
   await expect(activity.getByText('Attorney downloaded an evidence file').first()).toBeVisible();
   // one visit is logged once (not doubled by React StrictMode in dev)
   await expect(activity.getByText('Attorney opened your file')).toHaveCount(1);
-  const shares = page.locator('section', { has: page.getByRole('heading', { name: 'Who can see your file' }) });
+  const shares = page.getByTestId('home-shares');
   await expect(shares.getByText('Has access')).toBeVisible();
   await shot(page, '13-dashboard-shared');
   await shares.getByRole('button', { name: 'Revoke' }).click();
@@ -341,7 +371,7 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
 test('4b. attorney with the case open when access is revoked sees a clear message', async ({ browser, page }) => {
   // Survivor shares again
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
-  await nav(page, 'Legal shield');
+  await nav(page, 'Sharing');
   await page.locator('li.card', { hasText: ATTORNEY_NAME }).getByRole('button', { name: 'Review and decide' }).click();
   await page.getByLabel('This matches what the attorney told me.').check();
   await page.getByLabel('I agree to the statement above.').check();
@@ -359,8 +389,8 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await expect(att.getByRole('heading', { name: `Client: ${ALIAS_A}` })).toBeVisible({ timeout: 60_000 });
 
   // Survivor revokes
-  await nav(page, 'Your vault');
-  const shares = page.locator('section', { has: page.getByRole('heading', { name: 'Who can see your file' }) });
+  await nav(page, 'Home');
+  const shares = page.getByTestId('home-shares');
   await shares.getByRole('button', { name: 'Revoke' }).click();
   await shares.getByRole('button', { name: 'Yes, revoke access' }).click();
   await expect(shares.getByText('Has access')).toHaveCount(0);
@@ -375,28 +405,42 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await ctx.close();
 });
 
-test('5. escrow: two survivors name the same handle; both see only "Sealed"; attorney sees the match', async ({ page }) => {
-  // Survivor B names the same handle, different capitalization and without the @
+test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the counselor sees one matched group with two separate contact bundles', async ({ page }) => {
+  // Survivor B names the same Instagram profile as a URL (A typed "@demo_handle_123"), and a different phone number.
   await registerSurvivor(page, ALIAS_B);
   await openStory(page);
-  await runIntake(page, {
-    'safety.now': click("Yes, I'm safe"),
-    'person.list': PERSON('Demo_Handle_123', 'Ryan'),
-    'person.escrow': sealYes,
+  await storySafety(page, 'Yes');
+  await openTopic(page, 'person');
+  await fill(page, { 'Name, or what you call them': 'Ryan', 'How you know them': 'coworker' });
+  await chip(page, 'Did you know this person before?', 'Yes');
+  await moreDetails(page);
+  await fill(page, {
+    'Their phone number': '(555) 010-0177',
+    'Their social media name or handle': 'https://www.instagram.com/Demo_Handle_123/',
+    'Which app or site?': { select: 'instagram' },
   });
+  await savePage(page);
+  await chip(page, 'Ryan', 'Yes, seal it');
+  await savePage(page);
+  await chip(page, 'Best way to reach you', 'Text message');
+  await fill(page, { 'Phone number or email to use': '(555) 010-0300' });
+  await savePage(page);
+  await page.locator('[data-topic-panel]').getByRole('button', { name: 'Back to your story' }).last().click();
+  await storyMap(page).getByRole('button', { name: /^Review/ }).click();
   await sealFromReview(page);
-  await nav(page, 'Your vault');
-  const escrowB = page.locator('section', { has: page.getByRole('heading', { name: 'Sealed escrow' }) });
+  await expect(page.getByText(/sealed match could not be set up/)).toHaveCount(0);
+  await nav(page, 'Home');
+  const escrowB = page.getByTestId('home-escrow');
   await expect(escrowB.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
-  await expect(escrowB).not.toContainText(/match/i);
+  await expect(escrowB).not.toContainText(/matched|counselor has/i);
   await signOut(page);
 
   // Survivor A: still only "Sealed"; shares again
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
-  const escrowA = page.locator('section', { has: page.getByRole('heading', { name: 'Sealed escrow' }) });
+  const escrowA = page.getByTestId('home-escrow');
   await expect(escrowA.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
-  await expect(escrowA).not.toContainText(/match/i);
-  await nav(page, 'Legal shield');
+  await expect(escrowA).not.toContainText(/matched|counselor has/i);
+  await nav(page, 'Sharing');
   await page.locator('li.card', { hasText: ATTORNEY_NAME }).getByRole('button', { name: 'Review and decide' }).click();
   await page.getByLabel('This matches what the attorney told me.').check();
   await page.getByLabel('I agree to the statement above.').check();
@@ -404,11 +448,44 @@ test('5. escrow: two survivors name the same handle; both see only "Sealed"; att
   await expect(page.getByRole('heading', { name: `Shared with ${ATTORNEY_NAME}` })).toBeVisible({ timeout: 60_000 });
   await signOut(page);
 
+  // The attorney no longer learns anything about sealed matches.
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');
   await page.getByRole('link', { name: 'Open' }).first().click();
   await expect(page.getByRole('heading', { name: `Client: ${ALIAS_A}` })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole('heading', { name: 'Sealed escrow: independent match' })).toBeVisible();
-  await shot(page, '15-attorney-escrow-match');
+  await expect(page.getByRole('heading', { name: /Sealed escrow|independent match/i })).toHaveCount(0);
+  await expect(page.locator('main')).not.toContainText(/independent(ly)? (match|named)/i);
+  await page.getByTestId('lock-signout').click();
+  await expect(page.getByRole('heading', { name: 'For attorneys' })).toBeVisible();
+
+  // The legal options counselor (verified, seeded) signs in and sees exactly one matched group.
+  await page.goto('/');
+  await page.getByRole('link', { name: 'I’m an attorney' }).click();
+  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.getByLabel('Username').fill(COUNSELOR);
+  await page.getByLabel('Passphrase').fill(COUNSELOR_PASS);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('heading', { name: 'Matched sealed reports' })).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByTestId('counselor-ethics')).toContainText('not evidence');
+  const groups = page.getByTestId('counselor-group');
+  await expect(groups).toHaveCount(1);
+  await groups.getByRole('button', { name: 'Open with my private key' }).click();
+  await expect(groups.getByText('instagram:demo_handle_123')).toBeVisible({ timeout: 30_000 });
+  const people = groups.getByTestId('counselor-survivor');
+  await expect(people).toHaveCount(2);
+  // two separate contact bundles, never mixed
+  const a = people.filter({ hasText: '(555) 010-0100' });
+  const b = people.filter({ hasText: '(555) 010-0300' });
+  await expect(a).toHaveCount(1);
+  await expect(b).toHaveCount(1);
+  await expect(a).not.toContainText('(555) 010-0300');
+  await expect(b).not.toContainText('(555) 010-0100');
+  await expect(groups).not.toContainText(ALIAS_A);
+  await expect(groups).not.toContainText(ALIAS_B);
+  // an encrypted outreach note
+  await a.getByLabel('Note').fill('Texted after 6pm as asked.');
+  await a.getByRole('button', { name: 'Save note' }).click();
+  await expect(a.getByRole('listitem').filter({ hasText: 'Texted after 6pm as asked.' })).toContainText('Reached out', { timeout: 30_000 });
+  await shot(page, '15-counselor-match');
 });
 
 test('6. quick exit: button and triple-Esc leave to a neutral site; coming back shows welcome, no session', async ({ page }) => {
@@ -417,7 +494,7 @@ test('6. quick exit: button and triple-Esc leave to a neutral site; coming back 
   await page.waitForURL(`https://${QUICK_EXIT_HOST}/**`);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Tell it once/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Lock & sign out' })).toHaveCount(0);
+  await expect(page.getByTestId('lock-signout')).toHaveCount(0);
 
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
   await openStory(page);

@@ -1,0 +1,258 @@
+/* VoiceCapture — warm, calm, unhurried. Every token has a fallback so this renders before/without the theme. */
+.vc {
+  --vc-accent: var(--matra-accent, #a04f38);
+  --vc-accent-soft: var(--matra-accent-soft, #f7e8e0);
+  --vc-contrast: var(--matra-accent-contrast, #ffffff);
+  --vc-text: var(--matra-text, #2e2622);
+  --vc-muted: var(--matra-muted, #6a5d55);
+  --vc-surface: var(--matra-surface, #fffdf9);
+  --vc-bg: var(--matra-bg, #faf6f0);
+  --vc-border: var(--matra-border, #eadfd4);
+  --vc-radius: var(--matra-radius, 14px);
+  --vc-shadow: var(--matra-shadow, 0 4px 14px rgba(74, 50, 36, 0.08));
+  --vc-display: var(--matra-font-display, Georgia, 'Iowan Old Style', serif);
+  --vc-body: var(--matra-font-body, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif);
+  --vc-focus: var(--matra-focus, #7a3a26);
+  --vc-ease: var(--matra-ease, cubic-bezier(0.22, 0.61, 0.36, 1));
+  --vc-level: 0;
+
+  font-family: var(--vc-body);
+  color: var(--vc-text);
+  background: var(--vc-surface);
+  border: 1px solid var(--vc-border);
+  border-radius: var(--vc-radius);
+  box-shadow: var(--vc-shadow);
+  padding: clamp(1.25rem, 4vw, 2rem);
+  max-width: 40rem;
+  margin-inline: auto;
+}
+
+.vc-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.9rem;
+}
+.vc-review {
+  align-items: stretch;
+  text-align: start;
+}
+
+.vc-title {
+  font-family: var(--vc-display);
+  font-weight: 500;
+  font-size: clamp(1.35rem, 3.5vw, 1.7rem);
+  line-height: 1.25;
+  margin: 0;
+}
+.vc-lead {
+  margin: 0;
+  max-width: 34rem;
+  line-height: 1.6;
+  font-size: 1.05rem;
+}
+.vc-note {
+  margin: 0;
+  color: var(--vc-muted);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  max-width: 32rem;
+}
+
+/* The big, friendly microphone button. */
+.vc-mic {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 9.5rem;
+  height: 9.5rem;
+  margin: 0.75rem 0 0.25rem;
+  border-radius: 50%;
+  border: none;
+  background: var(--vc-accent);
+  color: var(--vc-contrast);
+  font: 600 1.05rem/1.2 var(--vc-body);
+  cursor: pointer;
+  box-shadow: 0 0 0 0.6rem var(--vc-accent-soft), var(--vc-shadow);
+  transition: transform 220ms var(--vc-ease), box-shadow 220ms var(--vc-ease);
+}
+.vc-mic:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 0.85rem var(--vc-accent-soft), var(--vc-shadow);
+}
+.vc-mic:focus-visible,
+.vc button:focus-visible,
+.vc-text:focus-visible,
+.vc-keep input:focus-visible {
+  outline: 3px solid var(--vc-focus);
+  outline-offset: 3px;
+}
+
+.vc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+  margin-top: 0.4rem;
+}
+.vc-review .vc-actions {
+  justify-content: flex-start;
+}
+
+/* Recording */
+.vc-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.vc-dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--vc-accent);
+  animation: vc-breathe 2.4s ease-in-out infinite;
+}
+.vc-dot.is-paused {
+  background: var(--vc-muted);
+  animation: none;
+}
+@keyframes vc-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Gentle level meter: five soft bars that rise with her voice (driven by --vc-level, 0..1). */
+.vc-meter {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 3rem;
+}
+.vc-meter span {
+  display: block;
+  width: 0.55rem;
+  border-radius: 999px;
+  background: var(--vc-accent);
+  opacity: 0.75;
+  height: calc(0.55rem + var(--vc-level) * var(--h, 2.4rem));
+  transition: height 120ms linear;
+}
+.vc-meter span:nth-child(1),
+.vc-meter span:nth-child(5) {
+  --h: 1.1rem;
+}
+.vc-meter span:nth-child(2),
+.vc-meter span:nth-child(4) {
+  --h: 1.8rem;
+}
+
+/* Progress */
+.vc-progress {
+  width: 100%;
+  max-width: 26rem;
+}
+.vc-bar {
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--vc-accent-soft);
+  overflow: hidden;
+}
+.vc-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--vc-accent);
+  transition: width 300ms var(--vc-ease);
+}
+.vc-progress-text {
+  margin: 0.4rem 0 0;
+  color: var(--vc-muted);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+.vc-partial {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--vc-muted);
+  font-style: italic;
+  line-height: 1.6;
+  max-height: 8.5rem;
+  overflow: hidden;
+  mask-image: linear-gradient(to top, transparent, #000 2.5rem);
+}
+
+/* Review */
+.vc-text {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 10rem;
+  padding: 0.85rem 1rem;
+  font: 1.05rem/1.6 var(--vc-body);
+  color: var(--vc-text);
+  background: var(--vc-bg);
+  border: 1px solid var(--matra-border-strong, #9c8a7e);
+  border-radius: calc(var(--vc-radius) - 4px);
+  resize: vertical;
+}
+.vc-keep {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  padding: 0.8rem 0.9rem;
+  border-radius: calc(var(--vc-radius) - 4px);
+  background: var(--vc-accent-soft);
+}
+.vc-keep input {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.15rem;
+  accent-color: var(--vc-accent);
+  flex: none;
+}
+.vc-keep label {
+  line-height: 1.45;
+  cursor: pointer;
+}
+.vc-keep-hint {
+  display: block;
+  color: var(--vc-muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 30rem) {
+  .vc-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  .vc-mic {
+    width: 8.5rem;
+    height: 8.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-mic,
+  .vc-bar > span,
+  .vc-meter span {
+    transition: none;
+  }
+  .vc-dot {
+    animation: none;
+  }
+  .vc-mic:hover {
+    transform: none;
+  }
+}

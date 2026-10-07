@@ -8,6 +8,9 @@ import { BriefPreview, downloadPdf, generateIncidentSummary } from '../integrati
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { formatBytes, shortHash, type VaultPayload } from '../lib/vault';
 
+const SCOPE_WORDS: Record<string, string> = { record: 'Written account', evidence: 'Evidence files', brief: 'Incident summary' };
+const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).join(' · ');
+
 export function AttorneyCases() {
   const { api, session, refreshProfile } = useRequiredSession();
   const shares = useAsync(() => api.listShares().then((r) => r.shares), [api]);
@@ -19,14 +22,17 @@ export function AttorneyCases() {
 
   return (
     <div className="stack-lg">
-      <PageTitle lead={profile ? `${profile.displayName}${profile.organization ? ` · ${profile.organization}` : ''}` : undefined}>
+      <PageTitle
+        eyebrow="Attorney portal"
+        lead={profile ? `${profile.displayName}${profile.organization ? ` · ${profile.organization}` : ''}` : undefined}
+      >
         Shared with you
       </PageTitle>
       {profile && !profile.verified && (
         <div className="card warn stack" role="status">
           <strong>Pending verification</strong>
           <p style={{ margin: 0 }}>
-            We’re verifying your bar admission. Until then you won’t appear to survivors. This usually takes 1–2 business days.
+            We’re verifying your bar admission. Until then, you won’t appear to survivors. This usually takes 1–2 business days.
           </p>
           <div>
             <button
@@ -47,26 +53,28 @@ export function AttorneyCases() {
           </div>
         </div>
       )}
-      <div className="card soft small stack">
+      <div className="card sage small stack">
         <p style={{ margin: 0 }}>
-          Your key fingerprint: <span className="fingerprint">{fp.data ?? '…'}</span>
+          <strong>Your key fingerprint:</strong> <span className="fingerprint">{fp.data ?? '…'}</span>
         </p>
-        <p style={{ margin: 0 }} className="muted">
-          A client may ask you to read this to them to confirm they’re sharing with you.
+        <p style={{ margin: 0 }}>
+          A client may ask you to read this to them, by phone or in person, to confirm they’re sharing with you.
         </p>
       </div>
       <section className="card stack" aria-labelledby="active">
         <h2 id="active">Active files</h2>
+        <p className="small muted">Each file was shared with you by a survivor, with their consent. Every time you open one, they can see it.</p>
         {shares.loading && <Loading />}
         {shares.error && <ErrorNote>{shares.error}</ErrorNote>}
         {shares.data && active.length === 0 && <p className="muted">No files have been shared with you yet.</p>}
         <ul className="list">
           {active.map((s) => (
             <li key={s.id} className="row" style={{ justifyContent: 'space-between' }}>
-              <span>
-                <strong>Shared file</strong>{' '}
+              <span style={{ minWidth: 0 }}>
+                <strong>Shared file</strong>
+                <br />
                 <span className="small muted">
-                  · {formatDate(s.createdAt)} · {s.scope.join(', ')}
+                  Shared {formatDate(s.createdAt)} · access until {formatDate(s.expiresAt)} · {scopeText(s.scope)}
                 </span>
               </span>
               <Link className="btn btn-small btn-primary" to={`/attorney/cases/${s.id}`}>
@@ -161,17 +169,36 @@ export function AttorneyCase() {
   return (
     <div className="stack-lg">
       <p>
-        <Link to="/attorney/cases">← All files</Link>
+        <Link className="back-link" to="/attorney/cases">← All files</Link>
       </p>
       {opened.loading && <Loading label="Fetching and decrypting with your private key…" />}
       {opened.error && <ErrorNote>{opened.error}</ErrorNote>}
       {opened.data && (
         <>
-          <PageTitle lead={`Shared ${formatDate(opened.data.bundle.share.createdAt)} · scope: ${opened.data.bundle.share.scope.join(', ')}`}>
-            Client: {opened.data.bundle.survivorAlias}
-          </PageTitle>
+          <PageTitle eyebrow="Shared file">Client: {opened.data.bundle.survivorAlias}</PageTitle>
+          <dl className="case-meta">
+            <div>
+              <dt>Shared</dt>
+              <dd>{formatDate(opened.data.bundle.share.createdAt)}</dd>
+            </div>
+            <div>
+              <dt>Access until</dt>
+              <dd>{formatDate(opened.data.bundle.share.expiresAt)}</dd>
+            </div>
+            <div>
+              <dt>Scope</dt>
+              <dd>{scopeText(opened.data.bundle.share.scope)}</dd>
+            </div>
+            <div>
+              <dt>Integrity</dt>
+              <dd>
+                <VerifyBadge verified={opened.data.ledgerOk} />
+              </dd>
+            </div>
+          </dl>
           <p className="card soft small" role="note">
-            Access logged and visible to your client. They can revoke access at any time.
+            Your access is logged and visible to your client. They can revoke it at any time. Please handle this file with
+            care — it’s their story, in their words.
           </p>
 
           <section className="card stack" aria-labelledby="consent">
@@ -179,14 +206,12 @@ export function AttorneyCase() {
             <div className="consent-text">{opened.data.bundle.share.consentStatement}</div>
           </section>
 
-          <EscrowNotice escrow={opened.data.bundle.escrow} />
-
           <section className="card stack" aria-labelledby="proof">
             <div className="section-title">
               <h2 id="proof">Integrity proof</h2>
               <VerifyBadge verified={opened.data.ledgerOk} />
             </div>
-            <dl className="small stack" style={{ margin: 0 }}>
+            <dl className="small proof">
               <div>
                 <dt className="muted">Recomputed SHA-256 of the sealed ciphertext</dt>
                 <dd className="mono" style={{ margin: 0 }}>{opened.data.recomputedHash}</dd>
@@ -253,38 +278,10 @@ export function AttorneyCase() {
   );
 }
 
-/**
- * Blind-escrow result. You (the verified attorney with an active share) are the only person Matra ever tells about a
- * match — the client's own app always shows "Sealed", so a perpetrator posing as a survivor can't self-check.
- * Counts cover only this client's own sealed identifiers; nothing about the other person is ever available.
+/*
+ * Sealed matching is no longer shown to attorneys: they never see match status or counts. Matches go only to a
+ * verified Legal Options Counselor (apps/web/src/counselor), who reaches out to each matched survivor separately.
  */
-function EscrowNotice({ escrow }: { escrow?: ShareBundle['escrow'] }) {
-  if (!escrow || escrow.sealedCount + escrow.matchedCount === 0) return null;
-  if (escrow.matchedCount > 0) {
-    return (
-      <section className="card care stack" aria-labelledby="escrow-match" role="note">
-        <h2 id="escrow-match">Sealed escrow: independent match</h2>
-        <p>
-          Another person independently sealed an identifier (such as a phone number, email, handle or full name) that
-          matches one this client sealed. Their identity is not shared with you or anyone. Discuss with your client how she’d like to proceed; a match is an investigative lead, not evidence.
-        </p>
-        <p className="small muted">
-          Your client’s app does not show match results — she has not been told. Please raise it with care, and only
-          when and how she is ready to hear it.
-        </p>
-      </section>
-    );
-  }
-  return (
-    <section className="card stack" aria-labelledby="escrow-sealed">
-      <h2 id="escrow-sealed">Sealed escrow</h2>
-      <p className="small muted">
-        Your client sealed {escrow.sealedCount === 1 ? 'one identifier' : `${escrow.sealedCount} identifiers`} in escrow. No one else has
-        independently named the same person so far.
-      </p>
-    </section>
-  );
-}
 
 function SharedBlob({ blob, item }: { blob: ShareBundle['blobs'][number]; item?: EvidenceItem }) {
   const { api, session } = useRequiredSession();

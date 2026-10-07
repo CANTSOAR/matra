@@ -13,6 +13,8 @@ export interface StoryEntry {
   /** Her words exactly as typed, or a transcript she reviewed and accepted. Never modified by software. */
   text: string;
   source: 'typed' | 'voice';
+  /** Set when she changed her own words while drafting (ISO). Sealed versions keep what they had. */
+  editedAt?: string;
 }
 
 /** Where in her own words a suggestion came from (character offsets into StoryEntry.text). */

@@ -21,10 +21,16 @@ describe('production web serving', () => {
     expect(res.type).toBe('text/html');
     expect(res.text).toContain('<div id="root">');
     expect(res.headers['content-security-policy']).toBe(WEB_CSP);
-    expect(WEB_CSP).toContain("script-src 'self'");
-    expect(WEB_CSP).toContain("connect-src 'self'");
+    // WebAssembly may compile (on-device transcription), but no JS eval and no inline script.
+    expect(WEB_CSP).toContain("script-src 'self' 'wasm-unsafe-eval';");
+    expect(WEB_CSP).toContain("worker-src 'self';");
+    expect(WEB_CSP).toContain("connect-src 'self';");
     expect(WEB_CSP).toContain("frame-ancestors 'none'");
-    expect(WEB_CSP).not.toMatch(/unsafe-inline|unsafe-eval/);
+    expect(WEB_CSP.replace("'wasm-unsafe-eval'", '')).not.toMatch(/unsafe-inline|unsafe-eval|https?:|\*/);
+    expect(WEB_CSP).not.toMatch(/(script|worker|connect)-src[^;]*(blob:|data:|https?:)/);
+    // The microphone is allowed for this origin only (voice capture); camera etc. stay off.
+    expect(res.headers['permissions-policy']).toContain('microphone=(self)');
+    expect(res.headers['permissions-policy']).toContain('camera=()');
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text).not.toContain('matra-demo-banner');
   });

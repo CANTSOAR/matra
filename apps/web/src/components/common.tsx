@@ -35,7 +35,7 @@ export function Loading({ label = 'Loading…' }: { label?: string }) {
 
 export function ErrorNote({ children }: { children: ReactNode }) {
   return (
-    <p className="error" role="alert">
+    <p className="error note-error" role="alert">
       {children}
     </p>
   );
@@ -44,11 +44,11 @@ export function ErrorNote({ children }: { children: ReactNode }) {
 export function VerifyBadge({ verified }: { verified: boolean | undefined }) {
   if (verified === undefined) return <span className="badge neutral">Not checked</span>;
   return verified ? (
-    <span className="badge ok" title="We recomputed the fingerprint of the sealed file and it matches the tamper-evident ledger.">
+    <span className="badge ok" title="We checked the sealed file’s fingerprint again, and it matches the tamper-evident record. Nothing has changed.">
       Verified ✓
     </span>
   ) : (
-    <span className="badge warn" title="The recomputed fingerprint does not match. Please contact support.">
+    <span className="badge warn" title="The fingerprint we checked doesn’t match the tamper-evident record. Please contact support.">
       Could not verify
     </span>
   );
@@ -61,13 +61,25 @@ export function formatDate(iso?: string): string {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-export function PageTitle({ children, lead }: { children: ReactNode; lead?: ReactNode }) {
+export function PageTitle({
+  children,
+  lead,
+  eyebrow,
+  testId,
+}: {
+  children: ReactNode;
+  lead?: ReactNode;
+  /** small label above the heading, e.g. the section name */
+  eyebrow?: ReactNode;
+  testId?: string;
+}) {
   return (
-    <header className="stack" style={{ marginBottom: 20 }}>
-      <h1 tabIndex={-1} data-autofocus>
+    <header className="page-title">
+      {eyebrow && <p className="eyebrow">{eyebrow}</p>}
+      <h1 tabIndex={-1} data-autofocus data-testid={testId}>
         {children}
       </h1>
-      {lead && <p className="muted">{lead}</p>}
+      {lead && <p className="lead">{lead}</p>}
     </header>
   );
 }

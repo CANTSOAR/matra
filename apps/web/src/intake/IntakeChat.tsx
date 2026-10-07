@@ -387,7 +387,7 @@ function MyAnswer({ step, draft, onChange }: { step: ScriptStep; draft: IntakeDr
   );
 }
 
-function Resources() {
+export function Resources() {
   return (
     <div className="intake-resources" role="region" aria-label={RESOURCES.heading}>
       <p className="intake-resources-heading">{RESOURCES.heading}</p>
@@ -587,7 +587,7 @@ function Review({
   );
 }
 
-function BreakPanel({ onClose }: { onClose: () => void }) {
+export function BreakPanel({ onClose }: { onClose: () => void }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     headingRef.current?.focus();

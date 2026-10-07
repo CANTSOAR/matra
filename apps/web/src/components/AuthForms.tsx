@@ -6,10 +6,10 @@ import { friendlyError, useSession, type Progress } from '../lib/session';
 import { US_STATES } from './common';
 
 const PROGRESS_TEXT: Record<Progress, string> = {
-  deriving: 'Deriving your keys on this device… this takes a few seconds on purpose — it makes your passphrase much harder to guess.',
+  deriving: 'Making your keys on this device… This takes a few seconds on purpose. It makes your passphrase much harder to guess.',
   generating: 'Creating your private sharing key…',
-  contacting: 'Talking to the server (it only ever sees locked data)…',
-  unlocking: 'Unlocking your vault…',
+  contacting: 'Talking to our server (it only ever sees locked data)…',
+  unlocking: 'Unlocking your space…',
 };
 
 function ProgressNote({ p }: { p: Progress | null }) {
@@ -27,6 +27,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
   const { register } = useSession();
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
+  const [preferredName, setPreferredName] = useState('');
   const [pass, setPass] = useState('');
   const [confirm, setConfirm] = useState('');
   const [show, setShow] = useState(false);
@@ -72,8 +73,11 @@ export function CreateAccountForm({ role }: { role: Role }) {
           acceptsProBono: proBono,
         };
       }
-      await register({ username, passphrase: pass, role, attorneyProfile, ageConfirmed18: adult }, setProgress);
-      navigate(role === 'attorney' ? '/attorney/cases' : '/vault', { replace: true });
+      await register(
+        { username, passphrase: pass, role, attorneyProfile, ageConfirmed18: adult, ...(role === 'survivor' && { preferredName }) },
+        setProgress,
+      );
+      navigate(role === 'attorney' ? '/attorney/cases' : '/vault', { replace: true, state: { firstVisit: true } });
     } catch (err) {
       setError(friendlyError(err));
     } finally {
@@ -95,12 +99,13 @@ export function CreateAccountForm({ role }: { role: Role }) {
   return (
     <form className="stack-lg" onSubmit={onSubmit} noValidate>
       <div className="card stack">
+        {role === 'survivor' && <h2>About you</h2>}
         <label className="field">
           <span>{role === 'attorney' ? 'Username' : 'Choose an alias'}</span>
           <span className="hint" id="alias-hint">
             {role === 'attorney'
               ? 'Used to sign in. Clients will see your display name and organization.'
-              : 'Please don’t use your real name or email. Something like “bluebird-42” is perfect — it keeps you anonymous even to us.'}
+              : 'This is what you’ll sign in with. Please don’t use your real name or email — something like “bluebird-42” is perfect. It keeps you anonymous, even to us.'}
           </span>
           <input
             autoComplete="username"
@@ -111,21 +116,43 @@ export function CreateAccountForm({ role }: { role: Role }) {
             autoCapitalize="none"
             required
             minLength={3}
+            data-testid="alias-input"
           />
         </label>
+        {role === 'survivor' && (
+          <label className="field">
+            <span>
+              What should we call you? <span className="hint">(optional)</span>
+            </span>
+            <span className="hint" id="name-hint">
+              It can be anything — a nickname is fine. It’s locked with the rest of your space, so only you will see it.
+            </span>
+            <input
+              autoComplete="off"
+              aria-describedby="name-hint"
+              value={preferredName}
+              onChange={(e) => setPreferredName(e.target.value)}
+              maxLength={60}
+              data-testid="preferred-name-input"
+            />
+          </label>
+        )}
       </div>
 
       <div className="card stack">
         <h2>Your passphrase</h2>
         <p>
-          Your passphrase is the only key to your vault. Everything is locked on this device before it is sent, so not even
+          Your passphrase is the only key to your space. Everything is locked on this device before it’s sent, so not even
           we can read it.
         </p>
         <div className="card warn stack" role="note">
-          <strong>We cannot reset this.</strong> If you lose it, your vault cannot be opened — that’s what keeps it safe.
+          <p style={{ margin: 0 }}>
+            <strong>We can’t reset it.</strong> If it’s lost, your space can’t be opened — by you or anyone else. That’s
+            what keeps it safe.
+          </p>
         </div>
         <div className="stack">
-          <span className="small muted">A strong option, generated on your device just now:</span>
+          <span className="small muted">Here’s a strong one, made on your device just now:</span>
           <div className="passphrase-suggestion" aria-live="polite">
             {suggestion}
           </div>
@@ -162,7 +189,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
           <span style={{ width: pass ? STRENGTH_WIDTH[strength.level] : '0%' }} />
         </div>
         <p id="strength" className="small muted" aria-live="polite">
-          {pass ? strength.message : 'Five random words are easier to remember and harder to guess than a short password.'}
+          {pass ? strength.message : 'Five random words are easier to remember — and harder to guess — than a short password.'}
         </p>
         <label className="field">
           <span>Type it again</span>
@@ -191,8 +218,8 @@ export function CreateAccountForm({ role }: { role: Role }) {
         <div className="card stack">
           <h2>Matra is for adults</h2>
           <p className="small muted">
-            Matra is built for people 18 and older. If you are worried a child or teenager is being hurt, the Childhelp
-            hotline (1-800-422-4453) can help, or call 911 if someone is in danger right now.
+            Matra is made for people 18 and older. If you’re worried a child or teenager is being hurt, the Childhelp
+            hotline (1-800-422-4453) can help. If someone is in danger right now, call 911.
           </p>
           <label className="check">
             <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} />
@@ -205,6 +232,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
               onClick={() => {
                 // Nothing typed here has been sent or stored; drop it from memory too.
                 setUsername('');
+                setPreferredName('');
                 setPass('');
                 setConfirm('');
                 setUnder18(true);
@@ -217,7 +245,7 @@ export function CreateAccountForm({ role }: { role: Role }) {
       )}
 
       {role === 'attorney' && (
-        <fieldset className="card stack" style={{ border: '1px solid var(--matra-border)' }}>
+        <fieldset className="card stack">
           <legend>
             <h2 style={{ margin: 0 }}>Professional profile</h2>
           </legend>
@@ -268,11 +296,22 @@ export function CreateAccountForm({ role }: { role: Role }) {
       <ProgressNote p={progress} />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row">
-        <button className="btn btn-primary" type="submit" disabled={!valid || !!progress} aria-disabled={!valid || !!progress}>
-          {progress ? 'Working…' : role === 'attorney' ? 'Create attorney account' : 'Create my private vault'}
+        <button
+          className="btn btn-primary btn-large"
+          type="submit"
+          disabled={!valid || !!progress}
+          aria-disabled={!valid || !!progress}
+          data-testid="create-account"
+        >
+          {progress ? 'Working…' : role === 'attorney' ? 'Create attorney account' : 'Create my private space'}
         </button>
         <Link to={role === 'attorney' ? '/attorney/signin' : '/signin'}>I already have one</Link>
       </div>
+      {role === 'survivor' && !valid && !progress && (
+        <p className="small muted" style={{ marginTop: 8 }}>
+          When your alias, passphrase and the two checkboxes are done, this button will be ready.
+        </p>
+      )}
     </form>
   );
 }
@@ -285,7 +324,7 @@ export function Under18Notice({ onBack }: { onBack: () => void }) {
         Thank you for telling us
       </h2>
       <p>
-        Matra is built for adults, so we can’t create a vault for you here. That isn’t because what happened to you
+        Matra is built for adults, so we can’t make a space for you here. That isn’t because what happened to you
         matters less. It matters, and you deserve help that is made for you.
       </p>
       <p>These free, private services help young people, any time of day or night:</p>
@@ -344,21 +383,35 @@ export function SignInForm({ role }: { role: Role }) {
     <form className="card stack" onSubmit={onSubmit}>
       {lockReason === 'idle' && (
         <p className="card soft" role="status">
-          We locked your vault after 15 minutes without activity, to keep it safe. Sign in again to continue.
+          We locked your space after 15 minutes of quiet, to keep it safe. Everything is still here — sign in again
+          whenever you’re ready.
         </p>
       )}
       <label className="field">
         <span>{role === 'attorney' ? 'Username' : 'Alias'}</span>
-        <input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} spellCheck={false} autoCapitalize="none" />
+        <input
+          autoComplete="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          spellCheck={false}
+          autoCapitalize="none"
+          data-testid="signin-username"
+        />
       </label>
       <label className="field">
         <span>Passphrase</span>
-        <input type="password" autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} />
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={pass}
+          onChange={(e) => setPass(e.target.value)}
+          data-testid="signin-passphrase"
+        />
       </label>
       <ProgressNote p={progress} />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row">
-        <button className="btn btn-primary" type="submit" disabled={!!progress}>
+        <button className="btn btn-primary" type="submit" disabled={!!progress} data-testid="signin-submit">
           {progress ? 'Unlocking…' : 'Unlock'}
         </button>
         <Link to={role === 'attorney' ? '/attorney/register' : '/start'}>Create an account</Link>

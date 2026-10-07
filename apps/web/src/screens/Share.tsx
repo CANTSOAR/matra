@@ -14,7 +14,7 @@ const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 export const SHARE_DISCLAIMER =
-  'This does not report anything to police. You can revoke access at any time, and access ends on its own on the expiry date (you can renew it); revoking or expiry stops future access but cannot un-see what was already viewed.';
+  'This does not report anything to police. You can revoke access at any time. Access also ends on its own on the expiry date, unless you renew it. Revoking or expiry stops future access, but cannot undo what was already viewed.';
 
 export function buildConsentStatement(p: {
   alias: string;
@@ -48,28 +48,39 @@ function useFingerprint(jwk?: JsonWebKey) {
   return fp;
 }
 
+function initials(name: string): string {
+  const words = name.replace(/^Demo\s*—\s*/, '').replace(/,.*$/, '').split(/\s+/).filter(Boolean);
+  return ((words[0]?.[0] ?? '') + (words.length > 1 ? words[words.length - 1][0] : '')).toUpperCase() || '·';
+}
+
 function AttorneyCard({ a, onChoose }: { a: AttorneyProfile; onChoose(): void }) {
   const fp = useFingerprint(a.publicKey);
   return (
-    <li className="card stack">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h3 style={{ margin: 0 }}>{a.displayName}</h3>
-        <span className="badge ok">Verified attorney</span>
+    <li className="card stack attorney-card">
+      <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'nowrap', gap: 16 }}>
+        <span className="avatar" aria-hidden="true">
+          {initials(a.displayName)}
+        </span>
+        <div style={{ minWidth: 0, flex: 1 }} className="stack">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h3 style={{ margin: 0 }}>{a.displayName}</h3>
+            <span className="badge ok">Verified attorney</span>
+          </div>
+          {a.organization && <p style={{ margin: 0 }}>{a.organization}</p>}
+          <p className="small muted" style={{ margin: 0 }}>
+            Licensed in {a.jurisdictions.join(', ') || '—'}
+            {a.practiceAreas.length > 0 && <> · {a.practiceAreas.join(', ')}</>}
+            {a.acceptsProBono && <> · Takes pro bono (free) cases</>}
+          </p>
+        </div>
       </div>
-      {a.organization && <p style={{ margin: 0 }}>{a.organization}</p>}
-      <p className="small muted" style={{ margin: 0 }}>
-        Licensed in {a.jurisdictions.join(', ') || '—'}
-        {a.practiceAreas.length > 0 && <> · {a.practiceAreas.join(', ')}</>}
-        {a.acceptsProBono && <> · Accepts pro bono (free) cases</>}
-      </p>
-      <details>
-        <summary className="small">
-          Key fingerprint: <span className="fingerprint">{fp || '…'}</span>
-        </summary>
-        <p className="small muted">
-          This is a short code for the attorney’s personal encryption key. Your file will be locked so only that key can
-          open it. If you want to be extra sure, ask the attorney (by phone or in person) to read their fingerprint to you —
-          it should match exactly.
+      <details className="disclosure small">
+        <summary>Their key fingerprint</summary>
+        <p className="fingerprint" style={{ margin: '8px 0 4px' }}>{fp || '…'}</p>
+        <p className="small muted" style={{ margin: 0 }}>
+          This short code stands for the attorney’s personal encryption key. Your file will be locked so only that key can
+          open it. To be extra sure, ask the attorney (by phone or in person) to read their fingerprint to you — it should
+          match exactly.
         </p>
       </details>
       <div>
@@ -95,17 +106,17 @@ export function Share() {
   if (done) {
     return (
       <div className="stack-lg">
-        <PageTitle>Shared with {done.attorney.displayName}</PageTitle>
-        <div className="card soft stack" role="status">
+        <PageTitle eyebrow="Done">Shared with {done.attorney.displayName}</PageTitle>
+        <div className="card sage stack" role="status">
           <p>
-            Your file was encrypted on this device for {done.attorney.displayName} only, at {formatDate(done.at)}. Every time
-            they open it, you’ll see it in your activity.
+            Your file was locked on this device for {done.attorney.displayName} only, at {formatDate(done.at)}. Every time
+            they open it, you’ll see it in your activity on Home.
           </p>
-          <p>{SHARE_DISCLAIMER}</p>
+          <p style={{ margin: 0 }}>{SHARE_DISCLAIMER}</p>
         </div>
         <div className="row">
           <Link className="btn btn-primary" to="/vault">
-            Back to your vault
+            Back to Home
           </Link>
         </div>
       </div>
@@ -118,24 +129,28 @@ export function Share() {
 
   return (
     <div className="stack-lg">
-      <PageTitle lead="If you want legal help, you can share your sealed file with a verified pro-bono attorney. Nothing is shared until you say yes on the next screen.">
-        Your legal shield
+      <PageTitle
+        eyebrow="Sharing"
+        testId="share-title"
+        lead="If you’d like legal help, you can share your sealed story with a verified volunteer or legal-aid attorney, at no cost to you. Nothing is shared until you say yes on the next screen."
+      >
+        Legal help, on your terms
       </PageTitle>
-      {vault.loading && <Loading label="Opening your vault…" />}
+      {vault.loading && <Loading label="Opening your space…" />}
       {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
       {!vault.loading && !current && !vault.error && (
         <div className="card stack">
-          <p>You’ll be able to share once you’ve sealed your account.</p>
+          <p>Once your story is sealed, you’ll be able to share it here — only if you want to.</p>
           <div>
             <Link className="btn btn-primary" to="/vault/story">
-              Go to your account
+              Go to my story
             </Link>
           </div>
         </div>
       )}
       {current && (
         <>
-          <div className="card stack">
+          <div className="card soft stack">
             <label className="field">
               <span>Show attorneys licensed in</span>
               <select value={effectiveState} onChange={(e) => setStateFilter(e.target.value)}>
@@ -151,9 +166,12 @@ export function Share() {
           {attorneys.loading && <Loading />}
           {attorneys.error && <ErrorNote>{attorneys.error}</ErrorNote>}
           {attorneys.data && attorneys.data.length === 0 && (
-            <p className="muted">No verified attorneys listed for this state yet. Try “All states”, or call 1-800-656-4673 for a referral.</p>
+            <p className="muted">
+              No verified attorneys are listed for this state yet. Try “All states”, or call 1-800-656-4673 and an advocate
+              can help you find one.
+            </p>
           )}
-          <ul className="list stack" style={{ padding: 0 }}>
+          <ul className="list cards">
             {attorneys.data?.map((a) => <AttorneyCard key={a.userId} a={a} onChoose={() => setChosen(a)} />)}
           </ul>
         </>
@@ -235,7 +253,7 @@ function Consent({
 
   return (
     <div className="stack-lg">
-      <PageTitle lead="Take your time. Nothing happens until you press the button at the bottom.">
+      <PageTitle eyebrow="Sharing" lead="Take your time. Nothing happens until you press the button at the bottom.">
         Share with {attorney.displayName}?
       </PageTitle>
       <div className="card warn stack">
@@ -243,21 +261,21 @@ function Consent({
           <strong>{SHARE_DISCLAIMER}</strong>
         </p>
       </div>
-      <section className="card warn stack" aria-labelledby="fp-h">
+      <section className="card stack" aria-labelledby="fp-h">
         <h2 id="fp-h">Check the attorney’s key</h2>
         <p>
           Your file will be locked so only the key with this fingerprint can open it. Ask {attorney.displayName} (by phone
-          or in person, not by this app) to read their fingerprint to you.
+          or in person, not through this app) to read their fingerprint to you.
         </p>
-        <p className="fingerprint" style={{ fontSize: '1.2em' }}>{fp || '…'}</p>
+        <p className="fingerprint fingerprint-big card warm">{fp || '…'}</p>
         <label className="check">
           <input type="checkbox" checked={fpConfirmed} disabled={!fp} onChange={(e) => setFpConfirmed(e.target.checked)} />
           <span>This matches what the attorney told me.</span>
         </label>
       </section>
-      <fieldset className="card stack" style={{ border: '1px solid var(--matra-border)' }}>
+      <fieldset className="card stack">
         <legend>
-          <h2 style={{ margin: 0 }}>What do you want to share?</h2>
+          <h2 style={{ margin: 0 }}>What would you like to share?</h2>
         </legend>
         <label className="check">
           <input type="checkbox" checked disabled />
@@ -281,25 +299,25 @@ function Consent({
           <span>{SCOPE_LABEL.brief}</span>
         </label>
       </fieldset>
-      <label className="stack">
-        <span>How long should access last?</span>
+      <label className="card field">
+        <span>How long should they have access?</span>
         <select value={expiresInDays} onChange={(e) => setExpiresInDays(Number(e.target.value))}>
           <option value={30}>30 days</option>
           <option value={90}>90 days (default)</option>
           <option value={180}>180 days</option>
           <option value={365}>1 year</option>
         </select>
-        <span className="small muted">You can renew or revoke at any time. Expiry stops future access only.</span>
+        <span className="hint">You can renew or take back access at any time. When access ends, it stops future access only.</span>
       </label>
       <section className="card stack" aria-labelledby="consent-h">
         <h2 id="consent-h">Your consent, word for word</h2>
-        <p className="small muted">This exact text is saved with the share so there’s a clear record of what you agreed to.</p>
+        <p className="small muted">This exact text is saved with the share, so there’s a clear record of what you agreed to.</p>
         {statement ? <div className="consent-text">{statement}</div> : <Loading label="Preparing…" />}
         <label className="check">
           <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
           <span>I agree to the statement above.</span>
         </label>
-        {busy && <Loading label="Encrypting your file for this attorney on your device…" />}
+        {busy && <Loading label="Locking your file for this attorney, on your device…" />}
         {error && <ErrorNote>{error}</ErrorNote>}
         <div className="row">
           <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !fpConfirmed || !statement || busy}>

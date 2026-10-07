@@ -63,6 +63,49 @@ export function displayDate(isoDate: string): string {
   return `${WEEKDAYS[wd]}, ${MONTHS[m - 1]} ${d}, ${y}`;
 }
 
+const ORDINAL_DAY =
+  /\bthe\s+(\d{1,2})(?:st|nd|rd|th)\b(?!\s*(?:of\b|floor|time|grade|street|st\b|ave|avenue|row|place|century|amendment|person|guy|one|drink|shot|beer|week|day|year|month|birthday|period|hour|round|try|attempt|-?\s*(?:largest|biggest|best)))/gi;
+
+const MONTH_NAME_RE =
+  /\b(?:(january|february|april|june|july|august|september|october|november|december)|(March|May)|(jan|feb|apr|jun|jul|aug|sept?|oct|nov|dec)\.?)\b/gi;
+
+/** The last month she named before `idx` in this piece (1–12), if any. "may"/"march" count only capitalized. */
+function monthNamedBefore(text: string, idx: number): number | undefined {
+  MONTH_NAME_RE.lastIndex = 0;
+  let found: number | undefined;
+  let m: RegExpExecArray | null;
+  while ((m = MONTH_NAME_RE.exec(text)) && m.index < idx) {
+    if (m[2] && !/^[A-Z]/.test(m[2])) continue;
+    const w = m[0].toLowerCase().slice(0, 3);
+    const i = MONTHS.findIndex((x) => x.toLowerCase().startsWith(w));
+    if (i >= 0) found = i + 1;
+  }
+  return found;
+}
+
+/** Day `day` in `month` (latest one not in the future), or in the nearest month where it already happened. */
+export function resolveDayOfMonth(day: number, ref: Date, month?: number): string | undefined {
+  const refY = ref.getFullYear();
+  const refM = ref.getMonth() + 1;
+  const refN = dayNum(refY, refM, ref.getDate());
+  const valid = (y: number, m: number) => fromDayNum(dayNum(y, m, day)).d === day;
+  if (month) {
+    for (const y of [refY, refY - 1]) if (valid(y, month) && dayNum(y, month, day) <= refN) return iso(y, month, day);
+    return undefined;
+  }
+  let y = refY;
+  let m = refM;
+  for (let i = 0; i < 13; i++) {
+    if (valid(y, m) && dayNum(y, m, day) <= refN) return iso(y, m, day);
+    m -= 1;
+    if (m === 0) {
+      m = 12;
+      y -= 1;
+    }
+  }
+  return undefined;
+}
+
 const chronoCache = new Map<string, chrono.ParsedResult[]>();
 function parse(text: string, ref: Date): chrono.ParsedResult[] {
   const k = `${ref.getTime()}|${text}`;
@@ -157,6 +200,29 @@ export function scanDates(ctx: Ctx, sent: Sent): { dates: DateHit[]; times: Time
         dates.push({ start: a, end: b, hedged, answer: { mode: 'text', text: text.slice(a, b) }, confidence: hedgeConfidence('medium', h), display: text.slice(a, b) });
       }
     }
+  }
+
+  // "the 14th": a day of the month with no month. Use a month she named earlier in this piece, else the
+  // nearest month in which that day has already happened. Approximate, since the month is a guess.
+  ORDINAL_DAY.lastIndex = 0;
+  let od: RegExpExecArray | null;
+  while ((od = ORDINAL_DAY.exec(st))) {
+    const s = sent.start + od.index;
+    const e = s + od[0].length;
+    if (dates.some((d) => s < d.end && e > d.start) || inQuote(ctx, s)) continue;
+    const day = Number(od[1]);
+    if (day < 1 || day > 31) continue;
+    const resolved = resolveDayOfMonth(day, ctx.ref, monthNamedBefore(text, s));
+    if (!resolved) continue;
+    const s0 = expandHedgeLeft(text, s, sent.start);
+    const [a, b] = trimSpan(text, s0, e);
+    const h = hedge(text, sent, a, b);
+    dates.push({
+      start: a, end: b, hedged: h !== 'none',
+      answer: { mode: 'date', date: resolved, approximate: true },
+      confidence: hedgeConfidence('medium', h),
+      display: displayDate(resolved),
+    });
   }
 
   VAGUE.lastIndex = 0;

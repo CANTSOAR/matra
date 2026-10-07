@@ -17,3 +17,6 @@ compiled_resources/**
 !compiled_resources/READING_GUIDE.md
 !compiled_resources/*/SOURCES.md
 !compiled_resources/05_advisory_board_governance/CONTACTS.md
+
+# On-device speech model + ONNX Runtime wasm (fetched by `npm run fetch-models`, never committed)
+apps/web/public/models/

@@ -32,6 +32,7 @@ What is inside
 --------------
 records.json            Every version of your account and every saved draft, decrypted,
                         with its vault ID, SHA-256 fingerprint and ledger (timestamp) entry.
+                        Also your preferences (such as the name you asked us to call you).
 evidence/manifest.json  One entry per evidence file: original name, type, size, the SHA-256
                         recorded when you added it, and whether this copy still matches it.
 evidence/...            The evidence files themselves (as stored — with hidden details removed
@@ -49,7 +50,7 @@ To check a file has not changed, compute its SHA-256 and compare it with the man
 export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alias: string, now: Date = new Date()): Promise<DataExport> {
   const at = now.toISOString();
   const [vault, { blobs }, escrow, shares, audit] = await Promise.all([
-    loadVault(api, masterKey),
+    loadVault(api, masterKey, { includeProfile: true }),
     api.listBlobs(),
     api.listEscrow().catch(() => ({ entries: [] })),
     api.listShares().catch(() => ({ shares: [] })),
@@ -60,7 +61,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     .sort((a, b) => a.meta.createdAt.localeCompare(b.meta.createdAt))
     .map((r) => ({
       id: r.meta.id,
-      kind: r.payload.kind === 'final' ? 'sealed account' : 'saved draft',
+      kind: r.payload.kind === 'final' ? 'sealed account' : r.payload.kind === 'profile' ? 'your preferences' : 'saved draft',
       savedAt: r.payload.savedAt,
       createdAt: r.meta.createdAt,
       supersedes: r.meta.supersedes,
@@ -119,7 +120,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
   return {
     zip: createZip(files),
     fileName: `matra-my-data-${at.slice(0, 10)}.zip`,
-    recordCount: records.length,
+    recordCount: records.filter((r) => r.kind !== 'your preferences').length,
     evidenceCount: entries.length,
     problems,
   };

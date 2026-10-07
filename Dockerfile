@@ -18,6 +18,8 @@ COPY apps/web/package.json apps/web/
 RUN npm ci --no-audit --no-fund
 COPY packages packages
 COPY apps apps
+# `npm run build` first fetches + verifies the on-device speech model into apps/web/public/models (pinned, sha256-checked).
+COPY scripts scripts
 RUN npm run build && npm prune --omit=dev --no-audit --no-fund
 
 # ── runtime: non-root, only what the server needs ──

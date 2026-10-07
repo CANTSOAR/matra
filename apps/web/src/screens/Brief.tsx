@@ -56,17 +56,21 @@ export function Brief() {
 
   return (
     <div className="stack-lg">
-      <PageTitle lead="Your sealed account, organized in your own words, that you can bring to police, an advocate, or a lawyer — if and when you decide to. Downloading it doesn’t send it anywhere.">
+      <PageTitle
+        eyebrow="Summary"
+        testId="summary-title"
+        lead="Your sealed story, organized in your own words, to bring to police, an advocate or a lawyer — if and when you decide to. Downloading it doesn’t send it anywhere."
+      >
         Incident summary
       </PageTitle>
-      {vault.loading && <Loading label="Opening your vault…" />}
+      {vault.loading && <Loading label="Opening your space…" />}
       {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
       {!vault.loading && !vault.error && sealed.length === 0 && (
         <div className="card stack">
-          <p>You’ll be able to prepare an incident summary after you seal your account.</p>
+          <p>Once your story is sealed, you can prepare a summary here. There’s no rush.</p>
           <div>
             <Link className="btn btn-primary" to="/vault/story">
-              Go to your account
+              Go to my story
             </Link>
           </div>
         </div>
@@ -76,7 +80,7 @@ export function Brief() {
           <div className="card stack">
             {sealed.length > 1 && (
               <label className="field">
-                <span>Which sealed version?</span>
+                <span>Which sealed version would you like to use?</span>
                 <select value={chosen.meta.id} onChange={(e) => setSelectedId(e.target.value)}>
                   {sealed.map((r) => (
                     <option key={r.meta.id} value={r.meta.id}>
@@ -107,7 +111,7 @@ export function Brief() {
               </button>
             </div>
             <p className="small muted">
-              The NJ Victims of Crime Compensation draft is pre-filled for you to review — it is not submitted.
+              The NJ Victims of Crime Compensation draft is filled in for you to review. It isn’t sent or submitted anywhere.
             </p>
             {error && <ErrorNote>{error}</ErrorNote>}
           </div>

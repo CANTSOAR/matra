@@ -49,7 +49,7 @@ Deploying a demo instance (Docker / Render): see [docs/DEPLOY.md](docs/DEPLOY.md
 | `attorney.nj1` | Verified attorney (NJ) | `demo-attorney-passphrase` |
 | `attorney.ny1` | Verified attorney (NY) | `demo-attorney-passphrase` |
 | `attorney.nj2` | Verified attorney (NJ/NY) | `demo-attorney-passphrase` |
-| `counselor.demo` | Legal Options Counselor (matching demo; arrives with the matching rebuild) | `demo-counselor-passphrase` |
+| `counselor.demo` | Legal Options Counselor (sealed-matching demo; sign in via "I’m an attorney" or `/counselor`) | `demo-counselor-passphrase` |
 
 All names and organizations are fictional and labelled "Demo —". For a guided walkthrough, see [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
@@ -58,10 +58,12 @@ All names and organizations are fictional and labelled "Demo —". For a guided 
 | Variable | Purpose |
 |---|---|
 | `MATRA_DB_PATH` | SQLite database location (default `apps/server/data/matra.db`) |
-| `MATRA_PEPPER` | Server secret for escrow HMACs, at least 32 characters. **Required in production.** In development one is generated in `apps/server/data/pepper.key` |
+| `MATRA_PEPPER` | Server secret (used for enumeration-resistant fake login salts), at least 32 characters. **Required in production.** In development one is generated in `apps/server/data/pepper.key` |
 | `MATRA_CORS_ORIGINS` | Comma-separated allowed origins (rarely needed; the Vite dev server proxies `/api`) |
 | `MATRA_DEMO_BANNER` | `1` shows a "DEMO — do not enter real information" banner on every page (production serving) |
 | `MATRA_TRUST_PROXY` | Number of reverse-proxy hops to trust for client IPs (rate limiting), e.g. `1` on Render |
+| `MATRA_OPRF_KEY_A`, `MATRA_OPRF_KEY_B` (or `_FILE` variants) | The two sealed-matching OPRF key shares. In production run them in separate services and keep them secret; in development each is generated in `apps/server/data/oprf-key-{a,b}.key`. `MATRA_REQUIRE_OPRF_KEYS=1` makes a missing key fatal |
+| `MATRA_OPRF_PER_DAY`, `MATRA_OPRF_LIFETIME` | Per-account rate limits on matching evaluations (defaults 10/day, 50 lifetime) |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | `1` auto-verifies new attorney accounts. **Development only.** Otherwise use `npm run -w @matra/server verify-attorney -- <username>` |
 
 Don't deploy it for real use yet.

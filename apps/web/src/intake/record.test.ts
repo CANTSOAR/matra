@@ -252,3 +252,20 @@ describe('script', () => {
     expect(all).not.toMatch(/\bwhy\b/);
   });
 });
+
+describe('sealed match: unique identifiers only', () => {
+  const person = (values: Record<string, string>) => [{ id: 'p1', values }];
+  it('never opts in on a name alone, and does not offer the choice', () => {
+    const d = draftWith({ 'person.list': person({ name: 'Ryan Smith' }), 'person.escrow': { p1: 'yes' } });
+    expect(draftToRecord(d).perpetrators[0].escrowOptIn).toBe(false);
+    expect(STEPS.find((s) => s.id === 'person.escrow')!.showIf!(d)).toBe(false);
+  });
+  it('opts in with a phone / email / handle, and then asks how a counselor may reach her', () => {
+    const d = draftWith({ 'person.list': person({ name: 'R.', phone: '555' }), 'person.escrow': { p1: 'yes' } });
+    expect(draftToRecord(d).perpetrators[0].escrowOptIn).toBe(true);
+    expect(STEPS.find((s) => s.id === 'person.matchContact')!.showIf!(d)).toBe(true);
+    const words = STEPS.find((s) => s.id === 'person.escrow')!.say.join(' ');
+    expect(words).toMatch(/legal options counselor — not the police, not your school/);
+    expect(words).toMatch(/not unique enough/);
+  });
+});

@@ -10,7 +10,8 @@
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @matra/server\" \"npm run dev -w @matra/web\"",
-    "build": "npm run build -w @matra/web",
+    "fetch-models": "node scripts/fetch-models.mjs",
+    "build": "node scripts/fetch-models.mjs && npm run build -w @matra/web",
     "start": "npm run start -w @matra/server",
     "test": "npm test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",

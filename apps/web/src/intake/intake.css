@@ -1,36 +1,34 @@
 /* Matra — intake chat. Themeable via --matra-* custom properties; calm fallbacks below. */
 
 .intake-root {
-  --_bg: var(--matra-bg, #f5f7f6);
-  --_surface: var(--matra-surface, #ffffff);
-  --_text: var(--matra-text, #1f2a2c);
-  --_muted: var(--matra-muted, #5b6b6e);
-  --_accent: var(--matra-accent, #2f7d78);
+  --_bg: var(--matra-bg, #faf6f0);
+  --_surface: var(--matra-surface, #fffdf9);
+  --_text: var(--matra-text, #2e2622);
+  --_muted: var(--matra-muted, #6a5d55);
+  --_accent: var(--matra-accent, #a04f38);
   --_accent-contrast: var(--matra-accent-contrast, #ffffff);
-  --_border: var(--matra-border, #d5dfdd);
+  --_border: var(--matra-border-strong, #9c8a7e);
+  --_hairline: var(--matra-border, #eadfd4);
   --_radius: var(--matra-radius, 14px);
-  --_bot-bg: color-mix(in srgb, var(--_accent) 9%, var(--_surface));
-  --_focus: color-mix(in srgb, var(--_accent) 70%, var(--_text));
+  --_bot-bg: var(--matra-warm-soft, #fbeee2);
+  --_focus: var(--matra-focus, #7a3a26);
 
-  background: var(--_bg);
+  background: transparent;
   color: var(--_text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--matra-font-body, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif);
   font-size: 1.0625rem;
-  line-height: 1.55;
+  line-height: 1.6;
   min-height: 100%;
   box-sizing: border-box;
 }
-
-@media (prefers-color-scheme: dark) {
-  .intake-root {
-    --_bg: var(--matra-bg, #121a1b);
-    --_surface: var(--matra-surface, #1b2526);
-    --_text: var(--matra-text, #e6eeec);
-    --_muted: var(--matra-muted, #9fb0ae);
-    --_accent: var(--matra-accent, #6cc3bb);
-    --_accent-contrast: var(--matra-accent-contrast, #0f1d1c);
-    --_border: var(--matra-border, #31403f);
-  }
+.intake-root h1,
+.intake-root h2,
+.intake-root h3,
+.intake-title,
+.intake-phase-title,
+.intake-review-title {
+  font-family: var(--matra-font-display, Georgia, serif);
+  font-weight: 500;
 }
 
 .intake-root *,
@@ -57,7 +55,7 @@
   top: 0;
   z-index: 2;
   background: var(--_bg);
-  border-bottom: 1px solid var(--_border);
+  border-bottom: 1px solid var(--_hairline);
   padding: 12px 16px 8px;
 }
 .intake-header-row {
@@ -182,12 +180,12 @@
 }
 .intake-bubble-bot {
   background: var(--_bot-bg);
-  border: 1px solid var(--_border);
+  border: 1px solid var(--_hairline);
   border-bottom-left-radius: 4px;
   align-self: flex-start;
 }
 .intake-current .intake-bubble-bot {
-  animation: intake-in 280ms ease-out both;
+  animation: intake-in 280ms var(--matra-ease, ease-out) both;
 }
 .intake-bubble-me {
   background: var(--_accent);
@@ -343,11 +341,11 @@
 }
 .intake-btn {
   min-height: 48px;
-  padding: 10px 18px;
-  border-radius: var(--_radius);
-  border: 1px solid transparent;
+  padding: 10px 20px;
+  border-radius: var(--matra-radius-pill, 999px);
+  border: 1.5px solid transparent;
   font: inherit;
-  font-weight: 500;
+  font-weight: 650;
   cursor: pointer;
   text-decoration: none;
   display: inline-flex;

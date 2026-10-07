@@ -69,6 +69,13 @@ const VALID_SUBSTANCES = new Set<string>(SUBSTANCE_OPTIONS.map((o) => o.value));
 const VALID_PHYSICAL = new Set<string>(PHYSICAL_EVIDENCE_OPTIONS.map((o) => o.value));
 const VALID_AGENCY = new Set<string>(AGENCY_TYPE_OPTIONS.map((o) => o.value));
 
+/** How she would like a legal options counselor to reach her if there is ever a match (only if she opted in). */
+export function matchContactOf(draft: IntakeDraft): { method?: string; detail?: string; notes?: string } | undefined {
+  const r = asRecord(answerOf(draft, 'person.matchContact'));
+  const out = { method: keep(r.method), detail: keep(r.detail), notes: keep(r.notes) };
+  return compact(out);
+}
+
 /**
  * Pure: turn a draft into the IntakeRecord contract.
  * - Skipped / blank / hidden answers become `undefined`, never ''.
@@ -107,7 +114,8 @@ export function draftToRecord(draft: IntakeDraft, now: Date = new Date()): Intak
         knownToSurvivor: v.known === 'yes',
         physicalDescription: keep(v.description),
         identifiers,
-        escrowOptIn: escrow[p.id] === 'yes' && identifiers.length > 0,
+        // Only unique identifiers (email / phone / handle) can be matched; a name alone never opts in.
+        escrowOptIn: escrow[p.id] === 'yes' && identifiers.some((i) => i.kind !== 'full_name' && i.kind !== 'other'),
         address: keep(v.address),
         workplace: keep(v.workplace),
         vehicle: keep(v.vehicle),

@@ -1,6 +1,7 @@
 import { MemoryRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AttorneyCase, AttorneyCases } from './attorney/Attorney';
 import { Layout, RequireSession } from './components/Layout';
+import { CounselorGate, CounselorPortal, CounselorSignIn, RequireCounselor, SurvivorMatching } from './counselor';
 import { SessionProvider } from './lib/session';
 import { Brief } from './screens/Brief';
 import { Dashboard } from './screens/Dashboard';
@@ -20,7 +21,7 @@ import { Story } from './screens/Story';
 export function AppRoutes() {
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route element={<CounselorGate><Layout /></CounselorGate>}>
         <Route index element={<Welcome />} />
         <Route path="safety" element={<SafetyTips />} />
         <Route path="start" element={<StartScreen />} />
@@ -31,12 +32,16 @@ export function AppRoutes() {
         <Route path="vault/evidence" element={<RequireSession role="survivor"><Evidence /></RequireSession>} />
         <Route path="vault/brief" element={<RequireSession role="survivor"><Brief /></RequireSession>} />
         <Route path="vault/share" element={<RequireSession role="survivor"><Share /></RequireSession>} />
+        <Route path="vault/matching" element={<RequireSession role="survivor"><SurvivorMatching /></RequireSession>} />
 
         <Route path="attorney" element={<AttorneyLanding />} />
         <Route path="attorney/register" element={<AttorneyRegisterScreen />} />
         <Route path="attorney/signin" element={<AttorneySignInScreen />} />
         <Route path="attorney/cases" element={<RequireSession role="attorney"><AttorneyCases /></RequireSession>} />
         <Route path="attorney/cases/:id" element={<RequireSession role="attorney"><AttorneyCase /></RequireSession>} />
+
+        <Route path="counselor" element={<CounselorSignIn />} />
+        <Route path="counselor/matches" element={<RequireCounselor><CounselorPortal /></RequireCounselor>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

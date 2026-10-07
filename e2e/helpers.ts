@@ -81,8 +81,8 @@ export async function registerSurvivor(page: Page, alias: string, pass = SURVIVO
   await page.getByLabel('Type it again').fill(pass);
   await page.getByLabel(/written my passphrase down/).check();
   await page.getByLabel(/I am 18 or older/).check();
-  await page.getByRole('button', { name: 'Create my private vault' }).click();
-  await expect(page.getByRole('heading', { name: 'Your vault' })).toBeVisible({ timeout: 90_000 });
+  await page.getByTestId('create-account').click();
+  await expect(page.getByTestId('home-title')).toBeVisible({ timeout: 90_000 });
 }
 
 export async function signIn(page: Page, user: string, pass: string, role: 'survivor' | 'attorney' = 'survivor') {
@@ -97,14 +97,14 @@ export async function signIn(page: Page, user: string, pass: string, role: 'surv
   }
   await page.getByLabel('Passphrase').fill(pass);
   await page.getByRole('button', { name: 'Unlock' }).click();
-  await expect(page.getByRole('heading', { name: role === 'attorney' ? 'Shared with you' : 'Your vault' })).toBeVisible({
-    timeout: 90_000,
-  });
+  await expect(
+    role === 'attorney' ? page.getByRole('heading', { name: 'Shared with you' }) : page.getByTestId('home-title'),
+  ).toBeVisible({ timeout: 90_000 });
 }
 
 export async function signOut(page: Page) {
   const attorney = await page.getByRole('link', { name: 'Shared with you' }).count();
-  await page.getByRole('button', { name: 'Lock & sign out' }).click();
+  await page.getByTestId('lock-signout').click();
   await expect(page.getByRole('heading', { name: attorney ? 'For attorneys' : /Tell it once/ })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Lock & sign out' })).toHaveCount(0);
 }
@@ -228,4 +228,70 @@ export function tinyPdf(): Buffer {
       '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n4 0 obj<</Author(Demo Author)/Producer(Demo)>>endobj\n' +
       'trailer<</Root 1 0 R/Info 4 0 R>>\n%%EOF\n',
   );
+}
+
+// ───────────── story space driver (the "dump first" flow) ─────────────
+
+const panel = (page: Page) => page.locator('[data-topic-panel]');
+
+/** Safety comes first: "Yes" / "No" / "Not sure". */
+export async function storySafety(page: Page, answer: 'Yes' | 'No' | 'Not sure' = 'Yes') {
+  await expect(page.getByRole('heading', { name: /are you somewhere safe right now/i })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: answer, exact: true }).click();
+}
+
+/** Type a piece of her story (verbatim) and add it. */
+export async function addToStory(page: Page, text: string) {
+  const box = page.getByLabel('What you would like to share');
+  if (!(await box.count())) await page.getByRole('button', { name: /Add more/ }).click();
+  await page.getByLabel('What you would like to share').fill(text);
+  await page.getByRole('button', { name: 'Add to my story' }).click();
+}
+
+export async function openTopic(page: Page, id: string) {
+  // From inside a finished topic, go back to the story first.
+  if (await panel(page).count()) await panel(page).getByRole('button', { name: 'Back to your story' }).first().click();
+  await expect(panel(page)).toHaveCount(0);
+  const card = page.locator(`[data-topic="${id}"]`);
+  if (!(await card.count())) await page.getByRole('button', { name: /Show all \d+ topics/ }).click();
+  await card.click();
+  await expect(panel(page)).toHaveAttribute('data-topic-panel', id);
+}
+
+/** Pick a chip under a question (question text = the group's name). */
+export async function chip(page: Page, question: string | RegExp, option: string) {
+  await panel(page).getByRole('group', { name: question }).getByRole('button', { name: option, exact: true }).click();
+}
+
+/** Fill labelled fields on the open topic page (inputs/textareas, or { select }). */
+export async function fill(page: Page, values: Record<string, string | { select: string }>) {
+  const p = panel(page);
+  for (const [label, v] of Object.entries(values)) {
+    const el = p.getByLabel(label, { exact: true });
+    if (typeof v === 'string') await el.fill(v);
+    else await el.selectOption(v.select);
+  }
+}
+
+export async function savePage(page: Page) {
+  await panel(page).getByRole('button', { name: 'Save and continue' }).click();
+}
+export async function skipPage(page: Page) {
+  await panel(page).getByRole('button', { name: 'Skip', exact: true }).click();
+}
+/** "That's enough for now" — keeps what she typed and goes back to her story. */
+export async function enough(page: Page) {
+  await panel(page).getByRole('button', { name: 'That’s enough for now' }).click();
+  await expect(panel(page)).toHaveCount(0);
+}
+/** Open "More details, only if you know them" on the person page (open by default on wide screens). */
+export async function moreDetails(page: Page) {
+  const toggle = panel(page).getByRole('button', { name: 'More details, only if you know them' }).first();
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
+/** The story map (left rail on desktop). */
+export function storyMap(page: Page) {
+  return page.getByRole('navigation', { name: 'Your story map' });
 }

@@ -9,6 +9,18 @@ export interface TranscriptResult {
   /** Rough language guess, if the model reports one. */
   language?: string;
   durationSec: number;
+  /**
+   * Her choice in the review step: also keep the original recording (the Blob passed alongside) encrypted in
+   * her vault as evidence. When false/absent the parent should discard the Blob. Default: off.
+   */
+  keepAudio?: boolean;
+}
+
+export interface VoiceCaptureProps {
+  onTranscript: (r: TranscriptResult, audio: Blob) => void;
+  onCancel: () => void;
+  /** Longest single recording, seconds. Default 30 minutes. */
+  maxSeconds?: number;
 }
 
 /**

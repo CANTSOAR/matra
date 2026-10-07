@@ -87,7 +87,7 @@ export const PHASES: Phase[] = [
 // ───────────────────────── Words used on buttons and around the screen ─────────────────────────
 
 export const UI = {
-  appTitle: 'Your account',
+  appTitle: 'My story',
   progress: (n: number, total: number, title: string) => `Part ${n} of ${total}: ${title}`,
   sectionsMenu: 'All sections',
   takeBreak: 'Take a break',
@@ -120,6 +120,7 @@ export const UI = {
     approxSuffix: ' (approximate)',
   },
   escrow: {
+    notMatchable: "Names aren't unique enough to match safely. Add their email, phone, or social handle if you know it.",
     yes: 'Yes, seal it',
     no: 'No, thank you',
     unsure: "I'm not sure yet",
@@ -432,7 +433,12 @@ const formFieldFilled = (id: string, key: string) => (d: IntakeDraft) => {
   const a = answerOf(d, id);
   return !!a && typeof a === 'object' && !Array.isArray(a) && !('mode' in a) && ((a as Record<string, string>)[key] ?? '').trim() !== '';
 };
-const PERSON_IDENTIFIER_KEYS = ['name', 'email', 'phone', 'handle', 'otherId'];
+/**
+ * Only unique identifiers can be matched. A name alone is never enough (names are shared by many people),
+ * so the sealed-match choice is only offered for a person with an email, phone number, or social handle.
+ */
+export const MATCHABLE_KEYS = ['email', 'phone', 'handle'];
+const PERSON_IDENTIFIER_KEYS = MATCHABLE_KEYS;
 const anyPersonHasIdentifier = (d: IntakeDraft) => {
   const a = answerOf(d, 'person.list');
   return (
@@ -911,13 +917,42 @@ export const STEPS: ScriptStep[] = [
     showIf: anyPersonHasIdentifier,
     say: [
       'There is one more thing you can choose, if you want. It is called a sealed match.',
-      'If you turn it on, the name, email, phone, or handle you gave is turned into a sealed code on this device. Nobody can read it — not us, not anyone.',
-      'If someone else, on their own, names the same person, we will not show it in this app. That keeps this tool safe, so no one can use it to find out if they have been named.',
-      'Instead, if you choose to share your file with an attorney, that attorney will be told. They will never learn who the other person is, and neither will you.',
-      'Your attorney can talk it through with you, when you are ready. Nobody sees your name or what you wrote.',
+      'If you turn it on, the email, phone number, or social handle you gave is turned into a sealed code on this device. Nobody can read it — not us, not anyone.',
+      'Names are not used for this. Many people share a name, so a name alone is not unique enough to match safely.',
+      'If someone else names the same person, a trained legal options counselor — not the police, not your school — will reach out privately to talk about your options. You decide everything after that.',
+      'You will never see a match in this app, and neither will anyone else. That keeps this tool safe, so no one can use it to find out if they have been named.',
       'Nothing else happens unless you decide. It is completely okay to say no.',
     ],
     label: 'Sealed match',
+  },
+
+  {
+    id: 'person.matchContact',
+    phase: 'person',
+    kind: 'form',
+    showIf: (d) => {
+      const a = answerOf(d, 'person.escrow');
+      return !!a && typeof a === 'object' && !Array.isArray(a) && Object.values(a as Record<string, string>).includes('yes');
+    },
+    say: [
+      'If there is ever a match, how would you like the legal options counselor to reach you?',
+      'Only they would use this, only if there is a match, and only privately.',
+    ],
+    label: 'How a counselor can reach you about a match',
+    fields: [
+      {
+        key: 'method',
+        label: 'Best way to reach you',
+        type: 'choice',
+        options: [
+          { value: 'phone', label: 'Phone call' },
+          { value: 'text', label: 'Text message' },
+          { value: 'email', label: 'Email' },
+        ],
+      },
+      { key: 'detail', label: 'Phone number or email to use', type: 'text' },
+      { key: 'notes', label: 'Anything they should know', type: 'text', hint: "For example: 'only after 6pm' or 'don't leave a message'." },
+    ],
   },
 
   // ── (g) Witnesses & people she told ──
@@ -1212,7 +1247,7 @@ export const STEPS: ScriptStep[] = [
     id: 'goals.attorney',
     phase: 'wishes',
     kind: 'choice',
-    say: ['Would you like to talk with a free (pro bono) lawyer about your options?'],
+    say: ['Would you like to talk with a free lawyer about your options?'],
     label: 'Talk with a free lawyer',
     options: YES_NO_UNSURE,
   },
@@ -1326,3 +1361,133 @@ export const STEPS: ScriptStep[] = [
     say: ['Thank you. You did something hard today.'],
   },
 ];
+
+// ───────────────────────── Story space: gentler questions (src/space) ─────────────────────────
+//
+//  The open "story space" asks the same questions as the interview above (same ids, same answers),
+//  but only when she opens a topic, a few at a time. These are the shorter, warmer versions it shows.
+//  `q` is the question. `hint` is the small line under it. Same style guide as above.
+
+export const SPACE_PROMPTS: Record<string, { q: string; hint?: string }> = {
+  'when.date': { q: 'When did this happen?', hint: "An exact date, a rough idea, or 'not sure' are all okay." },
+  'when.repeated': { q: 'Did it happen more than once, or over a period of time?' },
+  'when.lastDate': { q: 'When was the most recent time?' },
+  'when.ongoing': { q: 'Is it still happening now?' },
+  'when.time': { q: 'Do you remember about what time of day it was?', hint: "Anything helps, like 'late at night' or 'after dinner'." },
+  'where.place': { q: 'Where did it happen? Describe it any way you can.', hint: "For example: 'his apartment' or 'in a car'." },
+  'where.address': { q: 'If you know the address or the name of the place, you can add it.' },
+  'where.area': { q: 'What city and state was it in?', hint: 'If it was at a school or college, you can add that too.' },
+
+  'context.before': { q: 'What was happening earlier, before it happened?', hint: 'Where you were, who you were with.' },
+  'context.after': { q: 'What happened afterward?', hint: 'There is no right way to react. Whatever you did is okay.' },
+  'context.words': {
+    q: 'Do you remember anything that was said?',
+    hint: 'By them, or by anyone else. Word for word if you can. It is okay to write words that are hard to read.',
+  },
+  'recall.sight': { q: 'What do you remember seeing?', hint: 'The room, the light, colors, clothing — anything at all.' },
+  'recall.sound': { q: 'What do you remember hearing?', hint: 'Voices, music, a TV, traffic.' },
+  'recall.smell': { q: 'Do you remember any smells?', hint: 'Like smoke, alcohol, cologne, or food.' },
+  'recall.touch': { q: 'Do you remember how anything felt?', hint: 'The temperature, a surface, fabric. Only what you are comfortable with.' },
+  'recall.taste': { q: 'Do you remember any tastes?', hint: 'Like a drink that tasted different than usual.' },
+  'recall.more': {
+    q: 'Is there anything else that comes to mind?',
+    hint: 'Some people find it helps to start from the last thing they remember and think backward.',
+  },
+
+  'details.force': { q: 'Were any of these part of what happened?', hint: 'Choose any that fit, or none.' },
+  'details.forceWords': { q: 'If you want, describe it in your own words.' },
+  'details.strangulation': { q: 'Did anyone press on your neck or throat, or put anything around it?' },
+  'details.substances': {
+    q: 'Were alcohol, drugs, or medicine part of that day or night, for anyone?',
+    hint: "Choose any that fit, or none. Nothing you share here changes that it wasn't your fault.",
+  },
+  'details.incapacitated': { q: 'Were there times you could not move, speak, or remember — or times you were asleep or passed out?' },
+  'details.substancesWords': { q: 'Is there anything you want to add about this, in your own words?' },
+  'context.types': {
+    q: 'Some people like to choose words for what happened. Some do not.',
+    hint: 'Choose any that fit, or none. You do not need to put a label on it.',
+  },
+
+  'person.list': { q: 'What can you tell us about them?', hint: 'Fill in only what you know.' },
+  'person.escrow': { q: 'Would you like a sealed match?' },
+  'person.matchContact': {
+    q: 'If there is ever a match, how would you like a counselor to reach you?',
+    hint: 'Only a trained legal options counselor would use this — privately, and only if there is a match.',
+  },
+
+  'people.told': {
+    q: 'Have you told anyone? You can add them here.',
+    hint: 'A friend, family member, counselor — anyone. It is okay if you have not told anyone.',
+  },
+  'people.witnesses': {
+    q: 'Was anyone else there or nearby — before, during, or after?',
+    hint: 'Even someone who only saw you that day or night can matter.',
+  },
+  'prior.any': { q: 'Have you reported this anywhere?', hint: 'For example, to police, a school, an employer, or an app.' },
+  'prior.list': { q: 'What do you remember about that report?', hint: 'Fill in only what you know.' },
+
+  'medical.care': { q: 'Did you get any medical care afterward?', hint: 'It is okay if you did not.' },
+  'medical.facility': { q: 'Where did you get care?' },
+  'medical.date': { q: 'About when was that?' },
+  'medical.exam': { q: 'Did you have a forensic exam?', hint: 'This is sometimes called a SANE exam or a "rape kit".' },
+  'medical.kit': { q: 'A few details about the exam, if you know them.', hint: '"Not sure" is fine for any of them.' },
+  'medical.injuries': {
+    q: 'Were you hurt in any way?',
+    hint: 'This includes things that have healed, like bruises or soreness. Only share what you are comfortable with.',
+  },
+  'evidence.upload': { q: 'Would you like to add photos, screenshots, or files?', hint: 'They are locked on this device before they are saved.' },
+  'evidence.physical': {
+    q: 'Do you still have anything physical from that day or night?',
+    hint: 'Choose any, or none. You do not need to have kept anything.',
+  },
+  'evidence.physicalNotes': {
+    q: 'If you want, write down where they are and how they are kept.',
+    hint: 'A paper bag is best for clothing. Try not to wash anything you want to keep.',
+  },
+
+  'safety.access': { q: 'Does the person know where you live, work, or go to school?' },
+  'safety.protective': {
+    q: 'Do you think you might want a protective order?',
+    hint: 'It is a court order that tells someone to stay away from you.',
+  },
+  'safety.notes': {
+    q: 'Is there anything else about your safety you want to write down?',
+    hint: 'For example: threats, messages, or places you avoid now.',
+  },
+  'about.contactMethods': {
+    q: 'If someone you choose needs to reach you later, which ways are safe?',
+    hint: 'Choose all that are safe. Only you decide who gets this.',
+  },
+  'about.phone': { q: 'What phone number is safe to use?' },
+  'about.email': { q: 'What email address is safe to use?' },
+  'about.contactNotes': {
+    q: 'Anything people should know about contacting you safely?',
+    hint: "For example: 'only text after 6pm' or 'please don't leave messages'.",
+  },
+
+  'goals.police': { q: 'Would you like help making a police report?' },
+  'goals.attorney': { q: 'Would you like to talk with a free lawyer about your options?' },
+  'goals.compensation': { q: 'Would you like help asking for victim compensation?', hint: 'It can help pay for things like medical bills, counseling, or lost pay.' },
+  'comp.mailing': { q: 'What mailing address is safe for letters about compensation?' },
+  'comp.claimant': { q: 'Are you applying for yourself?' },
+  'comp.claimantDetails': { q: 'Who is applying for you, and how do you know them?' },
+  'comp.altContact': { q: 'One more person the office can contact if they cannot reach you.', hint: 'Only add someone you trust.' },
+  'comp.goodCause': {
+    q: 'Is there anything you want the compensation office to know about timing?',
+    hint: 'Many people wait. Any reason is okay to share. Only if it applies to you.',
+  },
+  'goals.protective': { q: 'Would you like help asking for a protective order?' },
+  'wishes.access': { q: 'If you talk with someone later, is there anything that would help?' },
+
+  'about.name': { q: 'What name would you like us to use for you?', hint: 'This can be a nickname.' },
+  'about.pronouns': { q: 'What pronouns do you use, if you would like to share?', hint: 'For example: she/her, they/them, he/him.' },
+  'about.language': { q: 'What language do you feel most comfortable using?' },
+  'about.legalName': { q: 'Your full legal name, if you are comfortable.', hint: 'Police or a lawyer may need it later. You can leave it for now.' },
+  'about.dob': { q: 'Your date of birth.', hint: 'This helps a lawyer know which rules apply to you.' },
+  'about.home': { q: 'Where do you live now? Just the state and county is enough.', hint: 'This helps match you with help near you.' },
+
+  'costs.amounts': { q: 'Have you had any of these costs?', hint: 'Rough amounts or short notes are fine.' },
+  'costs.insurance': { q: 'Do you have health insurance?' },
+  'costs.insuranceCarrier': { q: 'What is the name of your insurance company, if you know it?' },
+  'costs.work': { q: 'Where do you work, and about which days did you miss?' },
+};

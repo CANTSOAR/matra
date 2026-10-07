@@ -19,6 +19,7 @@ import {
 import type { AttorneyProfile, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
+import { getProfile as loadProfileRecord, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
@@ -48,6 +49,11 @@ export interface RegisterInput {
   attorneyProfile?: RegisterRequest['attorneyProfile'];
   /** Survivors must confirm "I am 18 or older"; the server rejects registration otherwise. */
   ageConfirmed18?: boolean;
+  /**
+   * Optional name she'd like to be called. Never sent to the server in plaintext: after the account exists it is
+   * saved as an encrypted 'profile' vault record (best effort — registration succeeds even if that save fails).
+   */
+  preferredName?: string;
 }
 
 export class SessionError extends Error {
@@ -70,6 +76,12 @@ interface SessionCtx {
   setWorkingData(d: WorkingData | null): Promise<void>;
   /** bumps whenever working data changes */
   workingVersion: number;
+  /** Her decrypted preferences (survivors only), loaded on sign-in. null until loaded or if she has none. */
+  profile: VaultProfile | null;
+  /** Re-read the encrypted profile record from the vault. */
+  getProfile(): Promise<VaultProfile | null>;
+  /** Encrypt and save her preferences (e.g. `{ preferredName }`) as a profile vault record. */
+  saveProfile(input: { preferredName?: string }): Promise<VaultProfile>;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -90,6 +102,8 @@ export function SessionProvider({
   // working draft: encrypted under a per-draft key, which is itself wrapped under masterKey
   const workingRef = useRef<{ envelope: Envelope; wrappedKey: WrappedKey } | null>(null);
   const [workingVersion, setWorkingVersion] = useState(0);
+  const [profile, setProfile] = useState<VaultProfile | null>(null);
+  const profileRecordRef = useRef<string | undefined>(undefined);
 
   const api = useMemo(() => new ApiClient({ getToken: () => tokenRef.current, fetchImpl }), [fetchImpl]);
 
@@ -97,6 +111,8 @@ export function SessionProvider({
     tokenRef.current = null;
     sessionRef.current = null;
     workingRef.current = null;
+    profileRecordRef.current = undefined;
+    setProfile(null);
     setSession(null);
     setWorkingVersion((v) => v + 1);
   }, []);
@@ -104,6 +120,10 @@ export function SessionProvider({
   useEffect(() => onWipe(clear), [clear]);
 
   const adopt = useCallback((s: Session) => {
+    if (sessionRef.current?.user.id !== s.user.id) {
+      profileRecordRef.current = undefined;
+      setProfile(null);
+    }
     tokenRef.current = s.token;
     sessionRef.current = s;
     workingRef.current = null;
@@ -111,8 +131,32 @@ export function SessionProvider({
     setSession(s);
   }, []);
 
+  const getProfile = useCallback(async (): Promise<VaultProfile | null> => {
+    const s = sessionRef.current;
+    if (!s || s.user.role !== 'survivor') return null;
+    const found = await loadProfileRecord(api, s.masterKey);
+    if (sessionRef.current !== s) return null; // locked meanwhile
+    profileRecordRef.current = found?.recordId;
+    setProfile(found?.profile ?? null);
+    return found?.profile ?? null;
+  }, [api]);
+
+  const saveProfile = useCallback(
+    async (input: { preferredName?: string }): Promise<VaultProfile> => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      const res = await saveProfileRecord(api, s.masterKey, input, profileRecordRef.current);
+      if (sessionRef.current === s) {
+        profileRecordRef.current = res.recordId;
+        setProfile(res.profile);
+      }
+      return res.profile;
+    },
+    [api],
+  );
+
   const register = useCallback<SessionCtx['register']>(
-    async ({ username, passphrase, role, attorneyProfile, ageConfirmed18 }, onProgress) => {
+    async ({ username, passphrase, role, attorneyProfile, ageConfirmed18, preferredName }, onProgress) => {
       if (role === 'survivor' && !ageConfirmed18) throw new SessionError('Please confirm you are 18 or older.');
       const kdfSalt = newKdfSalt();
       onProgress?.('deriving');
@@ -133,6 +177,13 @@ export function SessionProvider({
       });
       const s: Session = { token: res.token, user: res.user, masterKey, privateKey: identity.privateKey };
       adopt(s);
+      if (role === 'survivor' && preferredName?.trim()) {
+        try {
+          await saveProfile({ preferredName });
+        } catch {
+          /* best effort: she can set it again from Home */
+        }
+      }
       if (role === 'attorney') {
         try {
           const me = await new ApiClient({ getToken: () => res.token, fetchImpl }).me();
@@ -145,7 +196,7 @@ export function SessionProvider({
       }
       return s;
     },
-    [api, adopt, fetchImpl],
+    [api, adopt, fetchImpl, saveProfile],
   );
 
   const login = useCallback<SessionCtx['login']>(
@@ -181,9 +232,16 @@ export function SessionProvider({
       }
       const s: Session = { token: res.token, user: res.user, masterKey, privateKey, attorneyProfile };
       adopt(s);
+      if (s.user.role === 'survivor') {
+        try {
+          await getProfile(); // so Home can greet her by name straight away
+        } catch {
+          /* best effort */
+        }
+      }
       return s;
     },
-    [api, adopt, fetchImpl],
+    [api, adopt, fetchImpl, getProfile],
   );
 
   const logout = useCallback(async () => {
@@ -260,8 +318,11 @@ export function SessionProvider({
       getWorkingData,
       setWorkingData,
       workingVersion,
+      profile,
+      getProfile,
+      saveProfile,
     }),
-    [session, api, lockReason, register, login, logout, lock, refreshProfile, getWorkingData, setWorkingData, workingVersion],
+    [session, api, lockReason, register, login, logout, lock, refreshProfile, getWorkingData, setWorkingData, workingVersion, profile, getProfile, saveProfile],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -283,8 +344,8 @@ export function useRequiredSession(): SessionCtx & { session: Session } {
 export function friendlyError(e: unknown): string {
   if (e instanceof SessionError) return e.message;
   if (e instanceof ApiError) {
-    if (e.status === 409) return 'That alias is already taken. Try another one.';
+    if (e.status === 409) return 'Someone already uses that alias. Please try another one.';
     return e.message;
   }
-  return 'Something went wrong. Nothing was shared. Please try again.';
+  return 'Something didn’t work. Nothing was shared. Please try again.';
 }

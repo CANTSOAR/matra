@@ -3,6 +3,7 @@
  * so she can stop and resume. This module never stores anything itself.
  */
 import { randomId } from '@matra/crypto';
+import type { StoryEntry, SuggestionDecision } from '../understand/types';
 import { PHASES, STEPS, UI, type PhaseId, type ScriptStep } from './script';
 
 export type Tri = 'yes' | 'no' | 'unsure';
@@ -48,6 +49,28 @@ export interface IntakeDraft {
   reachedReview: boolean;
   /** Unsubmitted text in the current answer box, so nothing typed is lost on a break. */
   pending?: { stepId: string; value: AnswerValue };
+  /**
+   * Her story, piece by piece, exactly as she typed it (or a voice transcript she reviewed).
+   * Never altered by software. Encrypted with the rest of the draft.
+   */
+  entries?: StoryEntry[];
+  /** Suggestion ids she marked "Not right" — never shown again, even after re-running understanding. */
+  dismissedSuggestions?: string[];
+  /** State of the "dump first" story space (src/space). Absent for drafts made only with the interview. */
+  space?: SpaceState;
+}
+
+export interface SpaceState {
+  /** Which way she prefers to tell it. Default: the open story space. */
+  mode?: 'space' | 'interview';
+  /** Suggestion id → what she decided (accepted / edited / dismissed). */
+  decisions?: Record<string, SuggestionDecision>;
+  /** Topic cards she chose to skip as a whole. */
+  skippedTopics?: string[];
+  /** Unsent text in the "Start anywhere" box, so nothing typed is lost on a break. */
+  composer?: string;
+  /** Unsaved answers in an open topic, so nothing typed is lost on a break. */
+  pending?: Record<string, AnswerValue>;
 }
 
 export function emptyDraft(now: Date = new Date()): IntakeDraft {

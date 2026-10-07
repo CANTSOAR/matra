@@ -20,7 +20,7 @@ describe('CreateAccountForm (survivor) — 18+ gate', () => {
     await user.type(screen.getByLabelText('Passphrase'), 'pebble lantern fjord mango heron');
     await user.type(screen.getByLabelText('Type it again'), 'pebble lantern fjord mango heron');
     await user.click(screen.getByLabelText(/written my passphrase down/));
-    const create = screen.getByRole('button', { name: 'Create my private vault' });
+    const create = screen.getByRole('button', { name: 'Create my private space' });
     expect(create).toBeDisabled();
     await user.click(screen.getByLabelText('I am 18 or older.'));
     expect(create).toBeEnabled();

@@ -7,22 +7,30 @@
  * Error shape: ApiError `{ error: string, code?: string }`. Codes used:
  *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch
  *   401 unauthorized | session_expired | invalid_credentials
- *   403 forbidden | forbidden_role | share_revoked | share_expired | attorney_not_verified
- *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found
- *   409 username_taken | already_revoked
- *   413 payload_too_large   415 unsupported_media_type   429 rate_limited   500 internal
+ *   403 forbidden | forbidden_role | share_revoked | share_expired | attorney_not_verified | counselor_not_verified
+ *       | age_not_confirmed
+ *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found | entry_not_found
+ *       | counselor_not_found | group_not_found
+ *   409 username_taken | already_revoked | already_sealed
+ *   413 payload_too_large   415 unsupported_media_type   500 internal
+ *   429 rate_limited | rate_limited_daily | rate_limited_lifetime
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import { createHmac } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
+import { generateOprfKey, type OprfKeyPair } from '@matra/crypto';
 import type {
   AttorneyProfile,
   AuditEvent,
   BlobMeta,
+  CounselorMatchGroup,
+  CounselorNote,
+  CounselorProfile,
+  CounselorSeal,
   EscrowEntry,
+  MatchingConfig,
   LedgerEntry,
   PublicUser,
   Role,
@@ -55,11 +63,12 @@ import {
   verifyAuthKey,
 } from './auth.js';
 import * as S from './schemas.js';
+import { DEFAULT_OPRF_LIMITS, OprfKeyHolder, type HolderId, type OprfLimits } from './oprf.js';
 
 export interface CreateAppOptions {
   /** SQLite path, or ':memory:' for tests. */
   dbPath: string;
-  /** Server secret for HMACs (escrow, fake prelogin salts). */
+  /** Server secret for HMACs (fake prelogin salts). */
   pepper: Buffer | string;
   /** Allowed CORS origins (the Vite dev server proxies /api, so CORS is rarely needed). */
   corsOrigins?: string[];
@@ -76,16 +85,25 @@ export interface CreateAppOptions {
   demoBanner?: boolean;
   /** Number of reverse-proxy hops to trust for the client IP (rate limiting). Render / Fly: 1. */
   trustProxy?: number;
+  /**
+   * Sealed matching. keyA / keyB are the two independent OPRF key shares (config.ts loadOprfKey). When omitted (tests),
+   * fresh ephemeral keys are generated — matching then only works for the lifetime of this process.
+   */
+  matching?: { keyA?: OprfKeyPair; keyB?: OprfKeyPair; limits?: Partial<OprfLimits> };
 }
 
 /**
  * CSP for the web app itself. Everything is same-origin: no inline scripts, no eval, no third-party anything.
  * img/media allow blob: for the in-memory previews of decrypted evidence; data: only for the inline favicon.
  * (React `style` props are applied through the CSSOM, which style-src does not restrict.)
+ * On-device voice transcription: 'wasm-unsafe-eval' lets WebAssembly compile (it does NOT allow JS eval), and
+ * worker-src 'self' allows the same-origin module worker that runs the model. Model + runtime files are served
+ * from /models/ on this origin, so connect-src stays 'self' — audio and model requests can never leave it.
  */
 export const WEB_CSP = [
   "default-src 'none'",
-  "script-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "worker-src 'self'",
   "style-src 'self'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
@@ -175,13 +193,22 @@ interface ShareRow {
   expires_at: string;
   ledger_entry_id: string;
 }
-interface EscrowRow {
+interface MatchEntryRow {
   id: string;
+  user_id: string;
+  tag: string;
+  bundle: string;
   label_envelope: string;
-  status: 'sealed' | 'matched';
   created_at: string;
-  matched_at: string | null;
   ledger_entry_id: string;
+}
+interface CounselorProfileRow {
+  user_id: string;
+  display_name: string;
+  organization: string | null;
+  jurisdictions: string;
+  verified: number;
+  public_key: string;
 }
 interface AuditRow {
   id: string;
@@ -251,17 +278,25 @@ const addDays = (from: number, days: number) => new Date(from + days * 86_400_00
 const isShareLive = (s: ShareRow) => s.status === 'active' && Date.parse(s.expires_at) > Date.now();
 
 /**
- * Survivor-facing view of an escrow entry. ALWAYS reports 'sealed' and never includes matchedAt:
+ * Survivor-facing view of a sealed-match entry. ALWAYS reports 'sealed' and never includes matchedAt or the tag:
  * if survivors could see match results, a perpetrator could register as a "survivor", submit his own
- * identifiers, and learn that he has been named. The real state stays in the DB and is released only
- * as aggregate counts to a verified attorney the survivor has an active share with (see the bundle route).
+ * identifiers, and learn that he has been named. Matched groups are released only to verified counselors.
  */
-const toSurvivorEscrow = (e: EscrowRow): EscrowEntry => ({
+const toSurvivorEscrow = (e: MatchEntryRow): EscrowEntry => ({
   id: e.id,
   labelEnvelope: JSON.parse(e.label_envelope),
   status: 'sealed',
   createdAt: e.created_at,
   ledgerEntryId: e.ledger_entry_id,
+});
+
+const toCounselorProfile = (p: CounselorProfileRow): CounselorProfile => ({
+  userId: p.user_id,
+  displayName: p.display_name,
+  ...(p.organization != null && { organization: p.organization }),
+  jurisdictions: JSON.parse(p.jurisdictions),
+  verified: p.verified === 1,
+  publicKey: JSON.parse(p.public_key),
 });
 
 const toAudit = (a: AuditRow): AuditEvent => ({
@@ -322,6 +357,15 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const auth = requireAuth(db);
   const survivorOnly = requireRole('survivor');
   const attorneyOnly = requireRole('attorney');
+  const counselorOnly = requireRole('counselor');
+
+  // ── sealed matching: two independent OPRF key holders ──
+  const limits: OprfLimits = { ...DEFAULT_OPRF_LIMITS, ...opts.matching?.limits };
+  const holders: Record<HolderId, OprfKeyHolder> = {
+    a: new OprfKeyHolder('a', opts.matching?.keyA ?? generateOprfKey(), db, limits),
+    b: new OprfKeyHolder('b', opts.matching?.keyB ?? generateOprfKey(), db, limits),
+  };
+  if (holders.a.publicKey === holders.b.publicKey) throw new Error('OPRF key shares A and B must differ');
 
   const loginLimiterKey = new RateLimiter(10, 60_000);
   const loginLimiterIp = new RateLimiter(60, 60_000);
@@ -349,6 +393,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
       'SELECT id, owner_id, size_bytes, content_hash, owner_wrapped_key, created_at, ledger_entry_id FROM blobs WHERE id = ?',
     ),
     shareById: db.prepare('SELECT * FROM shares WHERE id = ?'),
+    counselorProfileByUser: db.prepare(
+      'SELECT c.*, u.public_key FROM counselor_profiles c JOIN users u ON u.id = c.user_id WHERE c.user_id = ?',
+    ),
+    verifiedCounselors: db.prepare(
+      `SELECT c.*, u.public_key FROM counselor_profiles c JOIN users u ON u.id = c.user_id
+        WHERE c.verified = 1 ORDER BY c.display_name`,
+    ),
+    matchEntryById: db.prepare('SELECT * FROM match_entries WHERE id = ?'),
   };
 
   const audit = (userId: string, action: string, detail?: string) =>
@@ -416,6 +468,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
           p.acceptsProBono ? 1 : 0,
         );
       }
+      if (body.role === 'counselor' && body.counselorProfile) {
+        // Counselors are never auto-verified: Matra contracts and vets them (npm run verify-attorney -- <user>).
+        const p = body.counselorProfile;
+        db.prepare(
+          `INSERT INTO counselor_profiles (user_id, display_name, organization, jurisdictions, verified) VALUES (?, ?, ?, ?, 0)`,
+        ).run(id, p.displayName, p.organization || null, JSON.stringify([...new Set(p.jurisdictions)]));
+      }
       audit(id, 'account.created', `Account created (${body.role})`);
     })();
     const token = createSession(db, id);
@@ -449,7 +508,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.get('/api/me', auth, (req, res) => {
     const u = q.userById.get(req.user!.id) as UserRow;
     const p = q.profileByUser.get(u.id) as ProfileRow | undefined;
-    res.json({ user: toPublicUser(u), ...(p && { attorneyProfile: toProfile(p) }) });
+    const c = q.counselorProfileByUser.get(u.id) as CounselorProfileRow | undefined;
+    res.json({ user: toPublicUser(u), ...(p && { attorneyProfile: toProfile(p) }), ...(c && { counselorProfile: toCounselorProfile(c) }) });
   });
 
   // ════════════ vault: records ════════════
@@ -725,14 +785,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
         sizeBytes: b.size_bytes,
       })),
       survivorAlias: s.survivor_alias,
-      // Human gatekeeper: match results are released only here, as counts over THIS survivor's own entries —
-      // no labels, no hashes, nothing about the other survivor. The survivor's own views never show them.
-      escrow: db
-        .prepare(
-          `SELECT COALESCE(SUM(status = 'sealed'), 0) AS sealedCount, COALESCE(SUM(status = 'matched'), 0) AS matchedCount
-             FROM escrow_entries WHERE user_id = ?`,
-        )
-        .get(s.survivor_id) as { sealedCount: number; matchedCount: number },
+      // No sealed-match information here: attorneys never see match status or counts. Matches go only to a
+      // verified Legal Options Counselor (see /api/counselor/groups).
     };
     const when = new Date().toISOString();
     audit(me.id, 'share.opened', `Opened shared case file (share ${s.id})`);
@@ -781,47 +835,195 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ share: toShare(q.shareById.get(s.id) as ShareRow), ledgerEntry });
   });
 
-  // ════════════ blind escrow ════════════
+  // ════════════ sealed matching (Callisto-style) ════════════
   /*
-   * Stored value: HMAC-SHA256(pepper, identifierHash) — so a DB leak alone can't be dictionary-attacked.
-   * A match occurs only when a *different* user holds the same peppered hash. When it does, every still-sealed
-   * entry with that hash flips to 'matched' (matched_at recorded in the DB only).
+   * Protocol: packages/crypto/src/matching.ts. The server stores, per survivor and per perpetrator identifier:
+   *   tag π (pseudorandom, from a split-key VOPRF), the encrypted contact bundle, her own encrypted label, and one
+   *   seal per counselor holding {π, x, y, ce}. It never sees identifiers, their hashes, or anything it can open.
    *
-   * Anti-self-check: survivors NEVER see match results — responses always say 'sealed' with no matchedAt — and no
-   * ledger entry is written at match time (otherwise a jump in /api/ledger/head seq would leak the match). Each
-   * submission appends exactly one 'escrow.sealed' entry whether or not it matches. Matches are released only as
-   * counts in the ShareBundle to a verified attorney with an active share. Responses never include hashes or other users.
+   * Threshold 2: a tag is MATCHED when entries from 2 distinct survivor accounts exist (one entry per account per
+   * tag: UNIQUE(user_id, tag), so a survivor cannot match herself). Only matched groups are ever released, and only
+   * to verified counselors, each receiving only the seals addressed to them. Unmatched entries are never served to
+   * anyone but their owner — this closes the "counselor + OPRF guessing" gap (research A7): a counselor never holds a
+   * single-survivor seal to test guesses against, and counselors cannot call the OPRF endpoints at all.
+   *
+   * Anti-self-check: survivors ALWAYS see 'sealed' (no matchedAt, no tag), her audit trail never mentions a match or
+   * a counselor viewing it, and no ledger entry is written at match time — each submission appends exactly one
+   * 'escrow.sealed' entry, whose content hash is over the (random) bundle ciphertext, not the tag.
    */
-  app.post('/api/escrow', auth, survivorOnly, (req, res) => {
+  const ageRow = db.prepare('SELECT age_confirmed_18 FROM users WHERE id = ?');
+  const verifiedAdultSurvivor = (req: Request, _res: Response, next: NextFunction) => {
+    if (req.user?.role !== 'survivor') throw new HttpError(403, 'forbidden_role', 'Only survivor accounts can do this');
+    const r = ageRow.get(req.user.id) as { age_confirmed_18: number } | undefined;
+    if (r?.age_confirmed_18 !== 1)
+      throw new HttpError(403, 'age_not_confirmed', 'Sealed matching is only for accounts that have confirmed they are 18 or older.');
+    next();
+  };
+
+  app.get('/api/matching/config', auth, verifiedAdultSurvivor, (_req, res) => {
+    const config: MatchingConfig = {
+      threshold: 2,
+      suite: 'ristretto255-SHA512',
+      mode: 'voprf',
+      keyHolders: { a: { publicKey: holders.a.publicKey }, b: { publicKey: holders.b.publicKey } },
+      counselors: (q.verifiedCounselors.all() as CounselorProfileRow[]).map(toCounselorProfile),
+      limits: { perDay: limits.perDay, lifetime: limits.lifetime },
+    };
+    res.json(config);
+  });
+
+  // Two independent evaluation endpoints, one per key share. In production each can live in its own process/host.
+  for (const h of ['a', 'b'] as const) {
+    app.get(`/api/matching/oprf-${h}/key`, (_req, res) => {
+      res.json({ publicKey: holders[h].publicKey });
+    });
+    app.post(`/api/matching/oprf-${h}`, auth, verifiedAdultSurvivor, (req, res) => {
+      const { blinded } = parse(S.oprfEvaluateRequest, req.body);
+      const r = holders[h].evaluate(req.user!.id, blinded);
+      if (!r.ok) {
+        if (r.code === 'invalid_element') throw new HttpError(400, 'invalid_request', 'blinded is not a valid group element');
+        throw new HttpError(
+          429,
+          r.code,
+          r.code === 'rate_limited_daily'
+            ? 'You’ve sealed as many identifiers as we allow in one day. You can add more tomorrow.'
+            : 'This account has reached the limit for sealed identifiers.',
+        );
+      }
+      res.json(r.response);
+    });
+  }
+
+  const ownEntries = db.prepare('SELECT * FROM match_entries WHERE user_id = ? ORDER BY created_at DESC, rowid DESC');
+  const ownEntryCount = db.prepare('SELECT COUNT(*) AS n FROM match_entries WHERE user_id = ?');
+  const ownEntryForTag = db.prepare('SELECT 1 FROM match_entries WHERE user_id = ? AND tag = ?');
+  const markMatched = db.prepare(
+    `INSERT OR IGNORE INTO match_groups (id, tag, matched_at)
+     SELECT ?, ?, ? WHERE (SELECT COUNT(DISTINCT user_id) FROM match_entries WHERE tag = ?) >= 2`,
+  );
+
+  app.post('/api/matching/entries', auth, verifiedAdultSurvivor, (req, res) => {
     const me = req.user!;
-    const body = parse(S.createEscrowRequest, req.body);
-    const peppered = createHmac('sha256', pepper).update(body.identifierHash).digest('hex');
+    const body = parse(S.createMatchEntryRequest, req.body);
+    for (const seal of body.seals) {
+      const c = q.counselorProfileByUser.get(seal.counselorId) as CounselorProfileRow | undefined;
+      if (!c) throw new HttpError(404, 'counselor_not_found', 'Counselor not found.');
+      if (c.verified !== 1) throw new HttpError(403, 'counselor_not_verified', 'This counselor has not been verified.');
+    }
+    // Only reveals HER OWN earlier submission for the same person.
+    if (ownEntryForTag.get(me.id, body.tag)) throw new HttpError(409, 'already_sealed', 'You have already sealed this.');
+    if ((ownEntryCount.get(me.id) as { n: number }).n >= limits.lifetime)
+      throw new HttpError(429, 'rate_limited_lifetime', 'This account has reached the limit for sealed identifiers.');
     const id = newId();
     db.transaction(() => {
       const ts = new Date().toISOString();
-      const le = appendLedger(db, 'escrow.sealed', id, envelopeContentHash(body.labelEnvelope), ts);
+      const le = appendLedger(db, 'escrow.sealed', id, envelopeContentHash(body.bundle), ts);
       db.prepare(
-        `INSERT INTO escrow_entries (id, user_id, peppered_hash, label_envelope, status, created_at, matched_at, ledger_entry_id)
-         VALUES (?, ?, ?, ?, 'sealed', ?, NULL, ?)`,
-      ).run(id, me.id, peppered, canonicalEnvelope(body.labelEnvelope), ts, le.id);
-      audit(me.id, 'escrow.created', 'Sealed an identifier in the blind escrow');
-
-      // One statement, always executed, so a match costs the same code path as a miss (no timing/branch oracle).
-      db.prepare(
-        `UPDATE escrow_entries SET status = 'matched', matched_at = ?
-          WHERE peppered_hash = ? AND status = 'sealed'
-            AND EXISTS (SELECT 1 FROM escrow_entries WHERE peppered_hash = ? AND user_id != ?)`,
-      ).run(ts, peppered, peppered, me.id);
+        `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, me.id, body.tag, canonicalEnvelope(body.bundle), canonicalEnvelope(body.labelEnvelope), ts, le.id);
+      const ins = db.prepare('INSERT INTO match_seals (entry_id, counselor_id, seal) VALUES (?, ?, ?)');
+      for (const seal of body.seals) ins.run(id, seal.counselorId, JSON.stringify(seal satisfies CounselorSeal));
+      audit(me.id, 'escrow.created', 'Sealed an identifier for sealed matching');
+      // Always executed, so a match takes the same code path as a miss (no branch/timing oracle in the handler).
+      markMatched.run(newId(), body.tag, ts, body.tag);
     })();
-    const row = db.prepare('SELECT * FROM escrow_entries WHERE id = ?').get(id) as EscrowRow;
-    res.status(201).json({ entry: toSurvivorEscrow(row) });
+    res.status(201).json({ entry: toSurvivorEscrow(q.matchEntryById.get(id) as MatchEntryRow) });
   });
 
-  app.get('/api/escrow', auth, (req, res) => {
-    const rows = db
-      .prepare('SELECT * FROM escrow_entries WHERE user_id = ? ORDER BY created_at DESC, rowid DESC')
-      .all(req.user!.id) as EscrowRow[];
-    res.json({ entries: rows.map(toSurvivorEscrow) });
+  const listOwn = (req: Request, res: Response) => {
+    res.json({ entries: (ownEntries.all(req.user!.id) as MatchEntryRow[]).map(toSurvivorEscrow) });
+  };
+  app.get('/api/escrow', auth, listOwn); // kept for the Home screen / data export
+  app.get('/api/matching/entries', auth, listOwn);
+
+  /** Withdraw: deletes her entry and its seals. If that leaves fewer than 2 survivors, the group is no longer released. */
+  app.delete('/api/matching/entries/:id', auth, survivorOnly, (req, res) => {
+    const me = req.user!;
+    const e = q.matchEntryById.get(parse(S.id, req.params.id)) as MatchEntryRow | undefined;
+    if (!e || e.user_id !== me.id) throw new HttpError(404, 'entry_not_found', 'Entry not found.');
+    db.transaction(() => {
+      db.prepare('DELETE FROM match_seals WHERE entry_id = ?').run(e.id);
+      db.prepare('DELETE FROM match_entries WHERE id = ?').run(e.id);
+      audit(me.id, 'escrow.withdrawn', 'You withdrew a sealed identifier. It was deleted.');
+    })();
+    res.json({ ok: true });
+  });
+
+  // ════════════ Legal Options Counselor ════════════
+  const verifiedCounselor = (req: Request, _res: Response, next: NextFunction) => {
+    const c = q.counselorProfileByUser.get(req.user!.id) as CounselorProfileRow | undefined;
+    if (!c || c.verified !== 1)
+      throw new HttpError(403, 'counselor_not_verified', 'Your counselor account has not been verified yet.');
+    next();
+  };
+  const releasedGroups = db.prepare(
+    `SELECT g.id, g.tag, g.matched_at FROM match_groups g
+      WHERE (SELECT COUNT(DISTINCT e.user_id) FROM match_entries e WHERE e.tag = g.tag) >= 2
+      ORDER BY g.matched_at ASC, g.rowid ASC`,
+  );
+  const groupById = db.prepare('SELECT id, tag, matched_at FROM match_groups WHERE id = ?');
+  // UNIQUE(user_id, tag) ⇒ every entry of a group comes from a different survivor. user_id is never selected.
+  const groupEntriesFor = db.prepare(
+    `SELECT e.id, e.created_at, e.bundle, s.seal FROM match_entries e
+       JOIN match_seals s ON s.entry_id = e.id AND s.counselor_id = ?
+      WHERE e.tag = ? ORDER BY e.created_at ASC, e.rowid ASC`,
+  );
+  const notesFor = db.prepare('SELECT * FROM counselor_notes WHERE group_id = ? AND counselor_id = ? ORDER BY created_at ASC, rowid ASC');
+
+  type GroupRow = { id: string; tag: string; matched_at: string };
+  const groupFor = (g: GroupRow, counselorId: string): CounselorMatchGroup | null => {
+    const entries = (groupEntriesFor.all(counselorId, g.tag) as Array<{ id: string; created_at: string; bundle: string; seal: string }>).map(
+      (e) => ({ entryId: e.id, createdAt: e.created_at, bundle: JSON.parse(e.bundle), seal: JSON.parse(e.seal) as CounselorSeal }),
+    );
+    // A counselor needs two seals addressed to them to reconstruct; anything less is never released.
+    if (entries.length < 2) return null;
+    const notes = (notesFor.all(g.id, counselorId) as Array<{ id: string; group_id: string; entry_id: string | null; envelope: string; created_at: string }>).map(
+      (n): CounselorNote => ({
+        id: n.id,
+        groupId: n.group_id,
+        ...(n.entry_id != null && { entryId: n.entry_id }),
+        envelope: JSON.parse(n.envelope),
+        createdAt: n.created_at,
+      }),
+    );
+    return { id: g.id, tag: g.tag, matchedAt: g.matched_at, entries, notes };
+  };
+
+  app.get('/api/counselor/groups', auth, counselorOnly, verifiedCounselor, (req, res) => {
+    const me = req.user!;
+    const groups = (releasedGroups.all() as GroupRow[]).map((g) => groupFor(g, me.id)).filter((g): g is CounselorMatchGroup => !!g);
+    // Logged to the counselor's own trail only. Never to a survivor's: that would tell her (or a perpetrator posing
+    // as a survivor) that a match exists.
+    audit(me.id, 'counselor.viewed_matches', `Opened the matched groups list (${groups.length})`);
+    res.json({ groups });
+  });
+
+  app.post('/api/counselor/groups/:id/notes', auth, counselorOnly, verifiedCounselor, (req, res) => {
+    const me = req.user!;
+    const g = groupById.get(parse(S.id, req.params.id)) as GroupRow | undefined;
+    const released = g && groupFor(g, me.id);
+    if (!g || !released) throw new HttpError(404, 'group_not_found', 'Group not found.');
+    const body = parse(S.counselorNoteRequest, req.body);
+    if (body.entryId && !released.entries.some((e) => e.entryId === body.entryId))
+      throw new HttpError(404, 'entry_not_found', 'Entry not found in this group.');
+    const note: CounselorNote = {
+      id: newId(),
+      groupId: g.id,
+      ...(body.entryId && { entryId: body.entryId }),
+      envelope: body.envelope,
+      createdAt: new Date().toISOString(),
+    };
+    db.prepare('INSERT INTO counselor_notes (id, group_id, counselor_id, entry_id, envelope, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+      note.id,
+      g.id,
+      me.id,
+      body.entryId ?? null,
+      canonicalEnvelope(body.envelope),
+      note.createdAt,
+    );
+    audit(me.id, 'counselor.note_added', 'Added an encrypted outreach note');
+    res.status(201).json({ note });
   });
 
   // ════════════ audit ════════════
@@ -851,7 +1053,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
       db.prepare('DELETE FROM shares WHERE survivor_id = ? OR attorney_id = ?').run(me.id, me.id);
       db.prepare('DELETE FROM blobs WHERE owner_id = ?').run(me.id);
       db.prepare('DELETE FROM records WHERE owner_id = ?').run(me.id);
-      db.prepare('DELETE FROM escrow_entries WHERE user_id = ?').run(me.id);
+      // sealed matching: her entries (and their seals), and — if a counselor — her seals, notes and profile
+      db.prepare('DELETE FROM match_seals WHERE entry_id IN (SELECT id FROM match_entries WHERE user_id = ?)').run(me.id);
+      db.prepare('DELETE FROM match_entries WHERE user_id = ?').run(me.id);
+      db.prepare('DELETE FROM match_seals WHERE counselor_id = ?').run(me.id);
+      db.prepare('DELETE FROM counselor_notes WHERE counselor_id = ?').run(me.id);
+      db.prepare('DELETE FROM counselor_profiles WHERE user_id = ?').run(me.id);
+      db.prepare('DELETE FROM oprf_quota WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM audit_events WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM attorney_profiles WHERE user_id = ?').run(me.id);
@@ -902,7 +1110,11 @@ function mountWebApp(app: express.Express, webDir: string, demoBanner: boolean) 
   const webHeaders = (res: Response) => {
     res.set('Content-Security-Policy', WEB_CSP);
     res.set('Cross-Origin-Opener-Policy', 'same-origin');
-    res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()');
+    // COOP + COEP make the page cross-origin isolated, which lets on-device transcription use multiple threads
+    // (~3× faster). Safe because every resource the app loads is same-origin.
+    res.set('Cross-Origin-Embedder-Policy', 'require-corp');
+    // microphone=(self): on-device voice capture (src/voice). Never granted to any other origin.
+    res.set('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), payment=(), usb=(), interest-cohort=()');
   };
   const sendIndex = (_req: Request, res: Response) => {
     webHeaders(res);

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
+import { IconFile, IconImage } from '../components/icons';
 import { emptyDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import {
@@ -108,10 +109,10 @@ export function Evidence() {
         mem?.savedDraftRecordId ?? vaultDraft?.meta.id,
       );
       await setWorkingData({ draft, evidence, savedDraftRecordId: res.record.id });
-      setPersistMsg('Saved to your vault and attached to your draft account.');
+      setPersistMsg('Saved to your space and added to your draft story.');
       void existing.reload();
     } catch (e) {
-      setPersistMsg(`Files are uploaded, but we couldn’t save their details to your draft: ${friendlyError(e)}`);
+      setPersistMsg(`Your files are safely uploaded, but we couldn’t add their details to your draft: ${friendlyError(e)}`);
     }
     setDescription('');
     setCapturedAt('');
@@ -128,17 +129,20 @@ export function Evidence() {
 
   return (
     <div className="stack-lg">
-      <PageTitle lead="Photos, screenshots, messages, recordings or documents. Each file is cleaned and locked on this device before it’s uploaded.">
-        Evidence
-      </PageTitle>
       {fromStory && (
         <p>
-          <Link to="/vault/story">← Back to your account</Link>
+          <Link className="back-link" to="/vault/story">← Back to my story</Link>
         </p>
       )}
+      <PageTitle
+        eyebrow="Things to keep"
+        lead="Photos, screenshots, messages, recordings or documents — anything you want to keep. Each file is cleaned and locked on this device before it’s uploaded."
+      >
+        Evidence
+      </PageTitle>
 
       <section className="card stack" aria-labelledby="add">
-        <h2 id="add">Add files</h2>
+        <h2 id="add">Add something</h2>
         <div
           className={`dropzone stack${over ? ' over' : ''}`}
           onDragOver={(e) => {
@@ -148,7 +152,7 @@ export function Evidence() {
           onDragLeave={() => setOver(false)}
           onDrop={onDrop}
         >
-          <p>Drag files here, or</p>
+          <p className="muted" style={{ margin: 0 }}>Drop files here, or</p>
           <div>
             <button type="button" className="btn btn-primary" onClick={() => inputRef.current?.click()}>
               Choose files
@@ -177,9 +181,9 @@ export function Evidence() {
           </label>
         </div>
         <p className="small muted">
-          Photos (JPEG, PNG, WebP) have hidden details such as location and camera info removed automatically. For other
-          files we’ll tell you what couldn’t be removed. A fingerprint (SHA-256) of each cleaned file is recorded so anyone
-          can later check it hasn’t been altered.
+          Photos (JPEG, PNG, WebP) have hidden details — like location and camera info — removed automatically. For other
+          files, we’ll tell you what couldn’t be removed. A fingerprint (SHA-256) of each cleaned file is recorded, so
+          anyone can later check it hasn’t been changed.
         </p>
         {pending.map((p) => (
           <div key={p.name} className="stack">
@@ -190,15 +194,15 @@ export function Evidence() {
       </section>
 
       {uploaded.length > 0 && (
-        <section className="card stack" aria-labelledby="just-added">
+        <section className="card stack" aria-labelledby="just-added" data-testid="evidence-just-added">
           <h2 id="just-added">Added just now</h2>
           <ul className="list">
             {uploaded.map((u) => (
               <li key={u.item.id} className="evidence-row">
-                {u.previewUrl ? <img className="thumb" src={u.previewUrl} alt={`Preview of ${u.item.fileName}`} /> : <div className="thumb" aria-hidden="true" />}
+                {u.previewUrl ? <img className="thumb" src={u.previewUrl} alt={`Preview of ${u.item.fileName}`} /> : <ThumbPlaceholder mime={u.item.mimeType} />}
                 <div className="meta stack">
                   <div className="row">
-                    <strong>{u.item.fileName}</strong>
+                    <strong style={{ overflowWrap: 'anywhere' }}>{u.item.fileName}</strong>
                     <span className={u.item.metadataStripped ? 'badge ok' : 'badge warn'}>
                       {u.item.metadataStripped ? 'Hidden details removed' : 'Hidden details not removed'}
                     </span>
@@ -207,7 +211,7 @@ export function Evidence() {
                   <p className="small muted">
                     {formatBytes(u.item.sizeBytes)} · sealed {formatDate(u.sealedAt)}
                   </p>
-                  <p className="mono small" title="SHA-256 of the cleaned file">
+                  <p className="mono small muted" title="SHA-256 fingerprint of the cleaned file">
                     SHA-256: {u.item.sha256}
                   </p>
                 </div>
@@ -217,17 +221,19 @@ export function Evidence() {
         </section>
       )}
 
-      <section className="card stack" aria-labelledby="in-vault">
-        <h2 id="in-vault">In your vault</h2>
+      <section className="card stack" aria-labelledby="in-vault" data-testid="evidence-in-space">
+        <h2 id="in-vault">In your space</h2>
         {existing.loading && <Loading />}
         {existing.error && <ErrorNote>{existing.error}</ErrorNote>}
-        {existing.data && existing.data.blobs.length === 0 && <p className="muted">No files yet.</p>}
+        {existing.data && existing.data.blobs.length === 0 && (
+          <p className="muted">No files yet. There’s no rush — add things whenever you’re ready.</p>
+        )}
         {existing.data && existing.data.blobs.length > 0 && (
           <>
             {existing.data.blobs.some((b) => !existing.data!.inFinal.has(b.id)) && (
               <p className="small card soft">
-                Files not yet in your sealed account are added when you seal it again: open <Link to="/vault/story">your account</Link>{' '}
-                and press “Seal my account”. Only sealed files can be shared with an attorney.
+                New files join your sealed story the next time you seal it: open <Link to="/vault/story">My story</Link> and
+                seal it again. Only sealed files can be shared with an attorney.
               </p>
             )}
             <ul className="list">
@@ -265,22 +271,22 @@ function VaultFile({ blob, meta, inFinal, makeUrl }: { blob: BlobMeta; meta?: Ev
   }
   return (
     <li className="evidence-row">
-      {view?.isImage ? <img className="thumb" src={view.url} alt={`Preview of ${meta?.fileName ?? 'file'}`} /> : <div className="thumb" aria-hidden="true" />}
+      {view?.isImage ? <img className="thumb" src={view.url} alt={`Preview of ${meta?.fileName ?? 'file'}`} /> : <ThumbPlaceholder mime={meta?.mimeType} />}
       <div className="meta stack">
         <div className="row">
-          <strong>{meta?.fileName ?? 'Encrypted file'}</strong>
-          {inFinal ? <span className="badge">In sealed account</span> : <span className="badge neutral">Not yet sealed into account</span>}
+          <strong style={{ overflowWrap: 'anywhere' }}>{meta?.fileName ?? 'Locked file'}</strong>
+          {inFinal ? <span className="badge sage">In your sealed story</span> : <span className="badge neutral">Not in your sealed story yet</span>}
           {view && <VerifyBadge verified={view.verified} />}
         </div>
         <p className="small muted">
           {formatBytes(meta?.sizeBytes ?? blob.sizeBytes)} · sealed {formatDate(blob.createdAt)}
           {meta?.description && <> · {meta.description}</>}
         </p>
-        {meta && <p className="mono small">SHA-256: {shortHash(meta.sha256, 20)}</p>}
+        {meta && <p className="mono small muted">SHA-256: {shortHash(meta.sha256, 20)}</p>}
         <div className="row">
           {!view && (
             <button className="btn btn-small" onClick={() => void open()} disabled={busy}>
-              {busy ? 'Decrypting…' : 'Decrypt & view'}
+              {busy ? 'Unlocking…' : 'Unlock & view'}
             </button>
           )}
           {view && (
@@ -293,4 +299,8 @@ function VaultFile({ blob, meta, inFinal, makeUrl }: { blob: BlobMeta; meta?: Ev
       </div>
     </li>
   );
+}
+
+function ThumbPlaceholder({ mime }: { mime?: string }) {
+  return <div className="thumb" aria-hidden="true">{mime?.startsWith('image/') ? <IconImage /> : <IconFile />}</div>;
 }

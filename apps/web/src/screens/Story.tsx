@@ -1,10 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
+import { onBeforeLock } from '../lib/beforeLock';
+import { onWipe } from '../lib/wipe';
 import { Link, useNavigate } from 'react-router-dom';
 import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common';
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
-import { latestOf, loadVault, lodgeEscrow, mergeEvidence, resumeFrom, sealPayload, shortHash } from '../lib/vault';
+import { latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
+import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
+import { lodgeMatches } from '../space/adapters';
+import { matchContactOf } from '../intake/record';
+
+/** Autosave to her vault: at most one save per minute, a moment after a meaningful change. */
+const MIN_GAP_MS = 60_000;
+const SETTLE_MS = 2_000;
 
 interface Boot {
   working: WorkingData;
@@ -14,15 +23,23 @@ interface Boot {
 }
 
 export function Story() {
-  const { api, session, getWorkingData, setWorkingData } = useRequiredSession();
+  const { api, session, getWorkingData, setWorkingData, profile } = useRequiredSession();
   const navigate = useNavigate();
   const [boot, setBoot] = useState<Boot | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const workingRef = useRef<WorkingData | null>(null);
   const saveTimer = useRef<number | undefined>(undefined);
-  const [saveState, setSaveState] = useState<{ busy: boolean; msg?: string; error?: string }>({ busy: false });
+  const [vaultSave, setVaultSave] = useState<{ phase: SavePhase; at?: number }>({ phase: 'idle' });
+  // Autosave bookkeeping. `stopped` is set by Quick exit / lock (wipe) and while sealing: nothing is saved after it.
+  const auto = useRef({ lastAt: 0, lastJson: '', inFlight: null as Promise<void> | null, timer: undefined as number | undefined, failures: 0, stopped: false });
+  const [pastSafety, setPastSafety] = useState(false);
+  const pastSafetyRef = useRef(false);
+  pastSafetyRef.current = pastSafety;
   const [sealing, setSealing] = useState<string | null>(null);
   const [sealed, setSealed] = useState<{ entry: LedgerEntry; contentHash: string; escrowNote?: string } | null>(null);
+  // How she prefers to tell it: the open story space (default) or one question at a time.
+  const [mode, setMode] = useState<'space' | 'interview'>('space');
+  const [fileCount, setFileCount] = useState(0);
 
   // Load: in-memory working draft first; else the latest draft saved in the vault.
   useEffect(() => {
@@ -42,6 +59,14 @@ export function Story() {
         };
       if (!alive) return;
       workingRef.current = working;
+      if (!mem?.draft && draftRecord && working.draft) {
+        // Resumed from the vault: that is what is saved, so there is nothing new to save yet.
+        auto.current.lastJson = JSON.stringify([working.draft, working.evidence]);
+        setVaultSave({ phase: 'saved', at: Date.parse(draftRecord.meta.createdAt) });
+      }
+      setPastSafety(!!working.draft && safetyStage(working.draft) === 'done');
+      setMode(working.draft?.space?.mode === 'interview' ? 'interview' : 'space');
+      setFileCount(working.evidence.length);
       setBoot({
         working,
         previousFinalId: final?.meta.id,
@@ -55,31 +80,149 @@ export function Story() {
     };
   }, [api, session.masterKey, getWorkingData]);
 
+  /**
+   * Save the encrypted draft to her vault now (if anything changed since the last save).
+   * Never runs after Quick exit / lock, or while sealing.
+   */
+  async function saveToVault(): Promise<void> {
+    const a = auto.current;
+    if (a.stopped) return;
+    window.clearTimeout(a.timer);
+    a.timer = undefined;
+    while (a.inFlight) await a.inFlight;
+    if (a.stopped) return;
+    const w = workingRef.current;
+    if (!w?.draft) return;
+    const json = JSON.stringify([w.draft, w.evidence]);
+    if (json === a.lastJson) {
+      if (a.lastAt) setVaultSave({ phase: 'saved', at: a.lastAt });
+      return;
+    }
+    setVaultSave((v) => ({ ...v, phase: 'saving' }));
+    const run = (async () => {
+      try {
+        const res = await sealPayload(
+          api,
+          session.masterKey,
+          { kind: 'draft', draft: w.draft!, evidence: w.evidence, savedAt: new Date().toISOString() },
+          w.savedDraftRecordId,
+        );
+        if (a.stopped) return;
+        a.lastJson = json;
+        a.lastAt = Date.now();
+        a.failures = 0;
+        workingRef.current = { ...(workingRef.current ?? w), savedDraftRecordId: res.record.id };
+        await setWorkingData(workingRef.current);
+        setVaultSave({ phase: 'saved', at: a.lastAt });
+      } catch {
+        if (a.stopped) return;
+        a.failures += 1;
+        setVaultSave((v) => ({ ...v, phase: 'error' }));
+        scheduleSave(Math.min(5 * 60_000, 30_000 * a.failures)); // "we'll try again"
+      }
+    })();
+    a.inFlight = run;
+    try {
+      await run;
+    } finally {
+      a.inFlight = null;
+    }
+  }
+  const saveRef = useRef(saveToVault);
+  saveRef.current = saveToVault;
+
+  /** Coalesce: one pending save at a time, a moment after the change and at least a minute after the last save. */
+  function scheduleSave(delay?: number) {
+    const a = auto.current;
+    if (a.stopped) return;
+    if (a.timer !== undefined) {
+      if (delay === undefined) return;
+      window.clearTimeout(a.timer);
+    }
+    const d = delay ?? Math.max(SETTLE_MS, a.lastAt + MIN_GAP_MS - Date.now());
+    a.timer = window.setTimeout(() => {
+      a.timer = undefined;
+      void saveRef.current();
+    }, d);
+  }
+
+  // Quick exit / lock wipes everything: stop autosaving at once (before anything unmounts).
+  useEffect(
+    () =>
+      onWipe(() => {
+        auto.current.stopped = true;
+        window.clearTimeout(auto.current.timer);
+        window.clearTimeout(saveTimer.current);
+      }),
+    [],
+  );
+  // Save on leaving the page, when the tab is hidden, and before a calm "Lock & sign out".
+  useEffect(() => {
+    const flush = () => (pastSafetyRef.current ? saveRef.current() : Promise.resolve());
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') void flush();
+    };
+    document.addEventListener('visibilitychange', onHide);
+    const off = onBeforeLock(flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      off();
+      window.clearTimeout(auto.current.timer);
+      auto.current.timer = undefined;
+      void flush();
+    };
+  }, []);
+
   function onDraftChange(d: IntakeDraft) {
     const next = { ...(workingRef.current ?? { evidence: [] }), draft: d } as WorkingData;
     workingRef.current = next;
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => void setWorkingData(next), 400);
+    const past = safetyStage(d) === 'done';
+    if (past !== pastSafetyRef.current) {
+      pastSafetyRef.current = past;
+      setPastSafety(past);
+    }
+    // One question at a time: every answered step is a checkpoint (the minute between saves keeps it calm).
+    if (past && d.space?.mode === 'interview') scheduleSave();
   }
 
-  async function saveToVault() {
-    const w = workingRef.current;
-    if (!w?.draft) return;
-    setSaveState({ busy: true });
-    try {
-      const res = await sealPayload(
-        api,
-        session.masterKey,
-        { kind: 'draft', draft: w.draft, evidence: w.evidence, savedAt: new Date().toISOString() },
-        w.savedDraftRecordId,
-      );
-      const next = { ...w, savedDraftRecordId: res.record.id };
-      workingRef.current = next;
-      await setWorkingData(next);
-      setSaveState({ busy: false, msg: `Draft saved to your vault at ${formatDate(res.ledgerEntry.timestamp)}. You can come back to it any time.` });
-    } catch (e) {
-      setSaveState({ busy: false, error: friendlyError(e) });
+  /** The story space reached a meaningful moment (words added or changed, a suggestion kept, a page saved). */
+  function onCheckpoint() {
+    if (pastSafetyRef.current) scheduleSave();
+  }
+
+  /** Files added from the story space: stripped + encrypted on this device, attached to the draft, saved to the vault. */
+  async function onAddFiles(files: File[]): Promise<number> {
+    const added = [];
+    let lastError: unknown;
+    for (const file of files) {
+      try {
+        added.push((await uploadEvidence(api, session.masterKey, file)).item);
+      } catch (e) {
+        lastError = e;
+      }
     }
+    if (!added.length) throw new Error(friendlyError(lastError));
+    const w = workingRef.current ?? { draft: null, evidence: [] };
+    const next: WorkingData = { ...w, evidence: mergeEvidence(w.evidence, added) };
+    workingRef.current = next;
+    setFileCount(next.evidence.length);
+    await setWorkingData(next);
+    // Keep the file details with her draft in the vault right away, so they survive signing out.
+    // (On failure the status line says so and tries again.)
+    if (next.draft) await saveToVault();
+    return added.length;
+  }
+
+  function switchMode(d: IntakeDraft, to: 'space' | 'interview') {
+    window.clearTimeout(saveTimer.current);
+    const draft = to === 'interview' ? toInterview(d) : { ...d, space: { ...(d.space ?? {}), mode: 'space' as const } };
+    const next = { ...(workingRef.current ?? { evidence: [] }), draft } as WorkingData;
+    workingRef.current = next;
+    void setWorkingData(next);
+    setMode(to);
+    window.scrollTo?.({ top: 0 });
   }
 
   async function onEvidenceRequest() {
@@ -95,6 +238,12 @@ export function Story() {
   async function onComplete(intake: IntakeRecord): Promise<void> {
     if (!boot) throw new Error('Your vault is still opening.');
     window.clearTimeout(saveTimer.current);
+    // No draft autosave while (or after) sealing: the sealed version must be the newest.
+    const a = auto.current;
+    a.stopped = true;
+    window.clearTimeout(a.timer);
+    a.timer = undefined;
+    while (a.inFlight) await a.inFlight;
     try {
       const record: IntakeRecord = {
         ...intake,
@@ -102,12 +251,18 @@ export function Story() {
       };
       let escrowed = boot.previousEscrowed;
       let escrowNote: string | undefined;
-      if (record.perpetrators.some((p) => p.escrowOptIn && p.identifiers.length)) {
+      if (record.perpetrators.some((p) => p.escrowOptIn && p.identifiers.some((i) => i.kind !== 'full_name' && i.kind !== 'other'))) {
         setSealing('Sealing the names you chose for escrow…');
         try {
-          escrowed = await lodgeEscrow(api, session.masterKey, record, boot.previousEscrowed);
+          escrowed = await lodgeMatches(
+            api,
+            session.masterKey,
+            record,
+            boot.previousEscrowed,
+            workingRef.current?.draft ? matchContactOf(workingRef.current.draft) : undefined,
+          );
         } catch (e) {
-          escrowNote = `Your account was sealed, but escrow could not be completed right now (${friendlyError(e)}). You can try again later.`;
+          escrowNote = `Your account was sealed, but the sealed match could not be set up right now (${friendlyError(e)}). You can try again later.`;
         }
       }
       setSealing('Encrypting and sealing your account…');
@@ -122,11 +277,14 @@ export function Story() {
       workingRef.current = null;
       setSealed({ entry: res.ledgerEntry, contentHash: res.record.contentHash, escrowNote });
     } catch (e) {
+      a.stopped = false; // nothing sealed: keep her draft saving
       throw new Error(friendlyError(e));
     } finally {
       setSealing(null);
     }
   }
+
+  const statusLine = <SaveStatus phase={vaultSave.phase} at={vaultSave.at} onSaveNow={() => void saveToVault()} />;
 
   if (sealed) {
     return (
@@ -148,7 +306,7 @@ export function Story() {
           <div className="row">
             <Link className="btn" to="/vault/brief">Prepare an incident summary</Link>
             <Link className="btn" to="/vault/share">Share with a verified attorney</Link>
-            <Link className="btn btn-quiet" to="/vault">Back to your vault</Link>
+            <Link className="btn btn-quiet" to="/vault">Home</Link>
           </div>
         </div>
       </div>
@@ -157,44 +315,53 @@ export function Story() {
 
   return (
     <div className="stack-lg">
-      <PageTitle lead="Go at your own pace. You can skip anything, take breaks, and save a draft at any time. Your words are never rewritten.">
-        Your account
-      </PageTitle>
+      <PageTitle>My story</PageTitle>
       {bootError && <ErrorNote>{bootError}</ErrorNote>}
       {!boot && !bootError && <Loading label="Opening your draft…" />}
       {boot && (
         <>
           {boot.hasSealed && (
             <p className="card soft small">
-              You already have a sealed account. If you finish again, it’s sealed as a new version — the earlier one is kept
+              You already have a sealed account. If you seal again, it’s kept as a new version — the earlier one stays
               unchanged, so the record of when you said what is preserved.
             </p>
           )}
-          {boot.working.evidence.length > 0 && (
-            <p className="small muted">{boot.working.evidence.length} evidence file(s) will be attached when you seal.</p>
+          {mode === 'space' ? (
+            <StorySpace
+              key="space"
+              initialDraft={workingRef.current?.draft ?? boot.working.draft ?? undefined}
+              onDraftChange={onDraftChange}
+              onComplete={onComplete}
+              onAddFiles={onAddFiles}
+              fileCount={fileCount}
+              name={profile?.preferredName}
+              onSwitchToInterview={(d) => switchMode(d, 'interview')}
+              onCheckpoint={onCheckpoint}
+              hasSealed={boot.hasSealed}
+              saveStatus={statusLine}
+            />
+          ) : (
+            <>
+              <p className="small">
+                <button
+                  type="button"
+                  className="btn btn-quiet btn-small"
+                  onClick={() => switchMode(workingRef.current?.draft ?? emptyDraft(), 'space')}
+                >
+                  ← Back to the open story space
+                </button>
+              </p>
+              {pastSafety && <div className="space-root space-status-row">{statusLine}</div>}
+              {fileCount > 0 && <p className="small muted">{fileCount} evidence file(s) will be attached when you seal.</p>}
+              <IntakeChat
+                key="interview"
+                initialDraft={workingRef.current?.draft ?? boot.working.draft ?? undefined}
+                onDraftChange={onDraftChange}
+                onComplete={onComplete}
+                onRequestEvidenceUpload={() => void onEvidenceRequest()}
+              />
+            </>
           )}
-          <IntakeChat
-            initialDraft={boot.working.draft ?? undefined}
-            onDraftChange={onDraftChange}
-            onComplete={onComplete}
-            onRequestEvidenceUpload={() => void onEvidenceRequest()}
-          />
-          <div className="card stack">
-            <div className="row">
-              <button className="btn" type="button" onClick={() => void saveToVault()} disabled={saveState.busy}>
-                {saveState.busy ? 'Saving…' : 'Save draft to my vault'}
-              </button>
-              <Link to="/vault/evidence" onClick={() => workingRef.current && void setWorkingData(workingRef.current)}>
-                Add evidence
-              </Link>
-            </div>
-            <p className="small muted">
-              While you’re signed in, your draft is kept encrypted in this tab’s memory only. Saving it to your vault lets
-              you continue on another day.
-            </p>
-            {saveState.msg && <p role="status">{saveState.msg}</p>}
-            {saveState.error && <ErrorNote>{saveState.error}</ErrorNote>}
-          </div>
           {sealing && <Loading label={sealing} />}
         </>
       )}

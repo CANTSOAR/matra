@@ -11,8 +11,9 @@
  *   share.granted    SHA-256_hex(JSON.stringify({ shareId, recordId, attorneyId, consentStatement, scope, blobIds }))
  *                    — attests the exact consent text. blobIds keep the order sent by the client.
  *   share.revoked    SHA-256_hex(JSON.stringify({ shareId, status: 'revoked', revokedAt }))
- *   escrow.sealed    SHA-256_hex(canonical labelEnvelope JSON) — the identifier hash is deliberately
- *                    NOT used, so the ledger cannot be used to link entries about the same person.
+ *   escrow.sealed    SHA-256_hex(canonical bundle Envelope JSON) of a sealed-match entry — the (random) contact-bundle
+ *                    ciphertext; the matching tag is deliberately NOT used, so the ledger cannot link entries about
+ *                    the same person. Withdrawals write no ledger entry (the entry row is simply deleted).
  *                    There is deliberately NO 'escrow.matched' entry type: writing one at match time would let
  *                    anyone watching /api/ledger/head learn that a submission matched. matched_at lives in the DB only.
  *   account.shredded SHA-256_hex(JSON.stringify({ userId, recordIds, blobIds }))  (ids sorted ascending)

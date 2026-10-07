@@ -152,6 +152,11 @@ export interface IntakeRecord {
 
   /** Survivor's own words. Never rewritten or "improved" by software. */
   narrative: {
+    /**
+     * Her story pieces, verbatim and in the order she added them (typed, or spoken and transcribed on her device
+     * and reviewed by her before saving). When present, `freeRecall` equals their texts joined with a blank line.
+     */
+    entries?: Array<{ id: string; createdAt: string; text: string; source: 'typed' | 'voice' }>;
     freeRecall: string;
     sensory: { sight?: string; sound?: string; smell?: string; touch?: string; taste?: string };
     contextBefore?: string;
@@ -262,7 +267,11 @@ export interface WrappedKey {
 
 // ───────────────────────── Domain objects returned by the API ─────────────────────────
 
-export type Role = 'survivor' | 'attorney';
+/**
+ * 'counselor' = a Legal Options Counselor (Callisto's "LOC" role): an independent, verified professional who receives
+ * ONLY matched sealed-match groups and reaches out to each matched survivor separately. Not police, not a school.
+ */
+export type Role = 'survivor' | 'attorney' | 'counselor';
 
 export interface PublicUser {
   id: string;
@@ -354,32 +363,118 @@ export interface ShareBundle {
   recipientWrappedKey: WrappedKey;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey; contentHash: string; sizeBytes: number }>;
   survivorAlias: string;
-  /**
-   * Blind-escrow summary for THIS survivor's own entries only — no labels, no hashes, nothing about any other
-   * survivor. This is the only place match results are ever released: to the verified attorney the survivor
-   * chose to share with (a human gatekeeper), never to the survivor's own client, so a perpetrator posing as a
-   * survivor cannot submit his own identifiers to learn whether he has been named.
-   */
-  escrow: { sealedCount: number; matchedCount: number };
+  // NOTE: attorneys no longer receive sealed-match counts. Matches go only to a Legal Options Counselor
+  // (role 'counselor'), who contacts each matched survivor separately — see CounselorMatchGroup.
 }
 
 export type EscrowStatus = 'sealed' | 'matched';
 
+/** Survivor-facing view of one of HER OWN sealed-match entries (GET /api/escrow, GET/POST /api/matching/entries). */
 export interface EscrowEntry {
   id: string;
-  /** label the survivor sees, stored encrypted client-side — server only returns it back */
+  /** label the survivor sees (encrypted under her master key) — the server only returns it back */
   labelEnvelope: Envelope;
   /**
-   * Survivor-facing responses (POST/GET /api/escrow) ALWAYS report 'sealed', whatever the real state.
-   * The true sealed/matched state is kept server-side and surfaced only as counts in ShareBundle.escrow
-   * to a verified attorney with an active share. Showing 'matched' to survivors would let a perpetrator
-   * register as a survivor, escrow his own identifiers, and learn he has been reported.
+   * Survivor-facing responses ALWAYS report 'sealed', whatever the real state. Matched groups are released only to
+   * verified Legal Options Counselors. Showing 'matched' to survivors would let a perpetrator register as a
+   * survivor, submit his own identifiers, and learn he has been named.
    */
   status: EscrowStatus;
   createdAt: string;
   /** Never sent to survivors (see `status`). Retained for type compatibility. */
   matchedAt?: string;
   ledgerEntryId: string;
+}
+
+// ───────────────────────── Sealed matching (Callisto-style) ─────────────────────────
+// Protocol: packages/crypto/src/matching.ts. Wire encoding: group elements / scalars / proofs = base64,
+// field elements (Shamir x / y over p = 2^256 + 297) = 66-char big-endian hex, tags = 64-char hex.
+
+/** A Legal Options Counselor's public profile (verified by Matra like attorneys). */
+export interface CounselorProfile {
+  userId: string;
+  displayName: string;
+  organization?: string;
+  jurisdictions: string[];
+  verified: boolean;
+  /** RSA-OAEP public key (JWK): sealed-match shares are encrypted to this key. */
+  publicKey: JsonWebKey;
+}
+
+/** How a matched survivor would like a counselor to reach her. Encrypted inside her contact bundle. */
+export interface MatchContactPreferences {
+  /** What the counselor should call her. */
+  name?: string;
+  methods: Array<'call' | 'text' | 'email' | 'voicemail'>;
+  phone?: string;
+  email?: string;
+  /** "only after 6pm", "don't leave a message", … (her words) */
+  notes?: string;
+  language?: string;
+}
+
+/** The plaintext a counselor can open ONLY after a match (2 distinct survivors). Never sent to the server in clear. */
+export interface MatchContactBundle {
+  v: 1;
+  /** which kind of identifier matched, and its canonical form (e.g. "instagram:bad_guy") */
+  identifier: { kind: 'email' | 'phone' | 'social'; canonical: string };
+  contact: MatchContactPreferences;
+  /** the exact explanation she agreed to, and when */
+  consent: { statement: string; at: string };
+  /** USPS state of the incident or residence, if she gave one (assignment data for routing) */
+  state?: string;
+}
+
+/** Hybrid RSA-OAEP-256 + AES-256-GCM ciphertext addressed to one counselor. */
+export interface CounselorSeal {
+  counselorId: string;
+  wrappedKey: WrappedKey;
+  envelope: Envelope;
+}
+
+export interface OprfEvaluateRequest { blinded: string }
+/** RFC 9497 VOPRF (ristretto255-SHA512) evaluation with its DLEQ proof against the key holder's public key. */
+export interface OprfEvaluateResponse { evaluated: string; proof: string }
+
+export interface MatchingConfig {
+  threshold: 2;
+  suite: 'ristretto255-SHA512';
+  mode: 'voprf';
+  /** Public keys of the two independent OPRF key holders (base64 ristretto255 elements). */
+  keyHolders: { a: { publicKey: string }; b: { publicKey: string } };
+  /** Verified counselors; a sealed entry carries one CounselorSeal per counselor. */
+  counselors: CounselorProfile[];
+  limits: { perDay: number; lifetime: number };
+}
+
+export interface CreateMatchEntryRequest {
+  /** 64 hex chars: HKDF(OPRF output, "tag"). Pseudorandom per perpetrator identifier. */
+  tag: string;
+  /** MatchContactBundle encrypted under a fresh entry key (AAD = tag) */
+  bundle: Envelope;
+  /** her own label (encrypted under her master key) */
+  labelEnvelope: Envelope;
+  /** one per verified counselor: {tag, x, y, ce} sealed to that counselor */
+  seals: CounselorSeal[];
+}
+
+/** A matched group as released to ONE counselor: only seals addressed to that counselor, never user ids. */
+export interface CounselorMatchGroup {
+  id: string;
+  /** the shared tag π (pseudorandom; bound into every seal's AAD so seals can't be moved between groups) */
+  tag: string;
+  matchedAt: string;
+  entries: Array<{ entryId: string; createdAt: string; bundle: Envelope; seal: CounselorSeal }>;
+  notes: CounselorNote[];
+}
+
+/** Outreach note, encrypted client-side under the counselor's own master key. */
+export interface CounselorNote {
+  id: string;
+  groupId: string;
+  entryId?: string;
+  envelope: Envelope;
+  createdAt: string;
 }
 
 export interface AuditEvent {
@@ -405,6 +500,8 @@ export interface RegisterRequest {
   publicKey: JsonWebKey;
   wrappedPrivateKey: Envelope;
   attorneyProfile?: Omit<AttorneyProfile, 'userId' | 'verified' | 'publicKey'>;
+  /** Required when role is 'counselor'. Counselors start unverified; Matra verifies them like attorneys. */
+  counselorProfile?: Omit<CounselorProfile, 'userId' | 'verified' | 'publicKey'>;
   /**
    * Required (must be `true`) when role is 'survivor': she confirms she is 18 or older. The server stores the
    * confirmation and its time. Matra is for adults only (self-attestation; it cannot verify age).
@@ -435,12 +532,6 @@ export interface CreateShareRequest {
   expiresInDays?: number;
 }
 
-export interface CreateEscrowRequest {
-  /** hex output of escrowIdentifierHash() — server HMACs again with a server pepper */
-  identifierHash: string;
-  labelEnvelope: Envelope;
-}
-
 export interface LedgerVerifyResponse { ok: boolean; length: number; headHash: string; brokenAtSeq?: number }
 
 export interface ApiError { error: string; code?: string }
@@ -453,7 +544,7 @@ export interface ApiError { error: string; code?: string }
  POST   /api/auth/register      RegisterRequest       -> AuthResponse
  POST   /api/auth/login         LoginRequest          -> AuthResponse
  POST   /api/auth/logout                              -> { ok: true }
- GET    /api/me                                       -> { user: PublicUser, attorneyProfile?: AttorneyProfile }
+ GET    /api/me                                       -> { user: PublicUser, attorneyProfile?: AttorneyProfile, counselorProfile?: CounselorProfile }
 
  POST   /api/vault/records      CreateRecordRequest   -> CreateRecordResponse
  GET    /api/vault/records                            -> { records: VaultRecordMeta[] }
@@ -469,12 +560,21 @@ export interface ApiError { error: string; code?: string }
  GET    /api/attorneys?state=NJ                       -> { attorneys: AttorneyProfile[] }  (verified only)
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }
  GET    /api/shares                                   -> { shares: Share[] }  (survivor: outgoing, attorney: incoming)
- GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares; includes escrow counts)
+ GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares)
  POST   /api/shares/:id/renew  { expiresInDays? } -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; not revoked)
  POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only)
 
- POST   /api/escrow             CreateEscrowRequest   -> { entry: EscrowEntry }     (status always 'sealed')
- GET    /api/escrow                                   -> { entries: EscrowEntry[] } (status always 'sealed')
+ GET    /api/escrow                                   -> { entries: EscrowEntry[] } (own sealed-match entries; status always 'sealed')
+
+ GET    /api/matching/config                          -> MatchingConfig   (survivor)
+ POST   /api/matching/oprf-a    OprfEvaluateRequest   -> OprfEvaluateResponse (verified-adult survivor; rate-limited)
+ POST   /api/matching/oprf-b    OprfEvaluateRequest   -> OprfEvaluateResponse (independent key; separately rate-limited)
+ POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed')
+ GET    /api/matching/entries                         -> { entries: EscrowEntry[] }
+ DELETE /api/matching/entries/:id                     -> { ok: true }  (withdraw: deletes her entry)
+
+ GET    /api/counselor/groups                         -> { groups: CounselorMatchGroup[] }  (verified counselor; matched groups only)
+ POST   /api/counselor/groups/:id/notes { entryId?, envelope } -> { note: CounselorNote }
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
  POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)

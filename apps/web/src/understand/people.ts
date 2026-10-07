@@ -215,17 +215,17 @@ function emitName(ctx: Ctx, s: number, e: number, confidence: Confidence, known?
   });
 }
 
-function emitRelationship(ctx: Ctx, s: number, e: number, rel: string, confidence: Confidence, known?: string): void {
+function emitRelationship(ctx: Ctx, s: number, e: number, rel: string, confidence: Confidence, known?: string, label?: string): void {
   const value: Record<string, string> = { relationship: rel };
   if (known) value.known = known;
   emit(ctx, {
     kind: 'relationship', target: 'person.list', value, confidence,
-    label:
-      known === 'no' && !/\bmy\b/i.test(rel)
+    label: label ??
+      (known === 'no' && !/\bmy\b/i.test(rel)
         ? `It sounds like you didn’t know the person before (${quote(rel)}).`
         : /^(?:my|our)\s/i.test(rel)
           ? `It sounds like the person who did this is ${toSecondPerson(rel)}.`
-          : `You mentioned how you know the person who did this: ${quote(rel)}.`,
+          : `You mentioned how you know the person who did this: ${quote(rel)}.`),
     start: s, end: e, key: rel.toLowerCase().replace(/^(?:my|our|a|an|the)\s+/, ''),
   });
 }
@@ -283,6 +283,24 @@ function personResponsible(ctx: Ctx): void {
     }
     emitRelationship(ctx, s, rg[1], rel, confidence, known);
     consume(ctx, s, e);
+  }
+
+  // "a party at my coworker's apartment": the person whose place it was may be the person she is describing.
+  // Offered gently (low confidence), and only when the story talks about "him".
+  const hostRe = new RegExp(
+    String.raw`\b(?<det>my|our|a|an)\s+(?<rel>${PERP_REL})['’]s\s+(?:apartment|apt|place|house|home|room|dorm(?: room)?|party|car|office|condo|cabin|backyard)\b`,
+    'giu',
+  );
+  for (const m of matches(ctx, hostRe)) {
+    const rg = group(m, 'rel')!;
+    if (!mentionsHim || inQuote(ctx, m.index) || isConsumed(ctx, m.index, rg[1])) continue;
+    if (!STRONG_PERP.test(t.slice(rg[0], rg[1]))) continue;
+    if (polarity(t, sentOf(ctx, m.index), m.index) === 'neg') continue;
+    const rel = t.slice(m.index, rg[1]);
+    emitRelationship(
+      ctx, m.index, rg[1], rel, 'low', 'yes',
+      `You mentioned ${toSecondPerson(rel)}. If that’s the person who did this, you can keep it here.`,
+    );
   }
 
   // A name right before a harm verb: "Jake pushed me", "R kept giving me drinks".

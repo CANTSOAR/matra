@@ -9,15 +9,13 @@
  *   masterKey wraps: the user's RSA-OAEP private key, and every per-record / per-blob key.
  *   Sharing: a record key is re-wrapped to the attorney's RSA public key.
  */
-import type { Envelope, IdentifierKind, WrappedKey } from '@matra/shared';
+import type { Envelope, WrappedKey } from '@matra/shared';
 
 const subtle = globalThis.crypto.subtle;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 export const DEFAULT_KDF_ITERATIONS = 600_000;
-const ESCROW_SALT = enc.encode('matra/escrow/v1');
-const ESCROW_ITERATIONS = 200_000;
 
 // ───────────── encoding ─────────────
 
@@ -199,53 +197,7 @@ export async function publicKeyFingerprint(jwk: JsonWebKey): Promise<string> {
   return h.slice(0, 32).toUpperCase().match(/.{4}/g)!.join('-');
 }
 
-// ───────────── blind escrow ─────────────
-
-/** Canonicalise an identifier so that two survivors typing the same person produce the same value. */
-export function normalizeIdentifier(kind: IdentifierKind, value: string, platform?: string): string {
-  let v = value.normalize('NFKC').trim().toLowerCase();
-  switch (kind) {
-    case 'email': {
-      v = v.replace(/\s+/g, '');
-      const [local, domain] = v.split('@');
-      if (local && domain) {
-        let l = local.split('+')[0];
-        if (domain === 'gmail.com' || domain === 'googlemail.com') l = l.replace(/\./g, '');
-        v = `${l}@${domain === 'googlemail.com' ? 'gmail.com' : domain}`;
-      }
-      break;
-    }
-    case 'phone': {
-      let digits = v.replace(/\D/g, '');
-      if (digits.length === 10) digits = `1${digits}`; // assume NANP
-      v = digits;
-      break;
-    }
-    case 'social_handle':
-      v = `${(platform ?? 'unknown').trim().toLowerCase()}:${v.replace(/^@/, '').replace(/\s+/g, '')}`;
-      break;
-    case 'full_name':
-      v = v.replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ');
-      break;
-    default:
-      v = v.replace(/\s+/g, ' ');
-  }
-  return `${kind}|${v}`;
-}
-
-/**
- * Slow, salted hash of a normalised identifier. The server never sees the identifier;
- * it re-hashes this value with a secret pepper (HMAC) before storing it, so a database
- * leak alone does not allow dictionary attacks.
- */
-export async function escrowIdentifierHash(kind: IdentifierKind, value: string, platform?: string): Promise<string> {
-  const base = await subtle.importKey('raw', enc.encode(normalizeIdentifier(kind, value, platform)), 'PBKDF2', false, [
-    'deriveBits',
-  ]);
-  const bits = await subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: ESCROW_SALT, iterations: ESCROW_ITERATIONS },
-    base,
-    256,
-  );
-  return toHex(bits);
-}
+// ───────────── sealed matching ─────────────
+// The old "blind escrow" (client PBKDF2 hash + server HMAC pepper) was replaced by the Callisto-style protocol in
+// ./matching.ts: a split-key RFC 9497 VOPRF, per-perpetrator Shamir shares, and counselor-only threshold decryption.
+export * from './matching';

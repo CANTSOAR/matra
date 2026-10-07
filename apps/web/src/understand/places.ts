@@ -17,8 +17,22 @@ const VENUE_RE =
 const NOT_INCIDENT = /\b(?:after(?:wards?)?|later|went home|got home|drove home|walked home|the next|i told|i texted|i called|now|these days|moved)\b/i;
 const INCIDENT = /\b(?:happened|it was (?:at|in)|that['’]s where|he|him|his|took me|brought me|drove me|walked me|invited me|pushed|grabbed|pinned|kissed|touched|forced|locked|choked)\b/i;
 
+/** A place that says little on its own ("a party", "the bar") — a more specific place nearby wins. */
+const GENERIC_PLACE =
+  /^(?:a|an|the|some|this|that)\s+(?:[\p{Ll}-]+\s+){0,2}?(?:party|frat party|house party|bar|club|nightclub|event|concert|festival|wedding|bonfire|restaurant|hotel|motel|place|room)$/u;
+
+interface PlaceHit {
+  s: number;
+  e: number;
+  sentStart: number;
+  confidence: Confidence;
+  generic: boolean;
+  street?: [number, number];
+}
+
 function locations(ctx: Ctx): void {
   const t = ctx.text;
+  const hits: PlaceHit[] = [];
   for (const m of matches(ctx, LOC_RE)) {
     const ph = group(m, 'ph')!;
     if (isConsumed(ctx, ph[0], ph[1]) || inQuote(ctx, ph[0])) continue;
@@ -32,12 +46,26 @@ function locations(ctx: Ctx): void {
     if (NOT_INCIDENT.test(t.slice(sent.start, m.index))) confidence = 'low';
     else if (/\bhappened\b|\bit was (?:at|in)\b|that['’]s where/i.test(st) || (INCIDENT.test(st) && /^(?:his|their|her)\b/i.test(phrase))) confidence = 'high';
     confidence = hedgeConfidence(confidence, hedge(t, sent, ph[0], ph[1]));
+    hits.push({ s: ph[0], e: ph[1], sentStart: sent.start, confidence, generic: GENERIC_PLACE.test(phrase), street: group(m, 'street') });
+  }
+  // "a party at my coworker's apartment" is one place: join a generic place to the specific one it is at.
+  const RANK = { high: 3, medium: 2, low: 1 } as const;
+  const places: PlaceHit[] = [];
+  for (const h of hits) {
+    const prev = places[places.length - 1];
+    if (prev && prev.generic && !h.generic && prev.sentStart === h.sentStart && /^\s+(?:at|in|on|inside)\s+$/i.test(t.slice(prev.e, h.s))) {
+      places[places.length - 1] = { ...h, s: prev.s, confidence: RANK[prev.confidence] > RANK[h.confidence] ? prev.confidence : h.confidence };
+    } else places.push(h);
+  }
+  for (const h of places) {
+    // A generic place is still offered — unless a more specific place is in the same sentence.
+    if (h.generic && places.some((o) => o !== h && !o.generic && o.sentStart === h.sentStart)) continue;
+    const phrase = t.slice(h.s, h.e);
     emit(ctx, {
-      kind: 'location', target: 'where.place', value: phrase, confidence,
-      label: `You mentioned a place: ${quote(phrase)}.`, start: ph[0], end: ph[1], key: phrase.toLowerCase().replace(/\s+/g, ' '),
+      kind: 'location', target: 'where.place', value: phrase, confidence: h.confidence,
+      label: `You mentioned a place: ${quote(phrase)}.`, start: h.s, end: h.e, key: phrase.toLowerCase().replace(/\s+/g, ' '),
     });
-    const sg = group(m, 'street');
-    if (sg) emitAddress(ctx, sg[0], sg[1], 'medium');
+    if (h.street) emitAddress(ctx, h.street[0], h.street[1], 'medium');
   }
   for (const m of matches(ctx, ADDRESS_RE)) emitAddress(ctx, m.index, m.index + m[0].length, 'high');
   for (const m of matches(ctx, ON_STREET_RE)) {

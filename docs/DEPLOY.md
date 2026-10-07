@@ -13,9 +13,34 @@ One Node process (`npm start`, or the Docker image) serves both:
 
 When `NODE_ENV=production`:
 
-- The web app is served with a strict Content-Security-Policy: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. There are no inline scripts, no `eval`, and no third-party origins. API responses keep `default-src 'none'`.
+- The web app is served with a strict Content-Security-Policy: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. There are no inline scripts, no `eval`, and no third-party origins. `'wasm-unsafe-eval'` lets WebAssembly compile (it does not allow JavaScript `eval`) and `worker-src 'self'` allows the same-origin worker, both for on-device voice transcription. `Permissions-Policy` allows the microphone for this origin only. API responses keep `default-src 'none'`.
 - Hashed files under `/assets/` are cached as immutable. `index.html` and all API responses are `no-store`.
 - `MATRA_PEPPER` is required. The server refuses to start without it.
+
+### On-device voice transcription: the model files
+
+Voice notes are transcribed **on her device** by Whisper (`onnx-community/whisper-base`, multilingual, 8-bit quantized) running in a Web Worker. Audio never leaves the device. The model and the ONNX Runtime wasm are served from **our own origin** under `/models/`; the app is configured so it can never fetch them from huggingface.co or a CDN (a request there would tell a third party that someone is using Matra), and the CSP's `connect-src 'self'` enforces it.
+
+`npm run build` runs `npm run fetch-models` first. It downloads the pinned model revision from Hugging Face **at build time only**, checks every file's sha256 and size, and copies the ONNX Runtime wasm from `node_modules` into `apps/web/public/models/` (gitignored). Vite then copies them into `apps/web/dist/models/`. It is idempotent: verified files are not downloaded again.
+
+```sh
+npm run fetch-models                     # ~80 MB download the first time; prints progress
+node scripts/fetch-models.mjs --check    # verify only (exit 1 if anything is missing or wrong)
+MATRA_SKIP_MODELS=1 npm run build        # build without voice: the app offers typing instead
+```
+
+The build machine (or Docker build stage) needs outbound HTTPS to `huggingface.co`. The running server never contacts it. The model revision and hashes are in `apps/web/src/voice/model-manifest.json`. What she downloads once, on first use, is about 94 MB (model 80 MB + CPU runtime 14 MB). The browser keeps it in Cache Storage under a neutral name (`speech-model-…`), so it is not downloaded again.
+
+Optional speed-up: sending `Cross-Origin-Embedder-Policy: require-corp` alongside the existing `Cross-Origin-Opener-Policy: same-origin` makes the page cross-origin isolated, and transcription then uses up to 4 wasm threads. In our measurements this was about 3× faster. The server does not send this header yet.
+
+To prove transcription works end to end under the production CSP, with zero requests to any other origin (needs macOS `say` for the test clip, or `MATRA_VOICE_WAV=<16 kHz wav>`):
+
+```sh
+npm run fetch-models
+MATRA_VOICE_HARNESS=1 npm run build          # adds a standalone test page; never part of a normal build
+npx playwright test -c playwright.prod.config.ts --grep @voice
+# If Chromium's fake microphone hangs (seen on macOS without mic permission for the terminal), add MATRA_VOICE_MIC=inject
+```
 
 To check the production build locally, including the full browser suite under the CSP with the banner on:
 

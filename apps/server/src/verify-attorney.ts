@@ -1,5 +1,6 @@
 /**
- * Admin CLI: mark an attorney as verified (or unverified) so they appear in GET /api/attorneys.
+ * Admin CLI: mark an attorney or a Legal Options Counselor as verified (or unverified).
+ * Verified attorneys appear in GET /api/attorneys; verified counselors receive matched sealed-match groups.
  *   npm run -w @matra/server verify-attorney -- <username> [--revoke]
  * Honors MATRA_DB_PATH.
  */
@@ -14,15 +15,16 @@ if (!username) {
   process.exit(1);
 }
 const db = openDb(resolveDbPath());
-const r = db
-  .prepare(
-    `UPDATE attorney_profiles SET verified = ?
-      WHERE user_id = (SELECT id FROM users WHERE username = ? AND role = 'attorney')`,
-  )
-  .run(revoke ? 0 : 1, username);
+const v = revoke ? 0 : 1;
+const a = db
+  .prepare(`UPDATE attorney_profiles SET verified = ? WHERE user_id = (SELECT id FROM users WHERE username = ? AND role = 'attorney')`)
+  .run(v, username);
+const c = db
+  .prepare(`UPDATE counselor_profiles SET verified = ? WHERE user_id = (SELECT id FROM users WHERE username = ? AND role = 'counselor')`)
+  .run(v, username);
 db.close();
-if (r.changes === 0) {
-  console.error(`No attorney account named "${username}".`);
+if (a.changes + c.changes === 0) {
+  console.error(`No attorney or counselor account named "${username}".`);
   process.exit(1);
 }
-console.log(`Attorney "${username}" is now ${revoke ? 'UNVERIFIED' : 'VERIFIED'}.`);
+console.log(`${a.changes ? 'Attorney' : 'Counselor'} "${username}" is now ${revoke ? 'UNVERIFIED' : 'VERIFIED'}.`);

@@ -63,6 +63,8 @@ describe('shares', () => {
     expect(await decryptJSON(bundle.body.record.envelope, rk)).toEqual({ narrative: 'shared words' });
     expect(bundle.body.survivorAlias).toBe('J.');
     expect(bundle.body.blobs).toHaveLength(1);
+    // attorneys no longer receive any sealed-match information (counts went to the Legal Options Counselor role)
+    expect(bundle.body).not.toHaveProperty('escrow');
 
     const dl = await request(app).get(`/api/vault/blobs/${blobId}`).set(atty.auth).buffer(true).parse(binary);
     expect(dl.status).toBe(200);

@@ -63,16 +63,23 @@ export const attorneyProfileInput = z.object({
   acceptsProBono: z.boolean(),
 });
 
+export const counselorProfileInput = z.object({
+  displayName: z.string().trim().min(1).max(200),
+  organization: z.string().trim().max(200).optional(),
+  jurisdictions: z.array(usps).min(1).max(60),
+});
+
 export const registerRequest = z
   .object({
     username,
-    role: z.enum(['survivor', 'attorney']),
+    role: z.enum(['survivor', 'attorney', 'counselor']),
     authKey: base64(128).refine((s) => b64Len(s) >= 16 && b64Len(s) <= 64, 'authKey must be 16-64 bytes'),
     kdfSalt: base64(128).refine((s) => b64Len(s) >= 16, 'kdfSalt must be at least 16 bytes'),
     kdfIterations: z.number().int().min(1_000).max(10_000_000),
     publicKey: rsaPublicJwk,
     wrappedPrivateKey: envelope,
     attorneyProfile: attorneyProfileInput.optional(),
+    counselorProfile: counselorProfileInput.optional(),
     /** Survivors must send `true` ("I am 18 or older"); attorneys may omit it. */
     ageConfirmed18: z.literal(true).optional(),
   })
@@ -81,8 +88,12 @@ export const registerRequest = z
       ctx.addIssue({ code: 'custom', path: ['ageConfirmed18'], message: 'You must confirm you are 18 or older.' });
     if (r.role === 'attorney' && !r.attorneyProfile)
       ctx.addIssue({ code: 'custom', path: ['attorneyProfile'], message: 'attorneyProfile is required for attorneys' });
-    if (r.role === 'survivor' && r.attorneyProfile)
-      ctx.addIssue({ code: 'custom', path: ['attorneyProfile'], message: 'survivors cannot have an attorneyProfile' });
+    if (r.role !== 'attorney' && r.attorneyProfile)
+      ctx.addIssue({ code: 'custom', path: ['attorneyProfile'], message: 'only attorneys have an attorneyProfile' });
+    if (r.role === 'counselor' && !r.counselorProfile)
+      ctx.addIssue({ code: 'custom', path: ['counselorProfile'], message: 'counselorProfile is required for counselors' });
+    if (r.role !== 'counselor' && r.counselorProfile)
+      ctx.addIssue({ code: 'custom', path: ['counselorProfile'], message: 'only counselors have a counselorProfile' });
   });
 
 export const loginRequest = z.object({
@@ -119,13 +130,34 @@ export const createShareRequest = z.object({
 
 export const renewShareRequest = z.object({ expiresInDays: z.number().int().min(1).max(365).optional() });
 
-export const createEscrowRequest = z.object({
-  identifierHash: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .regex(/^[a-f0-9]{64}$/, 'identifierHash must be 64 hex chars'),
-  labelEnvelope: envelope,
+/** Small envelopes (labels, contact bundles, seals, notes): ≤ 64 KB of ciphertext. */
+export const smallEnvelope = envelope.extend({ ct: base64(90_000).refine((s) => b64Len(s) >= 16, 'ct too short') });
+
+export const oprfEvaluateRequest = z.object({
+  // a serialized ristretto255 element is exactly 32 bytes
+  blinded: base64(64).refine((s) => b64Len(s) === 32, 'blinded must be 32 bytes'),
+});
+
+export const counselorSeal = z.object({
+  counselorId: id,
+  wrappedKey: recipientWrappedKey,
+  envelope: smallEnvelope,
+});
+
+export const createMatchEntryRequest = z.object({
+  tag: z.string().regex(/^[a-f0-9]{64}$/, 'tag must be 64 lowercase hex chars'),
+  bundle: smallEnvelope,
+  labelEnvelope: smallEnvelope,
+  seals: z
+    .array(counselorSeal)
+    .min(1)
+    .max(20)
+    .refine((a) => new Set(a.map((x) => x.counselorId)).size === a.length, 'duplicate counselorId'),
+});
+
+export const counselorNoteRequest = z.object({
+  entryId: id.optional(),
+  envelope: smallEnvelope,
 });
 
 export const attorneysQuery = z.object({

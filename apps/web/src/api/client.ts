@@ -12,7 +12,10 @@ import type {
   AuthResponse,
   BlobMeta,
   CreateBlobResponse,
-  CreateEscrowRequest,
+  CounselorMatchGroup,
+  CounselorNote,
+  CounselorProfile,
+  CreateMatchEntryRequest,
   CreateRecordRequest,
   CreateRecordResponse,
   CreateShareRequest,
@@ -21,6 +24,9 @@ import type {
   LedgerEntry,
   LedgerVerifyResponse,
   LoginRequest,
+  MatchingConfig,
+  OprfEvaluateRequest,
+  OprfEvaluateResponse,
   PreloginResponse,
   PublicUser,
   RegisterRequest,
@@ -128,7 +134,7 @@ export class ApiClient {
     return this.json<{ ok: true }>('POST', '/api/auth/logout');
   }
   me() {
-    return this.json<{ user: PublicUser; attorneyProfile?: AttorneyProfile }>('GET', '/api/me');
+    return this.json<{ user: PublicUser; attorneyProfile?: AttorneyProfile; counselorProfile?: CounselorProfile }>('GET', '/api/me');
   }
 
   // ── vault ──
@@ -192,11 +198,31 @@ export class ApiClient {
   }
 
   // ── escrow ──
-  createEscrow(req: CreateEscrowRequest) {
-    return this.json<{ entry: EscrowEntry }>('POST', '/api/escrow', req);
-  }
   listEscrow() {
     return this.json<{ entries: EscrowEntry[] }>('GET', '/api/escrow');
+  }
+
+  // ── sealed matching (survivor) ──
+  matchingConfig() {
+    return this.json<MatchingConfig>('GET', '/api/matching/config');
+  }
+  /** One of the two independent OPRF key holders ('a' / 'b'). */
+  oprfEvaluate(holder: 'a' | 'b', req: OprfEvaluateRequest) {
+    return this.json<OprfEvaluateResponse>('POST', `/api/matching/oprf-${holder}`, req);
+  }
+  createMatchEntry(req: CreateMatchEntryRequest) {
+    return this.json<{ entry: EscrowEntry }>('POST', '/api/matching/entries', req);
+  }
+  withdrawMatchEntry(id: string) {
+    return this.json<{ ok: true }>('DELETE', `/api/matching/entries/${encodeURIComponent(id)}`);
+  }
+
+  // ── Legal Options Counselor ──
+  counselorGroups() {
+    return this.json<{ groups: CounselorMatchGroup[] }>('GET', '/api/counselor/groups');
+  }
+  addCounselorNote(groupId: string, req: { entryId?: string; envelope: Envelope }) {
+    return this.json<{ note: CounselorNote }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/notes`, req);
   }
 
   // ── audit / account ──
