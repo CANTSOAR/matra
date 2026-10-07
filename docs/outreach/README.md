@@ -15,11 +15,28 @@
 
 1. **Fiscal sponsor first** (weeks 0–6). Grants, partner agreements, and advisors' institutions all need a legal home. Apply to Superbloom and Code for Science & Society, and contact Hopewell. Keep Community Partners (next deadline Nov 1) or Social Good Fund as a fallback.
 2. **Advocate reviewers of the intake script** (weeks 0–8), working in parallel. Start with county CSVA programs (SAVE of Essex, healingSPACE in Bergen, Middlesex Center for Empowerment) and NJCASA. Their sign-off shapes everything else and gives the project credibility with lawyers.
-3. **A law-school clinic** (Rutgers or Seton Hall), timed to its semester intake. A clinic can take on the open legal questions (RPC 7.3(e) status, privilege design, spoliation warnings), terms of use, and help forming the entity.
-4. **Individual victims'-rights attorneys and national experts** (VRLC, NCVLI) to review the consent text, warnings, and the Incident Summary.
+3. **A law-school clinic** (the Rutgers RBG Women's Rights & Gender Justice Clinic in Newark, which takes matters only through partner referral, or the Seton Hall Center for Social Justice), timed to its semester intake. A clinic can take on the open legal questions (RPC 7.3(e) status, privilege design, spoliation warnings), terms of use, and help forming the entity.
+4. **Victims'-rights attorneys and national experts** to review the consent text, warnings, and the Incident Summary: NJ Crime Victims' Law Center for the Incident Summary and VCCO draft, VRLC national TA, and NCVLI/NAVRA. NAVRA's pro-bono portal is also the main attorney-recruitment channel.
 5. **Security audit route** once a sponsor is in place: OSTIF intake, a request to OTF Security Lab if the project fits its mission, and a quote from Least Authority. Ask NNEDV Safety Net for a tech-safety review.
-6. **Large legal-aid organizations** (LSNJ, then NY organizations) only once you have advocate sign-off, counsel input, and an audit plan to show them.
-7. **Funders** after the sponsor is confirmed. Approach foundations for pilot-readiness work. Federal OVW/VOCA money goes **through partners**.
+6. **Legal-aid pilot partners** only once you have advocate sign-off, counsel input, and an audit plan to show them. In NJ, approach Partners (formerly Partners for Women and Justice), which has a volunteer-attorney program, and the LSNJ DV Representation Project. In NY, approach Sanctuary for Families and NYLAG.
+7. **Funders** after the sponsor is confirmed. Near-term money is Craig Newmark Philanthropies (rolling), the GitHub Secure Open Source Fund, and in-kind credits (Project Galileo, Microsoft, DigitalOcean). Federal money is **not** near-term: the FY26 OVC Technology and OVW LAV windows have closed. Plan to join an FY27 application **as a tech partner or subrecipient** of an NJ county SV program or an LAV grantee. VOCA money goes **through partners**. See [TARGETS.md §E](TARGETS.md#e-funders).
+
+## Top 10 first contacts
+
+*Updated 2026-10-06 after verification. Use only the public routes in [TARGETS.md](TARGETS.md).*
+
+1. **Superbloom** (fiscal sponsor). Apply first; it reviews applications quarterly. **Code for Science & Society** is the parallel application.
+2. **SAVE of Essex County** (CSVA program). Intake-script review; first pilot candidate.
+3. **NJCASA**. Introductions to the county programs and intake-script review.
+4. **healingSPACE (Bergen)** or the **Middlesex Center for Empowerment**. A second advocate reviewer.
+5. **NNEDV Safety Net**. Tech-safety and threat-model review through its TA Request Form.
+6. **NJ Crime Victims' Law Center**. Review of the Incident Summary and VCCO draft.
+7. **Rutgers RBG Clinic** (Newark) or the **Seton Hall Center for Social Justice**. A clinic project on RPC 7.3(e) and privilege design.
+8. **Partners (NJ)**. Pilot and pro-bono pathway, once advocate sign-off is in hand.
+9. **NAVRA / NCVLI**. Victims'-rights attorney recruitment and review of the discoverability analysis.
+10. **Craig Newmark Philanthropies**. First funder application (rolling), submitted through the fiscal sponsor. Add the **GitHub Secure Open Source Fund** for audit money.
+
+*Phase 3 (NY), after NJ: The Alliance Against Sexual Violence (never use nyscasa.org), Sanctuary for Families, and NYLAG.*
 
 ---
 

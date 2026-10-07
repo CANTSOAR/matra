@@ -34,19 +34,67 @@ Culturally specific NJCASA members to consult as reviewers include Manavi (Middl
 
 ## B. Legal aid, victims'-rights law, clinics, and tech-safety reviewers
 
-**Status: UNVERIFIED pending research.** These organizations come from the repo docs and the brief. Before contacting any of them, confirm on the organization's own site that the program is current, find the contact route, and check that it serves adults.
+*Verified 2026-10-06 unless a row says otherwise. Use only the organizational route listed. Confirm the program still serves adults before you send anything.*
 
-| Org | Why it fits | Ask |
-|---|---|---|
-| NJ Coalition Against Sexual Assault (NJCASA), https://njcasa.org/ | State coalition of the county programs | Introductions to county programs; review of the intake script |
-| NJ Coalition to End Domestic Violence (NJCEDV) | Statewide DV coalition; tech-safety experience | Review of safety and device-residue issues |
-| Legal Services of New Jersey (LSNJ) | Statewide legal aid | Critique of fit with VAWA/VOCA; possible later pilot |
-| Rutgers Law (Newark/Camden) clinics; Seton Hall Center for Social Justice | Clinic projects | Project on RPC 7.3(e) status and privilege design; help forming the entity |
-| Victim Rights Law Center (VRLC) | National leader in SA survivor legal services | Review of the consent text, warnings, and Incident Summary |
-| National Crime Victim Law Institute (NCVLI) | Victims'-rights law network | Review of the discoverability and privilege analysis |
-| NYLAG; Sanctuary for Families; Her Justice | NY GBV legal services (Phase 3, NY) | Critique of the NY expansion; pro-bono pathways |
-| NNEDV Safety Net (https://www.techsafety.org/, active; request route unverified) | Tech-abuse expertise for survivor-serving organizations | Threat-model and safety review |
-| Callisto | Closest peer (OPRF matching) | Learning conversation, not competition |
+**Red flags. Read these before you contact anyone.**
+1. **Partners for Women and Justice is now "Partners".** Use partnersnj.org (Livingston, NJ). The old pfwj.org domain is dead.
+2. **Never link nyscasa.org.** It is now a casino-affiliate site. New York's statewide coalition is **The Alliance Against Sexual Violence** (newyorkalliance.org); svfreenyc.org redirects there.
+3. **Day One serves young people aged 24 and under.** Use it for advice and language review only, never as a pilot partner, because Matra is 18+ and its pilot should not route youth.
+4. **VRLC provides direct legal services in Massachusetts only.** Ask for its national training and technical assistance (TA), not for representation.
+5. **CETA (Cornell Tech) works on intimate-partner tech abuse** through a NYC clinic. It is a tech-safety reviewer, not a legal-aid partner.
+6. **Callisto is a peer, not a model to copy.** Matra deliberately does *not* reveal matches to survivors (see the handoff brief). Frame it as a learning conversation.
+7. **The Rutgers Domestic Violence Clinic is in Camden.** The Newark fit is the new **RBG Women's Rights & Gender Justice Clinic** (launched Fall 2025). It takes matters only on referral from organizational partners, so approach it as an organization proposing a project, never with an unsolicited client matter.
+8. **No GBV clinic was confirmed at Fordham, Columbia, NYU, or Cardozo.** They are left out on purpose.
+9. **Prosecution-side and defense offices are not partners.** County Prosecutors' Offices of Victim-Witness Advocacy (e.g., Essex: SARA Unit and SANE/SART at https://njecpo.org/vw/sexualabuse.php) and the State Office of Victim-Witness Advocacy are **referral resources only** (see §A). The Office of the Public Defender is excluded because it is defense-side.
+
+### New Jersey
+
+| Org | Current program / why it fits | Ask | Public route | Status |
+|---|---|---|---|---|
+| **NJCASA** | State coalition of the 21 county programs; Survivor Services, Training, Prevention teams (DCF-funded) | Introductions to county programs; intake-script review | https://njcasa.org/about/contact/ (info@njcasa.org; (609) 631-4450; departmental forms). Hotline 1-800-601-7200 | Verified 2026-10-06 |
+| **NJCEDV** | Statewide DV coalition; trainings, DVS certification, Deaf Advocacy Project | Safety and device-residue review | https://www.njcedv.org/contact/ (form, "not monitored daily") | Verified 2026-10-06. No tech-safety program is listed; use NNEDV Safety Net for that |
+| **Legal Services of NJ: Domestic Violence Representation Project (DVRP)** | Statewide legal aid. DVRP advises and represents low-income DV victims, trains pro-bono attorneys, and (per 2026 job posts) handles sexual-violence matters in family court | Critique of VAWA/VOCA fit; later pilot | https://www.lsnj.org/about-us/contact-us · LSNJLAW hotline 1-888-576-5529 (https://lsnjlawhotline.org) · DVRP: https://www.lsnjlaw.org/legal-topics/family-relationships/domestic-violence/get-restraining-order/pages/domestic-violence-representation-project-aspx | Verified 2026-10-06. Approach only after advocate sign-off |
+| **Partners (formerly Partners for Women and Justice)** | DV and sexual-violence legal services in Essex, Hudson, Middlesex, Passaic, and Union; has a volunteer-attorney program | **Strong pilot fit**: pro-bono pathway, consent and warning review | https://partnersnj.org/ (contact page) | Verified 2026-10-06 |
+| **NJ Crime Victims' Law Center (NJCVLC)**, Sparta | Pro-bono victims'-rights representation in all 21 counties, including sexual assault | Review of the Incident Summary and the VCCO draft | https://njcvlc.org/ (contact page) | Verified 2026-10-06 |
+| Volunteer Lawyers for Justice (VLJ), Newark | Pro-bono clearinghouse | Possible attorney-recruitment channel | https://vljnj.org/ | Verified 2026-10-06. Moderate fit: no DV/SA program on its site |
+| **Rutgers Law: RBG Women's Rights & Gender Justice Clinic** (Newark, with a Camden extension) | Gender-justice litigation and policy clinic; matters by organizational-partner referral only | Clinic project on RPC 7.3(e) structure and privilege design | https://law.rutgers.edu/professional-skills/clinics/womens-rights-and-gender-justice-clinic · https://law.rutgers.edu/news/new-legal-clinics | Verified 2026-10-06. No public intake contact; go through the Rutgers Law clinical program or a sponsoring partner organization |
+| Rutgers Law: Domestic Violence Clinic (Camden) | Represents DV victims in FRO hearings; student DV Project Helpline | Language review; referral knowledge | https://law.rutgers.edu/legal-clinics · Camden clinics (856) 225-6568 | Verified 2026-10-06. Accepts cases mid-August to April |
+| Rutgers Law: Community & Transactional Lawyering Clinic (Camden) | Transactional work for community organizations | Help forming the entity | https://law.rutgers.edu/legal-clinics | Verified 2026-10-06 (listed). Fit for entity formation not confirmed with the clinic |
+| **Seton Hall Law: Center for Social Justice** (Family Law Clinic; Community Wealth Building transactional clinic) | Family Law Clinic handles restraining orders; transactional clinic serves community groups | RPC 7.3(e) and privilege project; entity formation | https://law.shu.edu/center-social-justice/contact.html (general CSJ email and (973) 642-8700) · https://law.shu.edu/clinics/index.html | Verified 2026-10-06 |
+| NJ State Bar Foundation | Pro-bono and public-education programs | Attorney-volunteer channel | https://njsbf.org/ | **UNVERIFIED.** Site returned 403 to our fetcher |
+| NJ OAG Division of Violence Intervention & Victim Assistance (VIVA) | Administers VOCA/VAWA funds, VCCO, and the Victims' Rights Council | **Funder or regulator, not a review partner.** See §E | https://www.njoag.gov/category/division/division-of-violence-intervention-and-victim-assistance/ · general route https://www.njoag.gov/contact/ | Verified 2026-10-06 (active; September 2026 items). No direct division email published |
+
+### New York (Phase 3)
+
+| Org | Current program / why it fits | Ask | Public route | Status |
+|---|---|---|---|---|
+| **The Alliance Against Sexual Violence** | NY statewide sexual-violence coalition | Advocate script review; NY expansion critique | https://newyorkalliance.org/contact/ | Verified 2026-10-06 |
+| **Sanctuary for Families** | Large GBV legal center (DV, trafficking, campus sexual assault), with an extensive pro-bono network; serves all NYC survivors | **Very strong fit**: script review, pro-bono pathway, NY pilot | https://sanctuaryforfamilies.org/ (info@sffny.org; (212) 349-6009) | Verified 2026-10-06 |
+| **NYLAG** | Domestic Violence Law program; intimate-partner and sexual-violence focus areas; Pro Bono & Volunteer Engagement | NY critique; pro-bono pathways | https://nylag.org/ (Contact Us; (212) 613-5000) · https://nylag.org/pro-bono-engagement-volunteerism/ | Verified 2026-10-06 |
+| Safe Horizon | Largest NYC victim-services nonprofit; sexual-violence services, 24/7 hotline, Crime Victim Assistance Program | Advocate review; NY referral pathway | https://www.safehorizon.org/get-in-touch/ | Verified 2026-10-06 |
+| Legal Aid Society: Family Law & DV Project | Family-law and DV representation in NYC | NY critique | https://legalaidnyc.org/programs-projects-units/family-law-and-domestic-violence-project/ | Verified 2026-10-06 |
+| Her Justice | "Pro bono first" family, divorce, and immigration help for low-income women in NYC; volunteer lawyers from 80+ firms | Pro-bono model; NY critique (sexual assault is not a core practice area) | https://herjustice.org/contact-us ((212) 695-3800) | Active: 2026 testimony and partner PDFs are on herjustice.org. The site returned 403 to our fetcher, so the contact page itself was **not fetched** |
+| NYSCADV | NY statewide DV coalition | Safety review | https://www.nyscadv.org/about/contact.html | Verified 2026-10-06 |
+| CUNY Law: Human Rights & Gender Justice and Family Law Practice clinics | Gender-justice clinics | RPC 7.3 / NY-rules project | https://www.law.cuny.edu/academics/clinical-programs/ | Verified 2026-10-06 |
+| City Bar Justice Center | Pro-bono programs | Attorney-recruitment channel | https://www.citybarjusticecenter.org/ | Verified 2026-10-06. No SA-specific project |
+| Day One | Dating-violence services for young people **≤24** | Language review only; **no pilot** | https://www.dayoneny.org/ | Verified 2026-10-06 |
+| CETA (Clinic to End Tech Abuse), Cornell Tech | IPV tech-abuse clinic and research | Threat-model and device-safety review | https://ceta.tech.cornell.edu/clinic | Verified 2026-10-06. Weak public contact route |
+| Pace Women's Justice Center | SA legal help (Westchester/Putnam) | NY critique | — | **UNVERIFIED.** The page returned 404 |
+
+### National
+
+| Org | Current program / why it fits | Ask | Public route | Status |
+|---|---|---|---|---|
+| **NNEDV Safety Net** | National tech-safety TA for the victim-services field; active 2026 Tech Summit | **Top tech-safety reviewer**: threat-model and safety review | Technical Assistance Request Form via https://www.techsafety.org/contact-us (safetynet@nnedv.org) | Verified 2026-10-06 |
+| **Victim Rights Law Center (VRLC)** | Direct services in MA only; national training and TA team for lawyers and advocates | Review of the consent text, warnings, and Incident Summary through TA | https://victimrights.org/ (website contact form; (617) 399-6720) | Verified 2026-10-06 |
+| **NAVRA** (National Alliance of Victims' Rights Attorneys & Advocates) | 3,000+ member victims'-rights attorney alliance with a pro-bono portal | **Strong attorney-recruitment channel** | https://navra.org/ | Verified 2026-10-06 |
+| NCVLI | Victims'-rights legal TA in all 50 states (hosts NAVRA) | Review of the discoverability and privilege analysis | https://ncvli.org/ (general email ncvli@lclark.edu) | Active (2026 sponsor page indexed). The site returned 403 to our fetcher, so the route is from search results only. **Partly verified** |
+| EVAWI (End Violence Against Women International) | Training on trauma-informed investigation and documentation | Review of the Incident Summary format | https://evawintl.org/contact-us/ | Verified 2026-10-06 |
+| Legal Momentum | Gender-equality legal defense; National Judicial Education Program; sexual-violence trainings; helpline | Optional: judicial-education angle on survivor documentation | https://www.legalmomentum.org/ ((212) 925-6635) | Verified 2026-10-06. Lower priority |
+| Callisto | Closest peer (encrypted vault plus matching, for students and campus survivors) | Learning conversation, not competition | https://www.projectcallisto.org/ (contact form) | Verified 2026-10-06 |
+| RAINN; Joyful Heart Foundation | National SA organizations | — | — | **UNVERIFIED.** RAINN returned 403 and is referral-only; Joyful Heart was not checked |
+
+*Not recommended:* Community Health Law Project (poor fit).
 
 ## C. Fiscal sponsors (all verified 2026-10-06 unless noted)
 
@@ -80,8 +128,42 @@ Culturally specific NJCASA members to consult as reviewers include Manavi (Middl
 
 ## E. Funders
 
-**Status: UNVERIFIED pending research**, apart from the facts below taken from the Legal Research Memo:
-- **OVW Legal Assistance for Victims (LAV)**: for nonprofits and law schools. The FY2026 solicitation offered roughly $400k–$900k (https://www.justice.gov/ovw/grant-programs). Matra should take part **through a partner**, not apply directly.
-- **VOCA through NJ OAG VIVA**: https://www.njoag.gov/category/division/division-of-violence-intervention-and-victim-assistance/. A partner would be the subrecipient.
-- **NY OVS**: RFAs UNVERIFIED.
-- Foundations to verify: Ms. Foundation, NoVo (it may have cut US gender funding), Mozilla Foundation, Fund for New Jersey (https://www.fundfornj.org/, a grantmaker), Craig Newmark Philanthropies, Cloudflare Project Galileo (in-kind), Ford, and Knight.
+*Verified 2026-10-06 unless a row says otherwise. **Bottom line:** federal money is not near-term. Every FY2026 federal window that fits has closed, and most need an established direct-service applicant. Matra's federal route is as a **technology partner or subrecipient** of an NJ county SV program or an LAV grantee for FY2027. Near-term money is Craig Newmark Philanthropies, the GitHub Secure Open Source Fund, and in-kind credits, all through the fiscal sponsor.*
+
+**Context (stated neutrally):** DOJ grant conditions have been litigated in 2025–26. In *R.I. Coalition Against Domestic Violence v. Bondi* (D.R.I. 1:25-cv-00279), preliminary injunctions were issued on 8/8/2025 and 4/17/2026 (https://www.riaclu.org/cases/ri-coalition-against-domestic-violence-v-bondi/). Partners may raise this. Read the current award conditions before co-applying.
+
+### Federal and state (through a partner)
+
+| Funder / program | Status | Fit | Size | Route |
+|---|---|---|---|---|
+| **OVC FY26 Technology to Support Services for Victims of Crime** (O-OVC-2026-172618) | **Closed** 6/29/2026. Likely to recur in FY27 | **Best federal fit.** It funds technology built by or for victim-service organizations, but not off-the-shelf purchases. Nonprofits are eligible with or without 501(c)(3) status. Apply through or with a partner | Up to $1.1M (about 4 awards) | https://ovc.ojp.gov/funding/opportunities/o-ovc-2026-172618 |
+| **OVW FY26 Legal Assistance for Victims (LAV)** (O-OVW-2026-172580) | **Closed** 8/4/2026 | Requires a history of direct legal services, so Matra can take part **only as a tech partner or subrecipient** of a grantee | $400k–$900k (about 60 awards) | https://simpler.grants.gov/opportunity/c4a91a4e-ce18-4bb6-91a8-6c34a4871248 |
+| **NJ OAG VIVA: VOCA/VAWA subgrants** | Watch the FY26 notices | For established organizations, so a county program or legal-aid partner would be the subrecipient | Varies | https://www.njoag.gov/viva/funding-opportunities/ |
+| NY OVS VOCA RFA (2026) | **Closed** 3/23/2026 | Phase 3 only; through an NY partner | Varies | https://ovs.ny.gov/2026-voca-rfa |
+
+### Foundations and corporate (direct, through the fiscal sponsor)
+
+| Funder | Unsolicited? | Fit | Size | Route |
+|---|---|---|---|---|
+| **Craig Newmark Philanthropies** | **Yes, rolling** | **Good** (cybersecurity and civic tech priorities). Needs a 501(c)(3) letter or a fiscal-sponsor agreement | Not published | https://craignewmarkphilanthropies.org/apply/ |
+| **GitHub Secure Open Source Fund** | Yes, rolling | **Good.** Security funding for open-source maintainers; individuals are eligible | $10k plus $10k Azure credits | https://resources.github.com/open-source-security-fund/ |
+| **Cloudflare Project Galileo** (in-kind) | Yes, through a partner organization or the contact form | **Good.** Free Business-level protection for at-risk public-interest sites | In-kind | https://www.cloudflare.com/galileo/ |
+| Microsoft for Nonprofits (in-kind) | Yes | Hosting credits. Needs 501(c)(3) or equivalent status | $2k/yr Azure credits | https://nonprofit.microsoft.com/ |
+| DigitalOcean (in-kind) | Yes | Hosting credits | Up to $2.5k | https://www.digitalocean.com/ |
+| AWS Imagine Grant | **Closed** for 2026 | Requires 501(c) status; revisit after the sponsor is in place | — | https://aws.amazon.com/government-education/nonprofits/aws-imagine-grant-program/ |
+| **Fast Forward** (tech-nonprofit accelerator) | 2027 cohort **closed** 9/7/2026 | **Good fit for the next cycle** | Accelerator funding | https://www.ffwd.org/ |
+| Princeton Area Community Foundation: Fund for Women and Girls | Competitive cycles | Moderate (NJ, women and girls) | $10k–$50k | https://pacf.org/ |
+| Prudential Community Grants (via Community Foundation of NJ) | Annual open call (2026 closed 2/27) | Weak (Newark neighborhood microgrants; organizations with budgets under $500k; fiscal sponsor OK) | ≤ $5k | https://cfnj.org/prudential |
+| Community Foundation of NJ (other funds) | Fund-specific cycles | Weak (mostly place-based funds) | Varies | https://cfnj.org/ |
+| Victoria Foundation | Accepts inquiries | **Weak.** Newark-only, community-focused | $25k–$500k | https://www.victoriafoundation.org/ |
+| Ms. Foundation for Women | **No.** Core grants are invitation-only; occasional open RFPs | Mission fit, but the route is closed | Typically $20k–$50k | https://forwomen.org/our-work/open-grants/ (watch) |
+| Fund for New Jersey | **No unsolicited proposals** (coordinator check). *Discrepancy:* a search snippet of https://fundfornj.org/application-guidelines mentions LOIs from non-grantees, so confirm before writing | **Weak.** Public-policy focus, not direct service or tech | — | https://www.fundfornj.org/ |
+| Mozilla Foundation | Open calls only (Democracy x AI closed 3/16/2026) | Weak to moderate; watch for trustworthy-tech calls | Varies | https://www.mozillafoundation.org/ |
+| Robert Wood Johnson Foundation (Princeton, NJ) | Only the Pioneer area takes unsolicited ideas; other areas use CFPs | Weak (health-systems framing) | Varies | https://www.rwjf.org/en/grants.html |
+| Ford Foundation | **No unsolicited proposals** (an inquiry form exists; under 1% of inquiries are funded) | Weak route | — | https://www.fordfoundation.org/ |
+| Knight Foundation | **No unsolicited proposals**; open calls only | **Poor fit** (local news, arts, Knight cities) | — | https://knightfoundation.org/ |
+| NY Women's Foundation | **Closed** 3/23/2026; NYC only | Phase 3 only | — | https://www.nywf.org/ |
+| Sloan Foundation | — | **Low fit** | — | — |
+| ~~NoVo Foundation~~ | — | **Removed.** It halted US women-and-girls funding in 2020 | — | — |
+| ~~Digital Infrastructure Insights Fund~~ | — | **Removed.** The fund is closing | — | — |
+| Google.org; Okta for Good; Twilio.org | Mostly invitation-only or in-kind programs | **UNVERIFIED.** Not checked this round | — | — |
