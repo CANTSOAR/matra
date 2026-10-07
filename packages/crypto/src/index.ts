@@ -4,8 +4,8 @@
  *
  * Key hierarchy
  *   passphrase ──PBKDF2-SHA256(600k, salt)──► 512 bits
- *        ├─ HKDF("shield/auth")   → authKey   (sent to server, which stores only a slow hash)
- *        └─ HKDF("shield/master") → masterKey (AES-256-GCM, never leaves the device)
+ *        ├─ HKDF("matra/auth")   → authKey   (sent to server, which stores only a slow hash)
+ *        └─ HKDF("matra/master") → masterKey (AES-256-GCM, never leaves the device)
  *   masterKey wraps: the user's RSA-OAEP private key, and every per-record / per-blob key.
  *   Sharing: a record key is re-wrapped to the attorney's RSA public key.
  */
@@ -16,7 +16,7 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 export const DEFAULT_KDF_ITERATIONS = 600_000;
-const ESCROW_SALT = enc.encode('janes-shield/escrow/v1');
+const ESCROW_SALT = enc.encode('matra/escrow/v1');
 const ESCROW_ITERATIONS = 200_000;
 
 // ───────────── encoding ─────────────
@@ -79,8 +79,8 @@ export async function deriveKeys(
   );
   const ikm = await subtle.importKey('raw', bits, 'HKDF', false, ['deriveBits', 'deriveKey']);
   const hk = (info: string) => ({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode(info) });
-  const authBits = await subtle.deriveBits(hk('shield/auth'), ikm, 256);
-  const masterKey = await subtle.deriveKey(hk('shield/master'), ikm, { name: 'AES-GCM', length: 256 }, false, [
+  const authBits = await subtle.deriveBits(hk('matra/auth'), ikm, 256);
+  const masterKey = await subtle.deriveKey(hk('matra/master'), ikm, { name: 'AES-GCM', length: 256 }, false, [
     'encrypt',
     'decrypt',
   ]);

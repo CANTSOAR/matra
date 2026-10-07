@@ -1,8 +1,8 @@
 {
-  "name": "janes-shield",
+  "name": "matra",
   "private": true,
   "version": "0.1.0",
-  "description": "Jane's Shield — One-Touch Justice Pipeline (MVP)",
+  "description": "Matra — One-Touch Justice Pipeline (MVP)",
   "workspaces": [
     "packages/*",
     "apps/*"
