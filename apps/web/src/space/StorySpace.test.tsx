@@ -112,6 +112,29 @@ describe('StorySpace', () => {
     expect(screen.getByLabelText('What you would like to share')).toBeInTheDocument();
   });
 
+  it('before she starts writing, says calmly that a court can order her to hand it over (Learn more is optional)', async () => {
+    const { user } = setup();
+    const notice = screen.getByTestId('notice-before-writing');
+    expect(notice).toHaveTextContent('Matra can’t read what you write. But a court can order you to hand it over.');
+    expect(notice).toHaveTextContent('Anything you give police will be shared with the defense.');
+    const more = within(notice).getByText('Learn more').closest('details')!;
+    expect(more.open).toBe(false);
+    // it never blocks: she can write straight away, and once she has, the notice steps aside
+    await addWords(user, 'A first piece.');
+    expect(screen.queryByTestId('notice-before-writing')).not.toBeInTheDocument();
+  });
+
+  it('removing a piece says honestly that earlier saved versions may still include it', async () => {
+    const { user, last } = setup();
+    await addWords(user, 'Something I want to take out.');
+    await user.click(screen.getByRole('button', { name: /^Remove/ }));
+    const confirm = screen.getByRole('group', { name: 'Remove' });
+    expect(confirm).not.toHaveTextContent(/cannot be undone/i);
+    expect(confirm).toHaveTextContent(/Earlier saved versions of your draft may still include it until you delete your account/);
+    await user.click(within(confirm).getByRole('button', { name: 'Yes, remove it' }));
+    expect(last().entries ?? []).toHaveLength(0);
+  });
+
   it('typing an entry stores her words verbatim, timestamped, and shows them in the journal', async () => {
     const { user, last } = setup();
     expect(screen.getByRole('button', { name: 'Add to my story' })).toBeDisabled();
@@ -244,6 +267,7 @@ describe('StorySpace', () => {
     const review = screen.getByRole('region', { name: 'Here is everything you shared' });
     const first = review.querySelector('.space-review-entry .space-verbatim')!;
     expect(first.textContent).toBe(NARRATIVE);
+    expect(within(review).getByTestId('notice-saved-versions')).toHaveTextContent('the earlier versions are kept too');
 
     await user.click(within(review).getByRole('button', { name: 'Seal my account' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn't seal your account just now.*network down/);

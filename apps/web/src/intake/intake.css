@@ -207,6 +207,16 @@
 .intake-bullets li + li {
   margin-top: 4px;
 }
+.intake-more {
+  margin-top: 10px;
+}
+.intake-more > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.intake-more > p {
+  margin: 8px 0 0;
+}
 .intake-link {
   background: none;
   border: none;

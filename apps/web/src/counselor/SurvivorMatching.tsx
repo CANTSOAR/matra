@@ -8,14 +8,11 @@ import { Link } from 'react-router-dom';
 import type { EscrowEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
+import { MATCHING_CONSENT_LINES } from '../lib/disclosures';
 import { escrowLabel, withdrawEscrow } from '../lib/vault';
 
-/** The plain explanation shown wherever she can opt in (keep in sync with MATCHING_CONSENT_STATEMENT). */
-export const MATCHING_EXPLANATION = [
-  'If someone else names the same person, a trained legal options counselor — not the police, not your school — will reach out privately to talk about your options. You decide everything after that.',
-  'Only an email address, phone number, or social media profile can be matched. Names aren’t unique enough to match safely, so they are never used.',
-  'This page will always say “Sealed”, even if there is a match. That keeps it safe: no one can use it to find out whether they’ve been named.',
-];
+/** What she agreed to when she opted in, word for word (the same lines as MATCHING_CONSENT_STATEMENT). */
+export const MATCHING_EXPLANATION = MATCHING_CONSENT_LINES;
 
 export function SurvivorMatching() {
   const { api, session } = useRequiredSession();
@@ -31,6 +28,9 @@ export function SurvivorMatching() {
       </p>
       <PageTitle eyebrow="Sealed match">What you’ve sealed</PageTitle>
       <section className="card soft stack" aria-label="How a sealed match works">
+        <p style={{ margin: 0 }}>
+          <strong>What you agreed to when you chose a sealed match:</strong>
+        </p>
         {MATCHING_EXPLANATION.map((l) => (
           <p key={l} style={{ margin: 0 }}>
             {l}

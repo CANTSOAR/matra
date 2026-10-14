@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
+import { KeyNotice } from '../components/KeyNotice';
 import {
   BriefPreview,
   downloadPdf,
@@ -10,6 +11,7 @@ import {
   type BriefOptions,
 } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
+import { NOTICES } from '../lib/disclosures';
 import { finals, loadVault } from '../lib/vault';
 
 export function Brief() {
@@ -102,6 +104,7 @@ export function Brief() {
               <input type="checkbox" checked={redact} onChange={(e) => setRedact(e.target.checked)} />
               <span>Hide my contact information (phone, email, address) in the summary</span>
             </label>
+            <KeyNotice notice={NOTICES.downloadFile} />
             <div className="row">
               <button className="btn btn-primary" onClick={() => void download('summary')} disabled={!!busy}>
                 {busy === 'summary' ? 'Preparing…' : 'Download incident summary (PDF)'}

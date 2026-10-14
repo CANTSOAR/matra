@@ -3,7 +3,9 @@ import { Link, useLocation } from 'react-router-dom';
 import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { IconFile, IconImage } from '../components/icons';
+import { KeyNotice } from '../components/KeyNotice';
 import { emptyDraft } from '../integration/intakeAdapter';
+import { NOTICES } from '../lib/disclosures';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import {
   blobKeyFor,
@@ -136,7 +138,7 @@ export function Evidence() {
       )}
       <PageTitle
         eyebrow="Things to keep"
-        lead="Photos, screenshots, messages, recordings or documents — anything you want to keep. Each file is cleaned and locked on this device before it’s uploaded."
+        lead="Photos, screenshots, messages, recordings or documents — anything you want to keep. Each file is cleaned and locked on this device before a copy is uploaded."
       >
         Evidence
       </PageTitle>
@@ -185,6 +187,7 @@ export function Evidence() {
           files, we’ll tell you what couldn’t be removed. A fingerprint (SHA-256) of each cleaned file is recorded, so
           anyone can later check it hasn’t been changed.
         </p>
+        <KeyNotice notice={NOTICES.keepOriginals} />
         {pending.map((p) => (
           <div key={p.name} className="stack">
             {p.error ? <ErrorNote>{p.name}: {p.error}</ErrorNote> : <Loading label={`${p.name}: ${p.status}`} />}

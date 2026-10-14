@@ -24,9 +24,9 @@ export function adviceFor(mime: string): string {
   if (m.startsWith('audio/'))
     return 'We couldn’t remove hidden details from this recording automatically. Audio files can include the recording date and device name.';
   if (m === 'application/pdf')
-    return 'We couldn’t remove hidden details from this PDF automatically. PDFs can include an author name and the software used. Printing to a new PDF can remove some of this.';
+    return 'We couldn’t remove hidden details from this PDF automatically. PDFs can include an author name and the software used. Printing to a new PDF can remove some of this. If you do that, please keep the original PDF too.';
   if (m.startsWith('image/'))
-    return 'This image type can’t be cleaned automatically (e.g. HEIC). Taking a screenshot of it and uploading the screenshot removes location details.';
+    return 'This image type can’t be cleaned automatically (e.g. HEIC). If you’d like to remove location details, you can take a screenshot of it and upload the screenshot instead. Please keep the original photo too — it can show things the screenshot can’t, like when it was taken.';
   return 'We couldn’t remove hidden details from this file automatically. It is still encrypted before it leaves your device.';
 }
 
@@ -62,7 +62,7 @@ export async function stripMetadata(file: Blob & { type: string }): Promise<Stri
       return {
         blob,
         stripped: true,
-        note: 'Hidden details (like location and camera info) were removed on your device before encryption.',
+        note: 'Hidden details (like location and camera info) were removed from the copy saved here, on your device, before encryption. Please keep your original file too.',
       };
     } finally {
       bmp.close?.();

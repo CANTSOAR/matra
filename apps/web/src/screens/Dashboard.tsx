@@ -337,9 +337,9 @@ export function Dashboard() {
           <Link className="btn btn-small" to="/vault/matching" data-testid="home-matching-link">Review or withdraw</Link>
         </div>
         <p className="small muted">
-          If you chose a sealed match, the email, phone number, or social media profile you gave is sealed on this device.
-          Nobody can read it — not us, not anyone. This list will always say “Sealed” — that’s on purpose, so no one can
-          use this page to find out whether they’ve been named.
+          If you chose a sealed match, the email, phone number, or social media profile you gave was sealed on this device
+          before it was sent. Only a Legal Options Counselor ever sees a match. This list will always say “Sealed” —
+          that’s on purpose, so no one can use this page to find out whether they’ve been named.
         </p>
         {escrow.loading && <Loading />}
         {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
@@ -347,9 +347,9 @@ export function Dashboard() {
         {escrow.data?.map(({ entry, label }) => <EscrowCard key={entry.id} entry={entry} label={label} />)}
         {escrow.data && escrow.data.length > 0 && (
           <p className="small muted">
-            If someone else names the same person, a trained legal options counselor — not the police, not your school —
-            will reach out privately to talk about your options. You decide everything after that. Names aren’t unique
-            enough to match safely, so they’re never used.
+            If someone else names the same person, a Legal Options Counselor — a licensed attorney, not the police, not
+            your school — may reach out to you privately, the way you chose. You can say no, and there are no fees. A match
+            is a lead, not evidence. Names are never used.
           </p>
         )}
       </section>

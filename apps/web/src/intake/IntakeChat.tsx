@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { IntakeRecord } from '@matra/shared';
 import './intake.css';
+import { KeyNotice } from '../components/KeyNotice';
+import { NOTICES } from '../lib/disclosures';
 import {
   answerOf,
   currentStep,
@@ -360,6 +362,14 @@ function BotLines({ step }: { step: ScriptStep }) {
               ))}
             </ul>
           )}
+          {i === last && step.kind === 'info' && step.more && step.more.length > 0 && (
+            <details className="intake-more">
+              <summary>Learn more</summary>
+              {step.more.map((m) => (
+                <p key={m}>{m}</p>
+              ))}
+            </details>
+          )}
         </div>
       ))}
     </div>
@@ -568,6 +578,7 @@ function Review({
       })}
       <div className="intake-seal">
         <p>{UI.review.sealExplain}</p>
+        <KeyNotice notice={NOTICES.savedVersions} />
         {sealError && (
           <p className="intake-seal-error" role="alert">
             {sealError}

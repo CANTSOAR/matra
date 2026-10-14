@@ -2,6 +2,8 @@
  * Every word the story space says around her story. Same style guide as src/intake/script.ts:
  * short sentences, plain words, warm, never judging. Never "alleged", never "why".
  */
+import { NOTICES } from '../lib/disclosures';
+
 export const COPY = {
   title: 'Your story',
   saved: 'Saved privately on this device',
@@ -41,7 +43,7 @@ export const COPY = {
     add: 'Add to my story',
     talk: 'Talk',
     files: 'Add files',
-    private: 'Only you can read this. It is locked on this device before it is saved, and your words are kept exactly as you write them.',
+    private: 'Matra can’t read this. It is locked on this device before it is saved, and your words are kept exactly as you write them.',
     addMore: 'Add more',
     cancel: 'Not now',
   },
@@ -58,7 +60,8 @@ export const COPY = {
   files: {
     inputLabel: 'Choose files to add',
     working: 'Removing hidden details and locking your files on this device…',
-    added: (n: number) => (n === 1 ? '1 file added and locked.' : `${n} files added and locked.`),
+    added: (n: number) =>
+      `${n === 1 ? '1 file added and locked.' : `${n} files added and locked.`} ${NOTICES.keepOriginals.body[0]}`,
     failed: "Some files couldn't be added. Nothing else was changed.",
     count: (n: number) => (n === 1 ? '1 file kept safely' : `${n} files kept safely`),
   },
@@ -77,8 +80,10 @@ export const COPY = {
     editNote: 'Only you can change your words. Nothing is changed for you.',
     edited: (when: string) => `edited ${when}`,
     editedAnnounce: 'Your changes are saved.',
-    removeConfirm: 'Remove this part of your story? This cannot be undone.',
-    removeConfirmSealed: 'Remove this part from your draft? Your earlier sealed version stays as it was.',
+    removeConfirm:
+      'Remove this part from your story? It will be taken off your list. Earlier saved versions of your draft may still include it until you delete your account.',
+    removeConfirmSealed:
+      'Remove this part from your draft? Your earlier sealed version stays as it was, and earlier saved versions of your draft may still include it until you delete your account.',
     removeYes: 'Yes, remove it',
     removeNo: 'Keep it',
     empty: 'Nothing here yet. When you add something, it will show here, just as you wrote it.',
@@ -129,11 +134,11 @@ export const COPY = {
     pickDate: 'Pick a date',
     describe: 'Describe it in words',
     escrowMore: 'What is a sealed match?',
-    filesAdded: (n: number) => (n === 1 ? '1 file added' : `${n} files added`),
+    filesAdded: (n: number) => `${n === 1 ? '1 file added' : `${n} files added`}. ${NOTICES.keepOriginals.body[0]}`,
     moreDetails: 'More details, only if you know them',
     online: 'Ways to recognize them online',
     onlineWhy:
-      'If you add one of these, you can choose a sealed match next. It is turned into a sealed code on this device that nobody can read. Only if someone else names the same person would a legal options counselor reach out to you, privately.',
+      'If you add one of these, you can choose a sealed match next. It is sealed on this device before it is sent. Only if someone else names the same person would a Legal Options Counselor (a licensed attorney) see it and reach out to you, privately.',
     noPeople: 'This is for the people you named in “The person”. Add someone there first, if you want to.',
   },
 

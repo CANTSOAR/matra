@@ -24,6 +24,7 @@ import {
 import type { BlobMeta, EvidenceItem, EvidenceKind, IntakeRecord, LedgerEntry, MatchContactPreferences, VaultRecord } from '@matra/shared';
 import { envelopeHash, type ApiClient } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
+import { MATCHING_CONSENT_LINES } from './disclosures';
 import { stripMetadata } from './metadata';
 import { MATCH_PINS } from '../matchPins';
 
@@ -219,12 +220,9 @@ const ESCROW_KIND_LABEL: Record<string, string> = {
 
 /**
  * The explanation she agrees to when she opts in. Stored verbatim (encrypted) in her contact bundle, so the counselor
- * sees exactly what she was told.
+ * sees exactly what she was told: it is built from the same lines the opt-in shows her (lib/disclosures.ts).
  */
-export const MATCHING_CONSENT_STATEMENT =
-  'If someone else names the same person, a trained legal options counselor — not the police, not your school — will ' +
-  'reach out privately to talk about your options. You decide everything after that. Names are not used for matching. ' +
-  'You will never see a match in this app. You can withdraw a sealed identifier at any time.';
+export const MATCHING_CONSENT_STATEMENT = MATCHING_CONSENT_LINES.join(' ');
 
 /** How she said a counselor may reach her (the intake's person.matchContact answer). */
 export interface MatchContactInput {

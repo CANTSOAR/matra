@@ -1273,6 +1273,17 @@
 .space-seal p {
   margin: 0 0 var(--_s4);
 }
+/* key-moment notices (components/KeyNotice.tsx) inside the space */
+.space-seal .key-notice {
+  margin: 0 0 var(--_s4);
+}
+.space-seal .key-notice p,
+.space-root .key-notice p {
+  margin: 0;
+}
+.space-notice {
+  margin-bottom: var(--_s4);
+}
 .space-btn-seal {
   min-height: 52px;
   padding-inline: 28px;

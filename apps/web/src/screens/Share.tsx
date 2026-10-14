@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { publicKeyFingerprint, wrapKeyForRecipient } from '@matra/crypto';
 import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
+import { KeyNotice } from '../components/KeyNotice';
+import { NOTICES } from '../lib/disclosures';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { blobKeyFor, finals, loadVault, type OpenedRecord } from '../lib/vault';
 
@@ -14,7 +16,7 @@ const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 export const SHARE_DISCLAIMER =
-  'This does not report anything to police. You can revoke access at any time. Access also ends on its own on the expiry date, unless you renew it. Revoking or expiry stops future access, but cannot undo what was already viewed.';
+  'This does not report anything to police. The attorney can read and save what you share. You can revoke access at any time. Access also ends on its own on the expiry date, unless you renew it. Revoking or expiry stops future access, but it can’t erase what was already viewed or saved.';
 
 export function buildConsentStatement(p: {
   alias: string;
@@ -261,6 +263,7 @@ function Consent({
           <strong>{SHARE_DISCLAIMER}</strong>
         </p>
       </div>
+      <KeyNotice notice={NOTICES.sharing} />
       <section className="card stack" aria-labelledby="fp-h">
         <h2 id="fp-h">Check the attorney’s key</h2>
         <p>

@@ -38,6 +38,7 @@
 import type { ForceKind, IncidentType, PhysicalEvidenceKind, ReportAgencyType, SubstanceKind } from '@matra/shared';
 import type { IntakeDraft } from './draft';
 import { answerOf } from './draft';
+import { MATCHING_CONSENT_LINES, NOTICES } from '../lib/disclosures';
 
 // ───────────────────────── Sections (shown in the progress bar) ─────────────────────────
 
@@ -330,6 +331,8 @@ export interface InfoStep extends BaseStep {
   showLeave?: boolean;
   /** Offer a "Skip this part" button that jumps to the next section. */
   offerSkipSection?: boolean;
+  /** Optional "Learn more" lines, shown only if she opens them. */
+  more?: readonly string[];
 }
 export interface TextStep extends BaseStep {
   kind: 'text';
@@ -483,11 +486,12 @@ export const STEPS: ScriptStep[] = [
     kind: 'info',
     say: ['I am here to help you write down what happened, one time, in your own words.', 'Here is what happens with what you share:'],
     bullets: [
-      'It is locked (encrypted) on this device before it is saved.',
-      'Nobody else can read it. Not us, not the police, not your school or job.',
+      `It is locked (encrypted) on this device before it is saved. ${NOTICES.beforeWriting.body[0]}`,
+      `${NOTICES.beforeWriting.body[1]} ${NOTICES.beforeWriting.body[2]}`,
       'Nothing is sent to anyone unless you say so, at that moment.',
       'Your words are kept exactly as you write them. Nothing is changed.',
     ],
+    more: NOTICES.beforeWriting.more,
     continueLabel: 'Okay',
   },
   {
@@ -915,14 +919,8 @@ export const STEPS: ScriptStep[] = [
     phase: 'person',
     kind: 'escrow',
     showIf: anyPersonHasIdentifier,
-    say: [
-      'There is one more thing you can choose, if you want. It is called a sealed match.',
-      'If you turn it on, the email, phone number, or social handle you gave is turned into a sealed code on this device. Nobody can read it — not us, not anyone.',
-      'Names are not used for this. Many people share a name, so a name alone is not unique enough to match safely.',
-      'If someone else names the same person, a trained legal options counselor — not the police, not your school — will reach out privately to talk about your options. You decide everything after that.',
-      'You will never see a match in this app, and neither will anyone else. That keeps this tool safe, so no one can use it to find out if they have been named.',
-      'Nothing else happens unless you decide. It is completely okay to say no.',
-    ],
+    // Everything after the first line is the consent she agrees to, word for word (lib/disclosures.ts, Memo §7A).
+    say: ['There is one more thing you can choose, if you want. It is called a sealed match.', ...MATCHING_CONSENT_LINES],
     label: 'Sealed match',
   },
 

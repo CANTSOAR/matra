@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canStrip, stripMetadata } from './metadata';
+import { adviceFor, canStrip, stripMetadata } from './metadata';
 
 describe('stripMetadata', () => {
   afterEach(() => {
@@ -45,6 +45,12 @@ describe('stripMetadata', () => {
       expect(res.note).toContain(word);
     }
     expect(canStrip('image/heic')).toBe(false);
+  });
+
+  it('never suggests replacing an original without keeping it', () => {
+    // HEIC → screenshot and PDF → re-print are optional; the original is always worth keeping (Whitepaper §3).
+    expect(adviceFor('image/heic')).toMatch(/keep the original photo too/);
+    expect(adviceFor('application/pdf')).toMatch(/keep the original PDF too/);
   });
 
   it('falls back safely (not stripped) if decoding fails', async () => {

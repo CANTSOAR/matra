@@ -268,7 +268,7 @@ describe('sealed match: unique identifiers only', () => {
       expect(draftToRecord(draftWith({ 'person.list': person({ name: 'R.', ...values }), 'person.escrow': { p1: 'yes' } })).perpetrators[0].escrowOptIn).toBe(false);
     expect(STEPS.find((s) => s.id === 'person.matchContact')!.showIf!(d)).toBe(true);
     const words = STEPS.find((s) => s.id === 'person.escrow')!.say.join(' ');
-    expect(words).toMatch(/legal options counselor — not the police, not your school/);
+    expect(words).toMatch(/Legal Options Counselor sees the match. The counselor is a licensed attorney — not the police, not your school/);
     expect(words).toMatch(/not unique enough/);
   });
 });

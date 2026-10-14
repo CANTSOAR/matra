@@ -764,6 +764,23 @@ details.disclosure > summary::before {
 }
 details.disclosure[open] > summary::before { transform: rotate(45deg); }
 
+/* key-moment notices (components/KeyNotice.tsx): calm, short, never blocking */
+.key-notice {
+  background: var(--matra-warm-soft);
+  border-radius: var(--matra-radius);
+  padding: 14px 18px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.key-notice-warn { background: var(--matra-caution-soft); }
+.key-notice p { margin: 0; }
+.key-notice-title { font-weight: 750; }
+.key-notice-more { font-size: 0.93rem; }
+.key-notice-more > summary { font-size: 0.93rem; }
+.key-notice-more[open] { display: grid; gap: 6px; }
+
 /* ───────── specific bits ───────── */
 .passphrase-suggestion {
   font-family: var(--matra-font-mono);

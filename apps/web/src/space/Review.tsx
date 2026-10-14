@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { KeyNotice } from '../components/KeyNotice';
+import { NOTICES } from '../lib/disclosures';
 import { formatAnswer, isBlank, stepById, type IntakeDraft } from '../intake/draft';
 import { COPY } from './copy';
 import { StatusIcon } from './StoryMap';
@@ -124,6 +126,7 @@ export function SpaceReview({
 
       <div className="space-seal">
         <p>{COPY.review.sealExplain}</p>
+        <KeyNotice notice={NOTICES.savedVersions} />
         {sealError && (
           <p className="space-seal-error" role="alert">
             {sealError}

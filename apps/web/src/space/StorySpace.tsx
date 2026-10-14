@@ -5,9 +5,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { IntakeRecord } from '@matra/shared';
+import { KeyNotice } from '../components/KeyNotice';
 import { BreakPanel } from '../intake/IntakeChat';
 import { emptyDraft, isBlank, type IntakeDraft } from '../intake/draft';
 import { draftToRecord } from '../intake/record';
+import { NOTICES } from '../lib/disclosures';
 import type { StoryEntry } from '../understand/types';
 import { understand, withEntries } from './adapters';
 import { COPY } from './copy';
@@ -309,6 +311,8 @@ export function StorySpace({
           {view.kind === 'home' && (
             <>
               {!hasAny ? (
+                <>
+                <KeyNotice notice={NOTICES.beforeWriting} className="space-notice" />
                 <Composer
                   first
                   greeting={name?.trim() ? `Hi, ${name.trim()}.` : undefined}
@@ -318,6 +322,7 @@ export function StorySpace({
                   onAddFiles={addFiles ? async (f) => void (await addFiles(f)) : undefined}
                   fileStatus={fileStatus}
                 />
+                </>
               ) : (
                 <section className="space-section space-words" aria-labelledby="space-home-title">
                   <h2 id="space-home-title" className="space-display space-display-sm" tabIndex={-1}>

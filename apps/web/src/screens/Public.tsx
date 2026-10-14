@@ -112,6 +112,10 @@ export function Welcome() {
             <strong>This is not legal advice.</strong> An attorney can give you that.
           </li>
           <li>
+            <strong>We can’t read what you write, but a court can order you to hand it over.</strong> Anything you give
+            police will be shared with the defense.
+          </li>
+          <li>
             <strong>Nothing is sent anywhere without your yes</strong>, at that moment. You can take back access later.
           </li>
         </ul>
