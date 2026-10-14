@@ -20,3 +20,10 @@ compiled_resources/**
 
 # On-device speech model + ONNX Runtime wasm (fetched by `npm run fetch-models`, never committed)
 apps/web/public/models/
+
+.agent/
+
+# Private outreach material: named contacts and per-person drafts (keep local)
+docs/outreach/PEOPLE.md
+docs/outreach/PERSONALIZED_EMAILS.md
+reasons.txt
