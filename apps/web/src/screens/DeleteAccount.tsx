@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ErrorNote, PageTitle } from '../components/common';
 import { ExportCard } from '../components/ExportCard';
@@ -25,6 +25,15 @@ export function DeleteAccount() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ready = confirmMatches(typed);
+  const deleted = useRef(false);
+  const lockRef = useRef(lock);
+  lockRef.current = lock;
+  useEffect(
+    () => () => {
+      if (deleted.current) lockRef.current();
+    },
+    [],
+  );
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -38,9 +47,11 @@ export function DeleteAccount() {
       setBusy(false);
       return;
     }
-    // Leave the signed-in screens first, then forget the keys, the session and any draft held in memory.
+    // Leave the signed-in screens first, then forget the keys, the session and any draft held in memory. The wipe
+    // waits until this screen has unmounted: router navigations are transitions, and wiping first would let the
+    // sign-in guard redirect to "Welcome back" instead of the public home.
+    deleted.current = true;
     navigate('/', { replace: true, state: { deleted: true } });
-    lock();
   }
 
   return (
