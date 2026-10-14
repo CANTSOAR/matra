@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { CreateAccountForm, SignInForm } from '../components/AuthForms';
 import { PageTitle } from '../components/common';
 import { IconFeather, IconHand, IconHeart, IconLock, IconShield } from '../components/icons';
@@ -32,8 +32,15 @@ export function CrisisResources() {
 }
 
 export function Welcome() {
+  const location = useLocation();
+  const deleted = !!(location.state as { deleted?: boolean } | null)?.deleted;
   return (
     <div className="stack-xl">
+      {deleted && (
+        <p className="card sage" role="status" data-testid="account-deleted">
+          Your space has been deleted. Take care of yourself.
+        </p>
+      )}
       <section className="hero">
         <div className="hero-art" aria-hidden="true">
           <span />

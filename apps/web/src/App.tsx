@@ -28,6 +28,7 @@ const Story = page(() => import('./screens/Story'), 'Story');
 const Evidence = page(() => import('./screens/Evidence'), 'Evidence');
 const Brief = page(() => import('./screens/Brief'), 'Brief');
 const Share = page(() => import('./screens/Share'), 'Share');
+const DeleteAccount = page(() => import('./screens/DeleteAccount'), 'DeleteAccount');
 const SurvivorMatching = page(() => import('./counselor/SurvivorMatching'), 'SurvivorMatching');
 const AttorneyCases = page(() => import('./attorney/Attorney'), 'AttorneyCases');
 const AttorneyCase = page(() => import('./attorney/Attorney'), 'AttorneyCase');
@@ -53,6 +54,7 @@ export function AppRoutes() {
         <Route path="vault/brief" element={<RequireSession role="survivor"><Lazy><Brief /></Lazy></RequireSession>} />
         <Route path="vault/share" element={<RequireSession role="survivor"><Lazy><Share /></Lazy></RequireSession>} />
         <Route path="vault/matching" element={<RequireSession role="survivor"><Lazy><SurvivorMatching /></Lazy></RequireSession>} />
+        <Route path="vault/delete" element={<RequireSession role="survivor"><Lazy><DeleteAccount /></Lazy></RequireSession>} />
 
         <Route path="attorney" element={<AttorneyLanding />} />
         <Route path="attorney/register" element={<AttorneyRegisterScreen />} />

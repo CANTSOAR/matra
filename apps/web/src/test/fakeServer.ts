@@ -2,7 +2,7 @@ import { vi } from 'vitest';
 import type { PublicUser, RegisterRequest } from '@matra/shared';
 
 /** Minimal in-memory auth server for session tests (fetch mock). */
-export function fakeAuthFetch() {
+export function fakeAuthFetch({ deleteFails = false }: { deleteFails?: boolean } = {}) {
   const users = new Map<string, RegisterRequest>();
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -32,6 +32,10 @@ export function fakeAuthFetch() {
         return json(200, { token: 'tok-2', user: toUser(u) });
       }
       case 'POST /api/auth/logout':
+        return json(200, { ok: true });
+      case 'POST /api/account/delete':
+        if (deleteFails) return json(500, { error: 'Something went wrong' });
+        users.clear();
         return json(200, { ok: true });
       case 'GET /api/me':
         return json(200, { user: toUser(users.values().next().value!) });

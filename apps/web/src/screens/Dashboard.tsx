@@ -4,6 +4,7 @@ import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/sha
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { escrowLabel, finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { ExportCard } from '../components/ExportCard';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
 
 const AUDIT_TEXT: Record<string, string> = {
@@ -374,7 +375,14 @@ export function Dashboard() {
         )}
       </section>
 
-      <ExportCard />
+      <ExportCard>
+        <p className="small muted" style={{ margin: 0 }}>
+          Want to erase your space instead?{' '}
+          <Link to="/vault/delete" data-testid="delete-account-link">
+            Delete everything
+          </Link>
+        </p>
+      </ExportCard>
 
       {/* ── activity ── */}
       <section className="card stack" aria-labelledby="activity" data-testid="home-activity">
@@ -479,70 +487,6 @@ function Greeting({ firstVisit, name, alias }: { firstVisit: boolean; name?: str
         )}
         {error && <ErrorNote>{error}</ErrorNote>}
       </div>
-    </section>
-  );
-}
-
-/** "Download my data": decrypts everything on this device into one .zip, after a clear warning. */
-function ExportCard() {
-  const { api, session } = useRequiredSession();
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  async function run() {
-    setBusy(true);
-    setError(null);
-    setDone(null);
-    try {
-      // loaded on demand: most visits never export, so the zip code stays out of the home screen
-      const { buildDataExport, downloadBytes } = await import('../lib/export');
-      const out = await buildDataExport(api, session.masterKey, session.user.username);
-      downloadBytes(out.zip, out.fileName, 'application/zip');
-      setDone(
-        `Downloaded ${out.fileName}: ${plural(out.recordCount, 'saved version')} and ${plural(out.evidenceCount, 'evidence file')}.` +
-          (out.problems.length ? ` ${out.problems.length} file(s) had a problem — see evidence/manifest.json.` : ''),
-      );
-      setConfirming(false);
-    } catch (e) {
-      setError(friendlyError(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <section className="card stack" aria-labelledby="your-data" data-testid="home-data">
-      <div className="section-title">
-        <h2 id="your-data">Your data</h2>
-        {!confirming && (
-          <button className="btn btn-small" type="button" onClick={() => setConfirming(true)}>
-            Download my data
-          </button>
-        )}
-      </div>
-      <p className="small muted">
-        Get a copy of everything in your space — every version of your story, your drafts, and your evidence files — as
-        one .zip file. It’s unlocked on this device. Nothing extra is sent to our server.
-      </p>
-      {confirming && (
-        <div className="card warn stack" role="note">
-          <p>
-            <strong>The downloaded file is not encrypted.</strong> Anyone who can open this device, or the file, can read
-            everything in it. If someone else uses this device, think about downloading it somewhere safer. Delete it (and
-            empty the trash) when you’re done.
-          </p>
-          <div className="row">
-            <button className="btn btn-primary btn-small" type="button" onClick={() => void run()} disabled={busy}>
-              {busy ? 'Unlocking and packaging…' : 'I understand — download'}
-            </button>
-            <button className="btn btn-small" type="button" onClick={() => setConfirming(false)} disabled={busy}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {done && <p role="status">{done}</p>}
-      {error && <ErrorNote>{error}</ErrorNote>}
     </section>
   );
 }
