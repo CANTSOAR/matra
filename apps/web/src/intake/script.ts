@@ -1410,7 +1410,7 @@ export const SPACE_PROMPTS: Record<string, { q: string; hint?: string }> = {
   'person.escrow': { q: 'Would you like a sealed match?' },
   'person.matchContact': {
     q: 'If there is ever a match, how would you like a counselor to reach you?',
-    hint: 'Only a trained legal options counselor would use this — privately, and only if there is a match.',
+    hint: 'Only a Legal Options Counselor (a licensed attorney) would use this — privately, and only if there is a match.',
   },
 
   'people.told': {
