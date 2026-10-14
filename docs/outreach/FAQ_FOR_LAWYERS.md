@@ -21,7 +21,7 @@ Nothing rewrites her words. Voice is transcribed and suggestions are made on her
 Never. There is no automatic or one-click submission to police, prosecutors, Title IX offices, or employers (PRD §8). This tracks N.J.S.A. 52:4B-60.2 (the right to choose whether to participate in an investigation).
 
 **5. What stage is it at?**
-A working MVP with fictional data. Not audited. **No real survivor data** until the gates in GOVERNANCE.md §5 are met: independent security audit, outside cryptographer review of the threat model, licensed-counsel review in NJ and NY, a signed pilot agreement with an organization that has trained advocates, resolution of known blockers (escrow probing, open-ended shares, 18+ enforcement), and a published law-enforcement request guide and incident-response plan.
+A working MVP with fictional data. Not audited. **No real survivor data** until the gates in GOVERNANCE.md §5 are met: independent security audit, outside cryptographer review of the threat model, licensed-counsel review in NJ and NY, a signed pilot agreement with an organization that has trained advocates, resolution of known blockers (escrow probing, 18+ enforcement; open-ended shares are now fixed: shares expire), and a published law-enforcement request guide and incident-response plan.
 
 ---
 
@@ -43,10 +43,10 @@ Not by default. A personal journal is not privileged just because it is encrypte
 Not to Matra. Matra is not a victim counseling centre and has no counselors (N.J.S.A. 2A:84A-22.13 to -22.16; N.J.R.E. 517). Whether a partnered county program's qualified counselors could communicate through Matra within that privilege is an open question for counsel. NY's analogue (CPLR 4510) is flagged **[VERIFY]** (Memo §2).
 
 **10. Every sealed version is kept. Isn't that impeachment material?**
-Yes, and it's a real trade-off. The ledger is append-only; a correction is a new sealed version that supersedes the old one, and both remain. If she produces or shares the full history, routine trauma-memory inconsistencies could be used to impeach (N.J.R.E. 613). Planned mitigations: private, unsealed local drafts; sealing as a deliberate step; plain-language warnings before sealing and sharing (PRD N4, N5). We want counsel's view on the right default.
+Yes, and it's a real trade-off. The ledger is append-only; a correction is a new sealed version that supersedes the old one, and both remain. If she produces or shares the full history, routine trauma-memory inconsistencies could be used to impeach (N.J.R.E. 613). Mitigations: plain-language warnings before she starts writing, before sealing ("Every saved version is kept") and before sharing are built (PRD N4); private, unsealed local drafts and sealing as a deliberate step are planned (PRD N5). We want counsel's view on the right default.
 
 **11. What about deletion and spoliation?**
-She can crypto-shred her account. Ledger hashes remain, so the ledger would show that records existed and were deleted. If litigation is pending or reasonably anticipated, deletion could create spoliation exposure, and N.J.S.A. 2C:28-6 may be implicated **[VERIFY elements]**. The deletion flow must warn and recommend speaking to a lawyer first (Memo §2).
+She can crypto-shred her account. Ledger hashes remain, so the ledger would show that records existed and were deleted. If litigation is pending or reasonably anticipated, deletion could create spoliation exposure, and N.J.S.A. 2C:28-6 may be implicated **[VERIFY elements]**. The "Delete everything" screen leads with that caution (talk to a lawyer before deleting; information, not advice), says what is and isn't deleted (including that copies an attorney already downloaded can't be recalled), offers "Download my data" first, and needs a typed confirmation (Memo §2).
 
 ---
 
@@ -65,7 +65,7 @@ Narrow, honest value: a sealed, timestamped record **may** help rebut a claim of
 Hashes go to authentication and integrity (FRE 901(b)(9), 902(13)-(14)), not hearsay or truth. Today the ledger is **self-hosted and not externally anchored**, so it shows integrity, not independent proof of time: the operator controls the clock and could in principle rewrite the whole chain (Whitepaper §4). Before anyone relies on it we need external timestamp anchoring (RFC 3161 or a public log), a documented procedure, and a named custodian. Whether N.J.R.E. 902 has an equivalent of FRE 902(13)-(14) is **[VERIFY]**; in NJ authentication would more likely come through a witness under N.J.R.E. 901.
 
 **16. Photos are metadata-stripped. Doesn't that hurt authenticity?**
-It's a trade-off. EXIF/GPS is stripped on her device to protect her location, so the stored copy is a **derivative** whose hash won't match the original, and capture-time metadata is lost. We tell her to **keep the original file and device**. Non-image files are not stripped and the UI warns her. Optional encrypted storage of originals is on the roadmap (Whitepaper §3).
+It's a trade-off. EXIF/GPS is stripped on her device to protect her location, so the stored copy is a **derivative** whose hash won't match the original, and capture-time metadata is lost. We tell her to **keep the original file and device** whenever she adds evidence, and the HEIC and PDF advice says to keep the original too. Non-image files are not stripped and the UI warns her. Optional encrypted storage of originals is on the roadmap (Whitepaper §3).
 
 ---
 
@@ -97,10 +97,10 @@ Matra is **18+ only**. New Jersey makes **any person** a reporter of suspected c
 Any campus channel must keep Matra **structurally independent** of the school so no Title IX "official with authority" (34 C.F.R. 106.30, 2020 rule, restored Sept. 29, 2026) or Clery Campus Security Authority learns of reports through Matra. The institution would receive aggregate, de-identified data at most. The share screen must say whether a school-affiliated recipient is a confidential resource or a mandatory reporter under policy (Memo §4).
 
 **24. Our program is VAWA/VOCA funded. Can we use this?**
-Possibly, but check your grant conditions first. VAWA confidentiality (34 U.S.C. 12291(b)(2); and 28 C.F.R. 94.115 for VOCA) bars releasing PII "regardless of whether the information has been encoded, encrypted, hashed," and requires informed, written, **reasonably time-limited** consent. Implications: hashed escrow identifiers are still PII; shares need an expiry (today they are open-ended until revoked, a known blocker); funders must never receive individual-level data (Memo §6).
+Possibly, but check your grant conditions first. VAWA confidentiality (34 U.S.C. 12291(b)(2); and 28 C.F.R. 94.115 for VOCA) bars releasing PII "regardless of whether the information has been encoded, encrypted, hashed," and requires informed, written, **reasonably time-limited** consent. Implications: hashed escrow identifiers are still PII; shares need an expiry (built: default 90 days, she can choose 30 days to 1 year, and renew); funders must never receive individual-level data (Memo §6).
 
 **25. What if an abuser poses as a survivor, or as an attorney?**
-Attorneys: only **verified** attorneys can receive shares; today an admin verifies manually. The pilot adds bar-record checks, organizational attestation, MFA or passkeys, annual re-verification, and the MOU (Whitepaper §5; MOU §3). Every attorney access appears in the survivor's log. Revocation stops future access but **cannot recall what was already downloaded**, which is why the MOU has deletion duties. A malicious server could in theory substitute an attorney's public key; an out-of-band key-fingerprint check is on the pre-pilot list.
+Attorneys: only **verified** attorneys can receive shares; today an admin verifies manually. The pilot adds bar-record checks, organizational attestation, MFA or passkeys, annual re-verification, and the MOU (Whitepaper §5; MOU §3). Every attorney access appears in the survivor's log. Revocation stops future access but **cannot recall what was already downloaded**, which is why the MOU has deletion duties. A malicious server could in theory substitute an attorney's public key; the share screen already makes her confirm the attorney's key fingerprint (read to her by phone or in person) before sharing; verification through the attorney's organization is on the pre-pilot list.
 
 ---
 

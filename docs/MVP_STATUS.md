@@ -50,7 +50,7 @@ These come from GOVERNANCE.md §5, the whitepaper §6 and the threat model §6. 
 | Outside cryptographer review of the threat model | Not started | Academic crypto contacts (Varia, Ristenpart, Qin) |
 | Signed pilot partner with trained advocates | Not started | SAVE of Essex, healingSPACE, Partners (NJ) |
 | Published incident-response plan and law-enforcement request guide | Not written | You (templates exist elsewhere; counsel reviews) |
-| **W3** attorney key substitution: out-of-band fingerprint check | Partly done (manual fingerprint in the UI) | Code |
+| **W3** attorney key substitution: out-of-band fingerprint check | Partly done (manual fingerprint in the UI; she must confirm it before sharing) | Code |
 | **W4** malicious client code: published build hashes, SRI, reproducible builds | CSP done; the rest isn't | Code |
 | **W5** Argon2id and a passphrase-strength floor | Not done | Code |
 | **W7** attorney-verification procedure, plus MFA or passkeys for attorneys | Manual CLI flag only | Code + partner terms |

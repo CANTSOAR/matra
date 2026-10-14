@@ -45,19 +45,19 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 | M7 | **Legal Shield sharing.** Choose a verified attorney, accept verbatim consent text (ledgered), share scoped record and evidence re-encrypted to the attorney, revoke at any time. Attorney access appears in the survivor's audit log. | Built |
 | M8 | **Confidential matching (demo only).** Unique identifiers only (phone, email, social handles; names are never matched). Survivors always see "Sealed" (this prevents perpetrator self-checks). No ledger entry is written at match time. **Being rebuilt** to Callisto-style OPRF with split keys plus a **Legal Options Counselor** (licensed attorney, demo account `counselor.demo`) who sees the matched group and contacts each survivor who opted in, separately, by her chosen safe contact method. The earlier design released counts to the survivor's actively shared attorney. | Rebuild in progress. Demo-only until audit, counsel review of the counselor model (Memo §7A), and account verification |
 | M10 | **"Download my data."** A client-side zip of records, evidence and a hash manifest, decrypted on her device, with an unencrypted-file warning | Built (e2e scenario 3) |
-| M9 | **Crypto-shred account deletion** | Built |
+| M9 | **Crypto-shred account deletion.** "Delete everything" (from Home → Your data) explains what is and isn't deleted (ledger hashes remain; copies an attorney already downloaded can't be recalled), leads with the spoliation caution (talk to a lawyer first; information, not advice), offers "Download my data" first, and needs a typed confirmation. Afterwards the session is wiped and she lands on the public home. | Built (e2e scenario 8) |
 
 ### 4.2 Next phase (pilot-readiness)
 | # | Requirement | Why |
 |---|---|---|
 | N1 | **Attorney-first route:** "Talk to a lawyer first" before the long intake. The attorney can request that the survivor prepare her account for counsel, with an attorney-set designation. | Strengthens privilege and work product (Memo §2) |
 | N2 | **Matching hardening:** ~~matches hidden from users~~ (done). In progress: OPRF with split keys and the Legal Options Counselor. Next: account verification without a user list (partner-issued invite codes), OPRF rate limits per verified account, counselor sees only server-released matched entries with every decryption logged, renewable time-limited consent, and a budgeted cap on counselor hours (entries stay sealed if it runs out, disclosed at consent). | Security research A1, A7. VAWA time-limited consent. The counselor is an attorney to preserve privilege (Memo §7A) |
-| N3 | **Share expiry and renewal**, plus scoped consent per item | VAWA "reasonably time-limited" consent |
-| N4 | **Warnings at key moments:** intake start, seal, share, export, and delete (discoverability, version history, spoliation) | Honest informed consent (Memo §2) |
+| N3 | **Share expiry and renewal**, plus scoped consent per item. *Built:* expiry (default 90 days, 30 days to 1 year), renewal that keeps her chosen length, scoped consent | VAWA "reasonably time-limited" consent |
+| N4 | **Warnings at key moments:** intake start, seal, share, export, and delete (discoverability, version history, spoliation). *Built:* short, skippable-to-read notices with "Learn more" (`apps/web/src/lib/disclosures.ts`), plus "keep your originals" when evidence is added. Needs advocate and counsel review of the wording | Honest informed consent (Memo §2) |
 | N5 | **Private notes vs. sealed statements.** Drafts are local and unsealed. Sealing is deliberate. | Reduces version-history impeachment risk |
 | N6 | **Age gate (18+)** and minor-incident screening, with a referral path (2NDFLOOR, NJ DCPP info) | Mandatory reporting (Memo §4) |
 | N7 | **Attorney verification workflow** (bar lookup, org attestation, MOU signature, MFA or passkey) and an admin audit trail | Malicious attorney threat |
-| N8 | **Key-fingerprint verification** UI for attorney keys | Malicious server key substitution |
+| N8 | **Key-fingerprint verification** UI for attorney keys. *Built (manual):* she must confirm the fingerprint the attorney read to her before sharing. Next: verification through the attorney's organization | Malicious server key substitution |
 | N9 | **External timestamp anchoring** (RFC 3161 and/or a public log) | Evidentiary weight of the ledger |
 | N10 | **Advocate role:** a confidential advocate can be invited, with the same consent model | Advocates are trusted intermediaries |
 | N11 | **Recovery via Shamir shares** with a chosen advocate (opt-in) | Lost passphrase is the top usability risk |
