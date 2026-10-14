@@ -64,6 +64,8 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
   await expect(page.getByRole('link', { name: '1-800-422-4453' })).toHaveAttribute('href', 'tel:+18004224453');
   await shot(page, '01b-under-18', { mobile: false });
   await page.getByRole('button', { name: 'Go back' }).click();
+  // "Go back" leaves the form, so the 18+ box can't just be ticked straight away
+  await expect(page.getByRole('heading', { name: /Tell it once/ })).toBeVisible();
   expect(registerCalls).toEqual([]);
 
   await registerSurvivor(page, ALIAS_A);
@@ -74,8 +76,12 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
   await shot(page, '03-story-safety');
   await storySafety(page, 'Yes');
 
-  // Start anywhere: her words, verbatim.
+  // Start anywhere: her words, verbatim. First, a calm note that Matra can't read it but a court can order her to
+  // hand it over (PRD N4); "Learn more" is there only if she wants it.
   await expect(page.getByRole('heading', { name: 'Start wherever feels right.' })).toBeVisible();
+  const before = page.getByTestId('notice-before-writing');
+  await expect(before).toContainText('But a court can order you to hand it over.');
+  await expect(before).toContainText('Anything you give police will be shared with the defense.');
   await addToStory(page, NARRATIVE);
   expect(await page.locator('.space-journal .space-entry-text').first().textContent()).toBe(NARRATIVE);
 
@@ -198,6 +204,7 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
   await expect(review).toBeVisible();
   expect(await review.locator('.space-review-entry .space-verbatim').first().textContent()).toBe(NARRATIVE);
   await expect(review.getByText('Skipped', { exact: true }).first()).toBeVisible();
+  await expect(review.getByTestId('notice-saved-versions')).toContainText('Every saved version is kept');
   await shot(page, '05-review');
 
   await sealFromReview(page);
@@ -223,6 +230,7 @@ test('2. evidence: JPEG GPS is stripped and hashed; PDF warns metadata kept; re-
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
   await nav(page, 'Evidence');
   await expect(page.getByRole('heading', { name: 'Evidence', level: 1 })).toBeVisible();
+  await expect(page.getByTestId('notice-keep-originals')).toContainText('keep the original file');
 
   const jpeg = await jpegWithGps(page);
   expect(hasExifGps(jpeg)).toBe(true);
@@ -278,6 +286,8 @@ test('3. incident summary: her words verbatim; summary + VCCO draft download as 
   await expect(preview.getByText('He stood in the doorway so I could not leave.')).toBeVisible();
   // compensation-only details never appear in the summary
   await expect(preview.getByText('08901')).toHaveCount(0);
+  // Before downloading: the PDFs aren't locked once they leave Matra.
+  await expect(page.getByTestId('notice-download-file')).toContainText('it is not encrypted');
   await shot(page, '09-brief-preview');
 
   for (const [button, prefix] of [
@@ -320,6 +330,8 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
   await expect(page.getByRole('heading', { name: `Share with ${ATTORNEY_NAME}?` })).toBeVisible();
   await expect(page.getByLabel(/My evidence files/)).toBeChecked();
   await expect(page.locator('.consent-text')).toContainText(`I, "${ALIAS_A}", choose to share`);
+  await expect(page.locator('.consent-text')).toContainText('The attorney can read and save what I share.');
+  await expect(page.getByTestId('notice-sharing')).toContainText('it can’t erase what they already saved');
   await page.getByLabel('This matches what the attorney told me.').check();
   await page.getByLabel('I agree to the statement above.').check();
   await shot(page, '11-share-consent');
@@ -519,4 +531,35 @@ test('7. wrong passphrase shows a friendly error', async ({ page }) => {
   await expect(page.getByRole('alert')).toHaveText('That alias and passphrase don’t match. Check for typos and try again.', { timeout: 60_000 });
   await shot(page, '16-wrong-passphrase', { mobile: false });
   await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+});
+
+test('8. delete everything: explained first (lawyer caution, what stays), typed confirmation, then the session is gone', async ({ page }) => {
+  const alias = `wren-del-${RUN}`;
+  await registerSurvivor(page, alias);
+  await page.getByTestId('delete-account-link').click();
+  await expect(page.getByRole('heading', { name: 'Delete everything', level: 1 })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('notice-deleting')).toContainText('talk to a lawyer before you delete anything');
+  await expect(page.getByText('This can’t be undone.')).toBeVisible();
+  await expect(page.getByText(/Copies an attorney already downloaded or saved/)).toBeVisible();
+  // a copy first, if she wants one
+  await expect(page.getByTestId('delete-export').getByRole('button', { name: 'Download my data' })).toBeVisible();
+  await shot(page, '17-delete-account');
+
+  const button = page.getByTestId('delete-account');
+  await expect(button).toBeDisabled();
+  await page.getByTestId('delete-confirm-input').fill('DELETE');
+  await expect(button).toBeEnabled();
+  await button.click();
+
+  // the public home, no session, nothing in the header
+  await expect(page.getByTestId('account-deleted')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: /Tell it once/ })).toBeVisible();
+  await expect(page.getByTestId('lock-signout')).toHaveCount(0);
+
+  // the account no longer exists
+  await page.getByRole('link', { name: 'Sign in' }).first().click();
+  await page.getByLabel('Alias').fill(alias);
+  await page.getByLabel('Passphrase').fill(SURVIVOR_PASS);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('alert')).toHaveText('That alias and passphrase don’t match. Check for typos and try again.', { timeout: 60_000 });
 });
