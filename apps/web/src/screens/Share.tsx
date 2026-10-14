@@ -5,6 +5,7 @@ import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
 import { NOTICES } from '../lib/disclosures';
+import { shareLengthSentence } from '../lib/shareTerms';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { blobKeyFor, finals, loadVault, type OpenedRecord } from '../lib/vault';
 
@@ -32,7 +33,7 @@ export function buildConsentStatement(p: {
     `I, "${p.alias}", choose to share my sealed Matra file (sealed ${p.sealedAt}) with ${who}, a verified attorney, so that they can advise me.`,
     `I am sharing: ${p.scope.map((s) => SCOPE_LABEL[s].replace(/^My /, 'my ').replace(/^The /, 'the ')).join('; ')}.`,
     `It will be encrypted on my device so that only the holder of the key with fingerprint ${p.fingerprint} can open it.`,
-    `This access expires ${p.expiresInDays} days after the date below unless I renew it.`,
+    shareLengthSentence(p.expiresInDays),
     SHARE_DISCLAIMER.replace(/\bYou\b/g, 'I').replace(/\byou\b/g, 'I'),
     `Agreed at ${p.at}.`,
   ].join('\n');

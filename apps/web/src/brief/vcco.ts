@@ -9,8 +9,8 @@ import { renderPdf } from './pdf/render';
 import { NOT_PROVIDED, formatDate, formatDateUTC, formatTimestamp, goalLabel, has, parseIsoDate } from './format';
 
 export const VCCO = {
-  onlineUrl: 'http://www.njoag.gov/vcco/vcco-online-application/',
-  paperUrl: 'http://www.njoag.gov/vcco/vcco-paper-application/',
+  onlineUrl: 'https://www.njoag.gov/vcco/vcco-online-application/',
+  paperUrl: 'https://www.njoag.gov/vcco/vcco-paper-application/',
   mail: 'Victims of Crime Compensation Office, 50 Park Place, 5th floor, Newark, NJ 07102',
   phone: '(877) 658-2221 or (973) 648-2107',
   fax: '(973) 648-3937',

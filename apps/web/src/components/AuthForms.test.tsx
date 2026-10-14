@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { SessionProvider } from '../lib/session';
 import { CreateAccountForm } from './AuthForms';
 
@@ -26,13 +26,16 @@ describe('CreateAccountForm (survivor) — 18+ gate', () => {
     expect(create).toBeEnabled();
   });
 
-  it('under 18: shows age-appropriate help, sends nothing, and can go back', async () => {
+  it('under 18: shows age-appropriate help, sends nothing, and "Go back" leaves the form (no ticking 18+ straight away)', async () => {
     const user = userEvent.setup();
     const fetchImpl = vi.fn();
     render(
       <SessionProvider fetchImpl={fetchImpl as unknown as typeof fetch}>
-        <MemoryRouter>
-          <CreateAccountForm role="survivor" />
+        <MemoryRouter initialEntries={['/start']}>
+          <Routes>
+            <Route path="/" element={<p>Start page</p>} />
+            <Route path="/start" element={<CreateAccountForm role="survivor" />} />
+          </Routes>
         </MemoryRouter>
       </SessionProvider>,
     );
@@ -45,6 +48,8 @@ describe('CreateAccountForm (survivor) — 18+ gate', () => {
     expect(screen.queryByLabelText(/Choose an alias/)).not.toBeInTheDocument();
     expect(fetchImpl).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Go back' }));
-    expect(screen.getByLabelText(/Choose an alias/)).toHaveValue('');
+    expect(screen.getByText('Start page')).toBeInTheDocument();
+    expect(screen.queryByLabelText('I am 18 or older.')).not.toBeInTheDocument();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

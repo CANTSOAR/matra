@@ -26,7 +26,7 @@ could not be confirmed is marked **UNCONFIRMED**.
 | V3 | N.J.A.C. 13:75-4.10 Attorney fees (amended 53 N.J.R. 1852(c), eff. 11/1/2021) | https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-75-4-10 |
 | V4 | NJOAG VCCO "Who is Eligible?" | https://njoag.gov/?p=75536 |
 | V5 | NJOAG VCCO "Fact vs. Fiction" | https://njoag.gov/?p=77074 |
-| V6 | NJOAG VCCO "How to apply" (online + paper application links) | https://njoag.gov/?p=73187 → http://www.njoag.gov/vcco/vcco-online-application/ and http://www.njoag.gov/vcco/vcco-paper-application/ |
+| V6 | NJOAG VCCO "How to apply" (online + paper application links) | https://njoag.gov/?p=73187 → https://www.njoag.gov/vcco/vcco-online-application/ and https://www.njoag.gov/vcco/vcco-paper-application/ |
 | V7 | Pending legislation: S1294 (2026–27 session; introduced 1/13/2026, reported from Senate committee 2/19/2026) / S4985 & A6254 (2024–25) — exception to the police-report requirement for unreported sexual offenses where the victim received forensic medical services | https://open.pluralpolicy.com/nj/bills/221/S4985 · https://open.pluralpolicy.com/nj/bills/221/A6254 · https://app.azure.legiplex.com/nj/legislature/2026/2026-r/bills/s1294 |
 
 ---
@@ -59,7 +59,7 @@ could not be confirmed is marked **UNCONFIRMED**.
 Overall **$25,000** per claim (+ up to $35,000 supplemental for catastrophic injury). Counseling $20,000 (direct victim), $7,000 secondary victims; relocation $3,000; loss of earnings $600/wk, max 104 weeks; domestic help $6,500; child/dependent care $6,500; crime-scene clean-up $4,000; medical transportation $0.31/mi, ≤$10/day, ≤$3,000; court-attendance lost earnings $600/wk; attorney (victims' rights) $275/hr ≤ $10,000; attorney (claim filing) lesser of $275/hr or 15% of award; funeral $7,500 (n/a here). Not covered: pain and suffering, property loss (except clean-up).
 
 ### 2.4 Submission
-- Online: http://www.njoag.gov/vcco/vcco-online-application/ · Paper: http://www.njoag.gov/vcco/vcco-paper-application/
+- Online: https://www.njoag.gov/vcco/vcco-online-application/ · Paper: https://www.njoag.gov/vcco/vcco-paper-application/
 - Mail: VCCO, 50 Park Place, 5th floor, Newark, NJ 07102 · Phone (877) 658-2221 / (973) 648-2107 · Fax (973) 648-3937 · njvictims@njvictims.org
 - Free help: County Prosecutor's Office of Victim-Witness Advocacy; county rape crisis center / CSVA.
 - Decision within 90 days of a complete file (statute); VCCO quotes ~3 months.

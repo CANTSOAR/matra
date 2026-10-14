@@ -86,14 +86,9 @@ export function CreateAccountForm({ role }: { role: Role }) {
   }
 
   if (under18) {
-    return (
-      <Under18Notice
-        onBack={() => {
-          setUnder18(false);
-          setAdult(false);
-        }}
-      />
-    );
+    // "Go back" leaves this page (to the start page), so the 18+ box can't just be ticked straight away; coming back
+    // shows a fresh, empty form.
+    return <Under18Notice onBack={() => navigate('/', { replace: true })} />;
   }
 
   return (

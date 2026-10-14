@@ -6,6 +6,7 @@ import { friendlyError, useRequiredSession } from '../lib/session';
 import { escrowLabel, finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
 import { ExportCard } from '../components/ExportCard';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
+import { shareLengthDays, shareLengthLabel } from '../lib/shareTerms';
 
 const AUDIT_TEXT: Record<string, string> = {
   'account.created': 'You created your space',
@@ -516,11 +517,13 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
   const [error, setError] = useState<string | null>(null);
   const name = attorney ? attorney.displayName : 'Attorney';
   const expired = share.status === 'active' && Date.parse(share.expiresAt) <= Date.now();
+  // keep the length she chose when she shared (from her consent text), not always 90 days
+  const days = shareLengthDays(share);
   async function renew() {
     setBusy(true);
     setError(null);
     try {
-      await api.renewShare(share.id);
+      await api.renewShare(share.id, days);
       onChanged();
     } catch (e) {
       setError(friendlyError(e));
@@ -574,7 +577,7 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
         ) : (
           <div className="row">
             <button className="btn btn-small" onClick={renew} disabled={busy}>
-              {busy ? 'Renewing…' : 'Renew 90 days'}
+              {busy ? 'Renewing…' : `Renew for ${shareLengthLabel(days)}`}
             </button>
             <button className="btn btn-small btn-danger" onClick={() => setConfirming(true)} data-testid="share-revoke">
               Revoke
