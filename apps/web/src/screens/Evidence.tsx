@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
@@ -63,7 +63,7 @@ export function Evidence() {
   const [persistMsg, setPersistMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const existing = useAsync(async () => {
+  const loadExisting = useCallback(async () => {
     const [vault, { blobs }, mem] = await Promise.all([loadVault(api, session.masterKey), api.listBlobs(), getWorkingData()]);
     const draft = latestOf(vault, 'draft');
     const final = latestOf(vault, 'final');
@@ -78,6 +78,10 @@ export function Evidence() {
       inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)),
     };
   }, [api, session.masterKey, getWorkingData]);
+  const existing = useAsync(loadExisting, [loadExisting]);
+  // The latest loaded vault state, read when a file finishes uploading (not the render the file was chosen in).
+  const existingRef = useRef(existing.data);
+  existingRef.current = existing.data;
 
   async function handleFiles(files: FileList | File[]) {
     const list = Array.from(files);
@@ -101,9 +105,12 @@ export function Evidence() {
     // so file names/hashes survive sign-out.
     try {
       const mem = await getWorkingData();
-      const vaultDraft = existing.data?.vaultDraft;
-      const draft = mem?.draft ?? existing.data?.resumeDraft ?? emptyDraft();
-      const evidence = mergeEvidence(existing.data?.resumeEvidence, mem?.evidence, added);
+      // If she chose a file before her space finished opening, open it now: otherwise her story would be saved over
+      // with an empty draft (and the next screen would start from the beginning).
+      const ex = existingRef.current ?? (await loadExisting());
+      const vaultDraft = ex.vaultDraft;
+      const draft = mem?.draft ?? ex.resumeDraft ?? emptyDraft();
+      const evidence = mergeEvidence(ex.resumeEvidence, mem?.evidence, added);
       const res = await sealPayload(
         api,
         session.masterKey,
