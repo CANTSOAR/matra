@@ -60,5 +60,5 @@ Callisto spent more than a decade proving that survivors want private, survivor-
 - **Funding** for the audit, pilot hosting, a part-time program coordinator, and the operating and wind-down reserves.
 
 ### Contact
-Aryan Malik, founder · [email] · [demo link]
+Aryan Malik, founder · matra.reports@gmail.com · [demo link]
 *Matra is a pre-pilot prototype. Nothing here is legal advice.*

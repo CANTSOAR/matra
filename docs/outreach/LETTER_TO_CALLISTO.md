@@ -28,4 +28,4 @@ Thank you for what you built and for the people you helped.
 With gratitude and respect,
 Aryan Malik
 Founder, Matra
-[project email] · [repository link]
+matra.reports@gmail.com · https://github.com/CANTSOAR/matra

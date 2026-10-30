@@ -11,7 +11,7 @@
 - **Use the current name:** "Incident Summary in the Survivor's Own Words" (not "Police Evidentiary Brief").
 - **Attach or link at most two things:** the [one-pager](../PITCH_ONE_PAGER.md) and the doc most relevant to them (FAQ for lawyers, Whitepaper for security, budget for funders).
 - **Follow up once after 7-10 business days, then once more after another 2 weeks, then stop.**
-- Signature block: `Aryan Malik, Founder, Matra (open-source, nonprofit project; fiscal sponsor [pending / Name]) · [email] · [demo link] · [repo link]`
+- Signature block: `Aryan Malik, Founder, Matra (open-source, nonprofit project; fiscal sponsor [pending / Name]) · matra.reports@gmail.com · [demo link] · https://github.com/CANTSOAR/matra`
 
 ---
 

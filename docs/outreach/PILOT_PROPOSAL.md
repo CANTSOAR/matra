@@ -97,4 +97,4 @@ No fees in either direction. Matra's pilot costs (audit, hosting, insurance, adv
 
 **Governing documents:** the Pilot Partner Agreement template (`docs/legal/pilot-partner-agreement.md`), the Attorney Partner MOU (`docs/ATTORNEY_PARTNER_MOU_TEMPLATE.md`), and GOVERNANCE.md. All are drafts pending counsel review.
 
-*Contact:* Aryan Malik · [email] · [phone] · [demo link]
+*Contact:* Aryan Malik · matra.reports@gmail.com · [phone] · [demo link]
