@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { STEPS } from '../intake/script';
 import { MATCHING_EXPLANATION } from '../counselor/SurvivorMatching';
-import { MATCHING_CONSENT_LINES } from './disclosures';
+import { CONFLICT_CHECK_STATEMENT_VERSION } from '@matra/shared';
+import { CONFLICT_CHECK_STATEMENT, MATCHING_CONSENT_LINES, REPORT_REQUEST_LINES, buildReportConsentStatement } from './disclosures';
 import { MATCHING_CONSENT_STATEMENT } from './vault';
 
 describe('sealed-match consent (Memo §7A)', () => {
@@ -29,5 +30,35 @@ describe('sealed-match consent (Memo §7A)', () => {
   it('never claims nobody (including the operator) can test or read a sealed identifier (threat model W2/W14)', () => {
     expect(MATCHING_CONSENT_STATEMENT).not.toMatch(/nobody can read|\bnot us\b|not anyone/i);
     expect(MATCHING_CONSENT_STATEMENT).toMatch(/the people who run Matra could check whether a particular email or number was sealed/);
+  });
+});
+
+describe('staged release copy (W21, Q-052 intent)', () => {
+  const statement = buildReportConsentStatement({
+    counselor: { displayName: 'Demo — Counselor', organization: 'Demo LOC' },
+    fingerprint: 'ABCD-EF01-2345-6789-ABCD-EF01-2345-6789',
+    withEvidence: 0,
+    sealedAt: '2026-11-11T00:00:00.000Z',
+    expiresInDays: 90,
+    at: '2026-11-11T01:00:00.000Z',
+  });
+
+  it('names the confirmed key fingerprint (the server refuses a consent that does not) and only this counselor', () => {
+    expect(statement).toContain('ABCD-EF01-2345-6789-ABCD-EF01-2345-6789');
+    expect(statement).toMatch(/with no one else/);
+    expect(statement).toMatch(/not shared with anyone else who named the same person/);
+    expect(statement).toMatch(/not sharing any evidence files/);
+  });
+
+  it('is honest about what stopping can and cannot do, and says no is fine', () => {
+    const text = REPORT_REQUEST_LINES.join(' ');
+    expect(text).toMatch(/you can say no/);
+    expect(text).toMatch(/If you stop before the counselor opens it, they never see it/);
+    expect(text).toMatch(/can’t take back what they already read/);
+    expect(statement).toMatch(/can’t take back what was already read/);
+  });
+
+  it('the conflict-check statement is versioned with the server', () => {
+    expect(CONFLICT_CHECK_STATEMENT.version).toBe(CONFLICT_CHECK_STATEMENT_VERSION);
   });
 });

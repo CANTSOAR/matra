@@ -165,9 +165,15 @@ describe('sealed matching: threshold release to counselors', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.failed).toEqual([]);
-      expect(r.bundles.map((x) => x.bundle.contact.name).sort()).toEqual(['Alex', 'Blair']);
+      // staged release: no contact details before the conflict check (staged-release.test.ts)
+      expect(r.bundles.map((x) => x.contact)).toEqual([undefined, undefined]);
       expect(r.bundles[0]!.bundle.identifier).toEqual({ kind: 'social', canonical: 'instagram:bad_guy' });
     }
+    const checked = await request(app).post(`/api/counselor/groups/${g.id}/conflict-check`).set(mine.auth).send({ result: 'clear', statementVersion: 1 });
+    expect(checked.status).toBe(200);
+    const [g1] = await groupsOf(app, mine);
+    const r1 = await reconstructMatchGroup(g1!.tag, g1!.entries, mine.privateKey, mine.user.id);
+    expect(r1.ok && r1.bundles.map((x) => x.contact?.name).sort()).toEqual(['Alex', 'Blair']);
     // the other counselor could not use the assigned counselor's seals even if she had them
     expect((await reconstructMatchGroup(g.tag, g.entries, other.privateKey, other.user.id)).ok).toBe(false);
 
@@ -200,6 +206,7 @@ describe('sealed matching: threshold release to counselors', () => {
       .send({
         tag: first.tag,
         bundle: env,
+        contactBundle: env,
         labelEnvelope: env,
         seals: [{ counselorId: loc.user.id, wrappedKey: { v: 1, alg: 'RSA-OAEP-256', data: 'AAAA' }, envelope: env }],
         routing: await sealRouting({ v: 1, tag: first.tag }, matcherKeysFromSeed(new Uint8Array(32)).encPublicJwk),

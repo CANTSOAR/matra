@@ -34,6 +34,8 @@ const PhoneVerify = page(() => import('./counselor/PhoneVerify'), 'PhoneVerify')
 const AttorneyCases = page(() => import('./attorney/Attorney'), 'AttorneyCases');
 const AttorneyCase = page(() => import('./attorney/Attorney'), 'AttorneyCase');
 const CounselorPortal = page(() => import('./counselor/Counselor'), 'CounselorPortal');
+const CounselorReport = page(() => import('./counselor/CounselorReport'), 'CounselorReport');
+const ReportRequest = page(() => import('./counselor/ReportRequest'), 'ReportRequest');
 
 /** A calm placeholder while a screen's code arrives. */
 function Lazy({ children }: { children: ReactNode }) {
@@ -56,6 +58,7 @@ export function AppRoutes() {
         <Route path="vault/share" element={<RequireSession role="survivor"><Lazy><Share /></Lazy></RequireSession>} />
         <Route path="vault/matching" element={<RequireSession role="survivor"><Lazy><SurvivorMatching /></Lazy></RequireSession>} />
         <Route path="vault/matching/verify" element={<RequireSession role="survivor"><Lazy><PhoneVerify /></Lazy></RequireSession>} />
+        <Route path="vault/requests/:id" element={<RequireSession role="survivor"><Lazy><ReportRequest /></Lazy></RequireSession>} />
         <Route path="vault/delete" element={<RequireSession role="survivor"><Lazy><DeleteAccount /></Lazy></RequireSession>} />
 
         <Route path="attorney" element={<AttorneyLanding />} />
@@ -66,6 +69,7 @@ export function AppRoutes() {
 
         <Route path="counselor" element={<CounselorSignIn />} />
         <Route path="counselor/matches" element={<RequireCounselor><Lazy><CounselorPortal /></Lazy></RequireCounselor>} />
+        <Route path="counselor/reports/:id" element={<RequireCounselor><Lazy><CounselorReport /></Lazy></RequireCounselor>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

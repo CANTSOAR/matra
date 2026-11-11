@@ -145,14 +145,17 @@ them" field (`other`) → `not_supported` — the normalizer, the intake opt-in 
  τ = HKDF(I2OSP(k, 33), "tag")        K_P = HKDF(I2OSP(k, 33), "entry-key")        ← the tag is bound to the line
  x   = HMAC(matchKey, "x|τ") mod p    matchKey = HKDF(passphrase material, "matra/match-x"), non-extractable HMAC key
  y   = a·x + k mod p                              her point on this perpetrator's line
- ke  = fresh AES-256 key;  bundle = AES-GCM(ke, pad₁ₖ(contact bundle), AAD "bundle|τ")
+ ke  = fresh AES-256 key;  bundle  = AES-GCM(ke, pad₁ₖ(summary bundle),  AAD "bundle|τ")
+                           contact = AES-GCM(ke, pad₁ₖ(contact details), AAD "contact|τ")   (staged release, below)
  ce  = AES-GCM(K_P, ke, AAD "ce|τ")
  c_j = RSA-OAEP(pk_counselor_j, kc) ‖ AES-GCM(kc, {τ, x, y, ce}, AAD "seal|τ|j")   one per counselor on the signed roster
- → server: { τ, bundle, c_1..c_n, label = AES-GCM_master(pad₁ₖ({label, identifier, contact, consent, state, epoch, {τ,x,y,ce}})) }
+ → server: { τ, bundle, contact, c_1..c_n, label = AES-GCM_master(pad₁ₖ({label, identifier, contact, consent, state, epoch, {τ,x,y,ce}})) }
 ```
 `pad₁ₖ` right-pads the JSON with spaces to 1 KiB, then whole KiB, so ciphertext sizes don't reveal name or note lengths.
-The contact bundle holds how she'd like to be contacted (method, number or email, safe times, name, language), the
-exact consent text she agreed to and when, the identifier kind and canonical form, and an optional state.
+The summary bundle (v2) holds the identifier kind and canonical form, the incident and home states, how she'd like to
+be contacted (the *methods* only: call, text, email, voicemail) and her language, and the exact consent text she agreed
+to and when. Her name, number or email and note are in the separate contact-details ciphertext under the same `ke`.
+(v1 bundles, sealed before staged release, held everything in one ciphertext; counselors' clients still open them.)
 
 **Server rules.** Stores rows keyed by τ with `UNIQUE(user, τ)` (a survivor cannot match herself; her x is the same
 every time she names the same person) and the OPRF key epoch. A τ is **matched** when entries from **2 distinct
@@ -358,6 +361,31 @@ all. A malicious app server can still withhold groups, or serve a released group
 client does **not** verify that signature yet, so re-routing is not detected (W18). Open legal questions: Q-017
 (automatic assignment to one counselor), Q-035 (which state's law governs), Q-042 (an uninspectable matcher).
 
+**Staged release (W1, W21; `apps/server/src/app.ts`, `apps/web/src/counselor`).** A released group opens in stages,
+and nothing about one survivor is ever shown to another.
+1. *What matched.* The assigned counselor's client opens each summary bundle: identifier, states, contact methods,
+   consent. The server withholds every entry's contact-details ciphertext.
+2. *Conflict check.* She checks the identifier and states against her conflicts records outside Matra and records
+   "no conflict" or "conflict" (`POST /api/counselor/groups/:id/conflict-check`, statement version 1; a
+   `counselor.conflict_checked` ledger row hashes group, counselor, result and version). "No conflict" makes the server
+   include the contact ciphertexts from then on; "conflict" asks the matcher to reassign the group with her excluded,
+   cancels her unanswered requests in it, and removes it from her list. **This gate is the server's, not the
+   cryptography's:** her client already holds `ke`, so a counselor colluding with the operator could skip it (W21).
+3. *A full report, only with her yes.* After the check, and only after ticking that she has already spoken with the
+   survivor and the survivor expects it (so the request is never the first sign of a match), the counselor may ask that
+   one survivor for her full report (`report.requested`). The survivor sees the request only in her own space, with who
+   is asking and their key fingerprint (checked automatically against the org-signed roster when the build pins the
+   roster key, otherwise compared by hand as for attorneys). On a yes her device wraps her latest sealed record's key,
+   and any evidence keys she ticks (unticked by default), to the counselor's RSA key, and the server stores a release
+   with her consent text (`report.released`, hashing the consent text, record, counselor, key fingerprint, evidence ids
+   and expiry, like `share.granted`). On a no (`report.declined`) the counselor sees only the decision and cannot ask
+   again. She can revoke (`report.revoked`): before the counselor first opens it, the counselor never receives it;
+   after, it stops future access only. Every opening is shown in her activity. Withdrawing the entry or deleting either
+   account deletes the requests and releases.
+Open legal questions: Q-018 (conflict checks), Q-022, Q-023, Q-050 (revocation), Q-052 (non-consenting survivors). Schema
+v9 adds the tables and bumps the key epoch, so survivors' clients re-seal old entries into the split format at their
+next sign-in.
+
 **Data migration.** Schema v5 drops all existing matching data (entries, seals, groups, counselor notes, OPRF quotas):
 the tag derivation and seal format changed, old entries cannot be converted without the plaintext identifiers, and
 they only ever held demo data.
@@ -368,7 +396,9 @@ each entry's key epoch and which counselors it is sealed to; which counselor eac
 why (the reason names a state, so the app server learns the state of released groups; it never stores per-entry
 states); OPRF quota counters (the account-level budget always;
 per-holder counters in in-process mode, while in remote mode each holder keeps its own counters under a pseudonymous
-subject, plus its daily totals); counselor note counts and times; whether an account confirmed a phone, and keyed
+subject, plus its daily totals); counselor note counts and times; for each group, when its counselor recorded her conflict check and the result; each
+report request, its status and times, and each release (survivor, counselor, record, consent text, first-opened and
+revoked times; the report itself stays ciphertext wrapped to the counselor); whether an account confirmed a phone, and keyed
 phone hashes with counts (no account id; linkable by time together with the SMS provider's records, W19).
 
 ---

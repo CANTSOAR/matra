@@ -17,6 +17,8 @@ import type {
   CounselorMatchGroup,
   CounselorNote,
   CounselorProfile,
+  CounselorReportRequest,
+  ConflictCheckRequest,
   CreateMatchEntryRequest,
   CreateRecordRequest,
   CreateRecordResponse,
@@ -25,6 +27,10 @@ import type {
   Envelope,
   LedgerEntry,
   LedgerVerifyResponse,
+  ReportConsentRequest,
+  ReportRelease,
+  ReportReleaseBundle,
+  SurvivorReportRequest,
   LoginRequest,
   MatchingConfig,
   OprfEvaluateRequest,
@@ -252,6 +258,44 @@ export class ApiClient {
   /** decline an assigned group (conflict of interest): the matcher passes it to another counselor */
   declineCounselorGroup(groupId: string) {
     return this.json<{ ok: true }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/decline`);
+  }
+  /** Staged release: her conflict check for a group ('clear' releases contact details to her; 'conflict' passes it on). */
+  counselorConflictCheck(groupId: string, req: ConflictCheckRequest) {
+    return this.json<{ ok: true; result: ConflictCheckRequest['result'] }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/conflict-check`, req);
+  }
+  /** Stage 2: ask one survivor (whom she has already spoken with) for her full report. */
+  requestSurvivorReport(groupId: string, entryId: string) {
+    return this.json<{ request: CounselorReportRequest }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/report-requests`, {
+      entryId,
+      expected: true,
+    });
+  }
+  cancelReportRequest(id: string) {
+    return this.json<{ request: CounselorReportRequest }>('POST', `/api/counselor/report-requests/${encodeURIComponent(id)}/cancel`);
+  }
+  counselorReleases() {
+    return this.json<{ releases: ReportRelease[] }>('GET', '/api/counselor/releases');
+  }
+  counselorReleaseBundle(id: string) {
+    return this.json<ReportReleaseBundle>('GET', `/api/counselor/releases/${encodeURIComponent(id)}/bundle`);
+  }
+  async counselorReleaseBlob(id: string, blobId: string): Promise<Uint8Array> {
+    const res = await this.raw('GET', `/api/counselor/releases/${encodeURIComponent(id)}/blobs/${encodeURIComponent(blobId)}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  // ── report requests (survivor side of staged release) ──
+  reportRequests() {
+    return this.json<{ requests: SurvivorReportRequest[] }>('GET', '/api/report-requests');
+  }
+  consentReportRequest(id: string, req: ReportConsentRequest) {
+    return this.json<{ release: ReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-requests/${encodeURIComponent(id)}/consent`, req);
+  }
+  declineReportRequest(id: string) {
+    return this.json<{ request: SurvivorReportRequest }>('POST', `/api/report-requests/${encodeURIComponent(id)}/decline`);
+  }
+  revokeReportRelease(id: string) {
+    return this.json<{ release: ReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-releases/${encodeURIComponent(id)}/revoke`);
   }
 
   // ── audit / account ──

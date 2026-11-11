@@ -1130,3 +1130,32 @@ Code shape:
   sees "No matches right now".
 - Test helpers' `sealMatch` defaults to `states: { incident: 'NJ' }` (where test counselors are licensed), so existing
   tests still get a group; the M6 roster test now shows reassignment instead of two counselors seeing one group.
+
+### staged-release
+
+Built before metadata-min (§3.2 had still not landed), so `docs/PRIVACY_DATA_INVENTORY.md` does not exist yet.
+metadata-min should add: `match_entries.contact_bundle` (ciphertext), `conflict_checks` (group, counselor, result,
+statement version, time, ledger id), `report_requests` (group, entry, counselor, status, times, ledger id),
+`report_releases` (survivor id, counselor id, record id, the record key wrapped to the counselor, consent text, status,
+created/expiry/first-opened/revoked times, ledger id) and `report_release_blobs` (evidence keys wrapped to the counselor).
+
+Code shape and small deviations:
+- `POST /api/counselor/groups/:id/decline` is kept as an alias of a `conflict` check (same matcher call, ledger row and
+  trail). A `conflict` after a `clear` is allowed (a conflict found later); it cancels her pending requests but leaves
+  releases a survivor already made (the survivor can revoke them).
+- `report-requests` takes `{ entryId, expected: true }`: the "she expects this" tick is part of the request body, so
+  the server refuses a request without it.
+- After a no (a decline, or a revoked release) the counselor cannot ask that entry again (`409 she_said_no`); after an
+  expired release she can. A cancelled request can be re-sent.
+- The consent statement must contain the confirmed key fingerprint (`400 consent_fingerprint_missing`), and
+  `counselorKeyFingerprint` must equal the fingerprint of the counselor key on file (`409 counselor_key_mismatch`).
+  Consent also fails if the counselor is no longer verified, on the roster, or assigned the group
+  (`409 counselor_unavailable`).
+- The survivor's buttons are "Yes, share my report" / "No, don’t share" (not "No, not now"): a no is final in Matra, so
+  "not now" is simply leaving the page, which the page says.
+- Counselor-facing copy says "this person" / "they" rather than "her", like the rest of the counselor portal.
+- `SharedBlob` (attorney/Attorney.tsx) is exported with a `download` prop and reused by `counselor/CounselorReport.tsx`,
+  rather than factoring a new shared component.
+- Notes stay allowed before the conflict check server-side (the UI shows them only after it).
+- e2e: scenario 5 now runs the whole staged release (stage 1 without numbers, conflict check, numbers, requests to both,
+  A says yes, B says no, the counselor reads A's story, A stops sharing, then the old decline).

@@ -448,7 +448,7 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await ctx.close();
 });
 
-test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the matcher gives the group to the counselor licensed where it happened (NY), with two separate contact bundles; the NJ counselor sees nothing', async ({ page }) => {
+test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the matcher gives the group to the counselor licensed where it happened (NY), with two separate contact bundles; the NJ counselor sees nothing; staged release: contact details only after her conflict check, A says yes to her report request and B says no, A stops sharing', async ({ page }) => {
   // Survivor B names the same Instagram profile as a URL (A typed "@demo_handle_123"), and a different phone number.
   await registerSurvivor(page, ALIAS_B);
   // She confirms a phone first, from the sealed-match page: the same phone as A, written differently (2 accounts allowed).
@@ -533,10 +533,21 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await expect(groups.getByTestId('counselor-canonical')).toHaveText(['instagram:demo_handle_123', 'instagram:demo_handle_123']);
   const people = groups.getByTestId('counselor-survivor');
   await expect(people).toHaveCount(2);
-  // two separate contact bundles, never mixed
+  // Staged release, stage 1: what matched, where, and HOW each person wants to be reached; no numbers, no names yet.
+  await expect(groups).not.toContainText('(555) 010-0100');
+  await expect(groups).not.toContainText('(555) 010-0300');
+  await expect(people.getByTestId('counselor-contact-hidden')).toHaveCount(2);
+  await expect(people.filter({ hasText: 'Text message' }).first()).toBeVisible();
+  const conflict = groups.getByTestId('counselor-conflict-check');
+  await expect(conflict).toContainText('instagram:demo_handle_123');
+  await expect(conflict).toContainText('New York');
+  await shot(page, '15a-counselor-conflict-check', { mobile: false });
+  await conflict.getByRole('button', { name: 'I have no conflict' }).click();
+  await expect(groups.getByTestId('counselor-conflict-done')).toBeVisible({ timeout: 30_000 });
+  // stage 1b: two separate contact bundles, never mixed
   const a = people.filter({ hasText: '(555) 010-0100' });
   const b = people.filter({ hasText: '(555) 010-0300' });
-  await expect(a).toHaveCount(1);
+  await expect(a).toHaveCount(1, { timeout: 30_000 });
   await expect(b).toHaveCount(1);
   await expect(a).not.toContainText('(555) 010-0300');
   await expect(b).not.toContainText('(555) 010-0100');
@@ -547,7 +558,74 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await a.getByRole('button', { name: 'Save note' }).click();
   await expect(a.getByRole('listitem').filter({ hasText: 'Texted after 6pm as asked.' })).toContainText('Reached out', { timeout: 30_000 });
   await shot(page, '15-counselor-match');
-  // A conflict check turns something up: she declines the group, and the matcher passes it on; it is gone from her list.
+  // Stage 2: having spoken with each of them, she asks each one for their full report (only once they expect it).
+  for (const person of [a, b]) {
+    const ask = person.getByRole('button', { name: 'Ask for their full report' });
+    await expect(ask).toBeDisabled();
+    await person.getByLabel('I’ve spoken with this person and they expect this request.').check();
+    await ask.click();
+    await expect(person.getByTestId('counselor-report-request')).toContainText('They haven’t decided', { timeout: 30_000 });
+  }
+  await page.getByTestId('lock-signout').click();
+
+  // A sees the request on Home, only about herself, and says yes (evidence stays unticked unless she chooses it).
+  await signIn(page, ALIAS_A, SURVIVOR_PASS);
+  const card = page.getByTestId('home-report-request');
+  await expect(card).toContainText('A legal options counselor has asked to see your report.', { timeout: 30_000 });
+  await card.getByRole('link', { name: 'See the request' }).click();
+  await expect(page.getByTestId('report-request-title')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('main')).not.toContainText(ALIAS_B);
+  await expect(page.getByLabel(/My evidence files too/)).not.toBeChecked();
+  await expect(page.locator('.consent-text')).toContainText('It is not shared with anyone else who named the same person.');
+  const yes = page.getByRole('button', { name: 'Yes, share my report' });
+  await expect(yes).toBeDisabled();
+  await page.getByLabel('This matches what the counselor told me.').check();
+  await page.getByLabel('I agree to the statement above.').check();
+  await shot(page, '15b-survivor-report-request');
+  await yes.click();
+  await expect(page.getByTestId('report-request-shared')).toContainText('They haven’t opened it yet.', { timeout: 60_000 });
+  await signOut(page);
+
+  // B says no. The counselor will learn only that.
+  await signIn(page, ALIAS_B, SURVIVOR_PASS);
+  await page.getByTestId('home-report-request').getByRole('link', { name: 'See the request' }).click();
+  await expect(page.getByTestId('report-request-title')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('main')).not.toContainText(ALIAS_A);
+  await page.getByRole('button', { name: 'No, don’t share' }).click();
+  await expect(page.getByTestId('report-request-declined')).toBeVisible({ timeout: 30_000 });
+  await nav(page, 'Home');
+  await expect(page.getByTestId('home-report-request')).toHaveCount(0);
+  await signOut(page);
+
+  // The counselor opens A's report (her story, decrypted on the counselor's device); B's stays sealed.
+  await counselorSignIn(page, COUNSELOR_NY);
+  await groups.getByRole('button', { name: 'Open with my private key' }).click();
+  await expect(b.getByTestId('counselor-report-request')).toContainText('They decided not to share their report.', { timeout: 30_000 });
+  await expect(b.getByRole('link', { name: 'Open their report' })).toHaveCount(0);
+  await a.getByRole('link', { name: 'Open their report' }).click();
+  await expect(page.getByTestId('counselor-report-title')).toBeVisible({ timeout: 60_000 });
+  expect(await page.locator('.brief-verbatim-text').allTextContents()).toContain(NARRATIVE);
+  await expect(page.locator('main')).not.toContainText(ALIAS_A);
+  await expect(page.locator('main')).not.toContainText(ALIAS_B);
+  await shot(page, '15c-counselor-report', { mobile: false });
+  await page.getByRole('link', { name: '← Matched sealed reports' }).click();
+  await page.getByTestId('lock-signout').click();
+
+  // A sees the opening in her activity, and stops sharing; the counselor's access ends.
+  await signIn(page, ALIAS_A, SURVIVOR_PASS);
+  await expect(page.getByTestId('home-activity').getByText('The legal options counselor opened your report').first()).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('home-report-shared').getByRole('link', { name: 'See or stop sharing' }).click();
+  await page.getByRole('button', { name: 'Stop sharing' }).click();
+  await page.getByRole('button', { name: 'Yes, stop sharing' }).click();
+  await expect(page.getByTestId('report-request-shared')).toContainText('You stopped sharing on', { timeout: 30_000 });
+  await signOut(page);
+
+  await counselorSignIn(page, COUNSELOR_NY);
+  await expect(page.getByTestId('counselor-releases')).toContainText('they stopped sharing', { timeout: 30_000 });
+  await expect(page.getByRole('link', { name: 'Open report' })).toHaveCount(0);
+  await groups.getByRole('button', { name: 'Open with my private key' }).click();
+  await expect(a.getByTestId('counselor-report-request')).toContainText('They stopped sharing their report with you.', { timeout: 30_000 });
+  // A conflict turns up later: she declines the group, and the matcher passes it on; it is gone from her list.
   await groups.getByRole('button', { name: 'I can’t take this group (conflict of interest)' }).click();
   await groups.getByRole('button', { name: 'Keep it' }).click();
   await expect(groups).toHaveCount(1);

@@ -24,6 +24,12 @@ const AUDIT_TEXT: Record<string, string> = {
   'share.revoked': 'You took back an attorney’s access',
   'attorney.opened_share': 'Attorney opened your file',
   'attorney.downloaded_evidence': 'Attorney downloaded an evidence file',
+  // staged release (her side)
+  'report.released': 'You shared your report with a legal options counselor',
+  'report.declined': 'You decided not to share your report',
+  'report.revoked': 'You stopped sharing your report with a legal options counselor',
+  'counselor.opened_report': 'The legal options counselor opened your report',
+  'counselor.downloaded_evidence': 'The legal options counselor downloaded one of your evidence files',
   // attorney-side events
   'share.received': 'A client shared a file with you',
   'share.opened': 'You opened a shared file',
@@ -69,7 +75,7 @@ export interface ActivityLine {
 }
 
 /** Attorney access is never folded into a count: she should see every single time someone opened her file. */
-const neverGrouped = (e: AuditEvent) => e.action.startsWith('attorney.');
+const neverGrouped = (e: AuditEvent) => e.action.startsWith('attorney.') || e.action.startsWith('counselor.');
 
 /** Group consecutive events (newest first) that read the same, so twenty autosaves don't bury everything else. */
 export function groupActivity(newestFirst: AuditEvent[], label: (e: AuditEvent) => string): ActivityLine[] {
@@ -126,6 +132,12 @@ export function Dashboard() {
     return shares.map((s) => ({ share: s, attorney: byId.get(s.attorneyId) }));
   }, [api]);
   const audit = useAsync(() => api.listAudit().then((r) => r.events), [api]);
+  // Staged release: a counselor who has already spoken with her asked for her full report. Shown only to her.
+  const reportRequests = useAsync(() => api.reportRequests().then((r) => r.requests), [api]);
+  const pendingRequests = (reportRequests.data ?? []).filter((r) => r.status === 'pending');
+  const sharingReports = (reportRequests.data ?? []).filter(
+    (r) => r.release?.status === 'active' && Date.parse(r.release.expiresAt) > Date.now(),
+  );
   // Her sealed record chose a sealed match that is waiting for a phone confirmation (W13; counselor/PhoneVerify.tsx).
   const phoneStep = useAsync(async () => {
     const final = vault.data && latestOf(vault.data, 'final');
@@ -189,12 +201,43 @@ export function Dashboard() {
               <span className="dot-icon sage"><IconPeople /></span> Who can see it
             </span>
             <span className="value">
-              {shares.loading ? '…' : activeShares.length ? `You + ${plural(activeShares.length, 'attorney')}` : 'Only you'}
+              {shares.loading
+                ? '…'
+                : activeShares.length || sharingReports.length
+                  ? `You + ${[activeShares.length && plural(activeShares.length, 'attorney'), sharingReports.length && plural(sharingReports.length, 'counselor')].filter(Boolean).join(' + ')}`
+                  : 'Only you'}
             </span>
-            <span className="detail">{activeShares.length ? 'You can take back access any time.' : 'Nothing has been shared.'}</span>
+            <span className="detail">{activeShares.length || sharingReports.length ? 'You can take back access any time.' : 'Nothing has been shared.'}</span>
           </Link>
         </div>
       </section>
+
+      {pendingRequests.map((r) => (
+        <section key={r.id} className="card warm stack" aria-label="A request for your report" data-testid="home-report-request">
+          <p style={{ margin: 0 }}>
+            <strong>A legal options counselor has asked to see your report.</strong> You don’t have to decide now, and you can
+            say no. Nothing is shared unless you say yes.
+          </p>
+          <div>
+            <Link className="btn btn-small" to={`/vault/requests/${r.id}`}>
+              See the request
+            </Link>
+          </div>
+        </section>
+      ))}
+      {sharingReports.map((r) => (
+        <section key={r.id} className="card soft stack" aria-label="A report you are sharing" data-testid="home-report-shared">
+          <p style={{ margin: 0 }}>
+            You’re sharing your report with {r.counselor.displayName}, a legal options counselor, until{' '}
+            {formatDate(r.release!.expiresAt)}. You can stop at any time.
+          </p>
+          <div>
+            <Link className="btn btn-small" to={`/vault/requests/${r.id}`}>
+              See or stop sharing
+            </Link>
+          </div>
+        </section>
+      ))}
 
       {/* ── next steps ── */}
       <section className="card stack" aria-labelledby="next">

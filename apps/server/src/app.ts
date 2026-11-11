@@ -8,9 +8,11 @@
  *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch
  *   401 unauthorized | session_expired | invalid_credentials
  *   403 forbidden | forbidden_role | share_revoked | share_expired | attorney_not_verified | counselor_not_verified
- *       | age_not_confirmed | phone_not_verified
+ *       | age_not_confirmed | phone_not_verified | release_revoked | release_expired
+ *   409 (staged release) conflict_check_required | request_open | already_shared | she_said_no | request_not_pending
+ *       | counselor_key_mismatch | counselor_unavailable
  *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found | entry_not_found
- *       | counselor_not_found | group_not_found
+ *       | counselor_not_found | group_not_found | request_not_found | release_not_found
  *   403 … | counselor_not_listed (seal to a counselor missing from the signed roster)
  *   400 phone_invalid | phone_not_supported | code_invalid | code_expired
  *   409 username_taken | already_revoked | already_sealed | phone_limit_reached
@@ -41,16 +43,20 @@ import type {
   CounselorMatchGroup,
   CounselorNote,
   CounselorProfile,
+  CounselorReportRequest,
   CounselorRosterPayload,
   CounselorSeal,
   EscrowEntry,
   MatchingConfig,
   LedgerEntry,
   PublicUser,
+  ReportRelease,
+  ReportReleaseBundle,
   Role,
   Share,
   ShareBundle,
   SignedCounselorRoster,
+  SurvivorReportRequest,
   VaultRecord,
   VaultRecordMeta,
   WrappedKey,
@@ -253,6 +259,7 @@ interface MatchEntryRow {
   key_epoch: number;
   routing_envelope: string | null;
   matcher_synced: number;
+  contact_bundle: string | null;
   /** JSON array, from a subquery (survivor list only) */
   counselor_ids?: string;
 }
@@ -263,6 +270,36 @@ interface CounselorProfileRow {
   jurisdictions: string;
   verified: number;
   public_key: string;
+}
+interface ReportRequestRow {
+  id: string;
+  group_id: string;
+  entry_id: string;
+  counselor_id: string;
+  status: 'pending' | 'consented' | 'declined' | 'cancelled';
+  created_at: string;
+  decided_at: string | null;
+  ledger_entry_id: string;
+}
+interface ReportReleaseRow {
+  id: string;
+  request_id: string;
+  survivor_id: string;
+  counselor_id: string;
+  record_id: string;
+  recipient_wrapped_key: string;
+  consent_statement: string;
+  status: 'active' | 'revoked';
+  created_at: string;
+  expires_at: string;
+  first_opened_at: string | null;
+  revoked_at: string | null;
+  ledger_entry_id: string;
+  /** from the request (joined) */
+  group_id: string;
+  entry_id: string;
+  /** JSON array of blob ids (subquery) */
+  blob_ids: string;
 }
 interface AuditRow {
   id: string;
@@ -330,6 +367,31 @@ const DEFAULT_SHARE_DAYS = 90;
 const addDays = (from: number, days: number) => new Date(from + days * 86_400_000).toISOString();
 /** A share grants access only while active AND unexpired. Revocation and expiry stop future access only. */
 const isShareLive = (s: ShareRow) => s.status === 'active' && Date.parse(s.expires_at) > Date.now();
+
+/** The fingerprint shown for a person's RSA key (same formula as publicKeyFingerprint in @matra/crypto). */
+const keyFingerprint = (publicKeyJson: string) => {
+  const pk = JSON.parse(publicKeyJson) as { kty?: string; n?: string; e?: string };
+  return sha256Hex(`${pk.kty}|${pk.n}|${pk.e}`).slice(0, 32).toUpperCase().match(/.{4}/g)!.join('-');
+};
+
+/** A report release, as either party sees it. No survivor id: the counselor never learns account ids. */
+const toRelease = (r: ReportReleaseRow): ReportRelease => ({
+  id: r.id,
+  requestId: r.request_id,
+  groupId: r.group_id,
+  entryId: r.entry_id,
+  recordId: r.record_id,
+  counselorId: r.counselor_id,
+  status: r.status,
+  consentStatement: r.consent_statement,
+  blobIds: r.blob_ids ? (JSON.parse(r.blob_ids) as string[]) : [],
+  createdAt: r.created_at,
+  expiresAt: r.expires_at,
+  ...(r.first_opened_at != null && { firstOpenedAt: r.first_opened_at }),
+  ...(r.revoked_at != null && { revokedAt: r.revoked_at }),
+  ledgerEntryId: r.ledger_entry_id,
+});
+const isReleaseLive = (r: ReportReleaseRow) => r.status === 'active' && Date.parse(r.expires_at) > Date.now();
 
 /**
  * Survivor-facing view of a sealed-match entry. ALWAYS reports 'sealed' and never includes matchedAt or the tag:
@@ -999,6 +1061,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
       `DELETE FROM counselor_notes WHERE group_id IN (SELECT g.id FROM match_groups g WHERE NOT EXISTS (SELECT 1 FROM match_entries e WHERE e.tag = g.tag))
           OR (entry_id IS NOT NULL AND entry_id NOT IN (SELECT id FROM match_entries))`,
     ).run();
+    db.prepare(
+      'DELETE FROM conflict_checks WHERE group_id IN (SELECT g.id FROM match_groups g WHERE NOT EXISTS (SELECT 1 FROM match_entries e WHERE e.tag = g.tag))',
+    ).run();
     db.prepare('DELETE FROM match_groups WHERE NOT EXISTS (SELECT 1 FROM match_entries e WHERE e.tag = match_groups.tag)').run();
   };
   pruneSeals();
@@ -1327,6 +1392,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }
   };
   const deleteEntry = (entryId: string) => {
+    // staged release: her report requests and releases about this entry go with it (the counselor sees them vanish)
+    db.prepare(
+      'DELETE FROM report_release_blobs WHERE release_id IN (SELECT id FROM report_releases WHERE request_id IN (SELECT id FROM report_requests WHERE entry_id = ?))',
+    ).run(entryId);
+    db.prepare('DELETE FROM report_releases WHERE request_id IN (SELECT id FROM report_requests WHERE entry_id = ?)').run(entryId);
+    db.prepare('DELETE FROM report_requests WHERE entry_id = ?').run(entryId);
     db.prepare('DELETE FROM match_seals WHERE entry_id = ?').run(entryId);
     db.prepare('DELETE FROM match_entries WHERE id = ?').run(entryId);
     queueMatcherDelete.run(entryId);
@@ -1356,9 +1427,20 @@ export function createApp(opts: CreateAppOptions): express.Express {
       if (replaces) deleteEntry(replaces);
       const le = appendLedger(db, 'escrow.sealed', id, envelopeContentHash(body.bundle), ts);
       db.prepare(
-        `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id, key_epoch, routing_envelope)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, me.id, body.tag, canonicalEnvelope(body.bundle), canonicalEnvelope(body.labelEnvelope), ts, le.id, keyEpoch, JSON.stringify(body.routing));
+        `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id, key_epoch, routing_envelope, contact_bundle)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        me.id,
+        body.tag,
+        canonicalEnvelope(body.bundle),
+        canonicalEnvelope(body.labelEnvelope),
+        ts,
+        le.id,
+        keyEpoch,
+        JSON.stringify(body.routing),
+        canonicalEnvelope(body.contactBundle),
+      );
       const ins = db.prepare('INSERT INTO match_seals (entry_id, counselor_id, seal) VALUES (?, ?, ?)');
       for (const seal of body.seals) ins.run(id, seal.counselorId, JSON.stringify(seal satisfies CounselorSeal));
       audit(me.id, 'escrow.created', replaces ? 'Re-sealed an identifier under the current matching keys' : 'Sealed an identifier for sealed matching');
@@ -1432,7 +1514,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const groupById = db.prepare('SELECT id, tag, matched_at FROM match_groups WHERE id = ?');
   // UNIQUE(user_id, tag) ⇒ every entry of a group comes from a different survivor. user_id is never returned.
   const groupEntriesFor = db.prepare(
-    `SELECT e.id, e.created_at, e.bundle, s.seal FROM match_entries e
+    `SELECT e.id, e.created_at, e.bundle, e.contact_bundle, s.seal FROM match_entries e
        JOIN match_seals s ON s.entry_id = e.id AND s.counselor_id = ?
       WHERE e.tag = ? AND e.created_at <= ? ORDER BY e.created_at ASC, e.rowid ASC`,
   );
@@ -1461,17 +1543,59 @@ export function createApp(opts: CreateAppOptions): express.Express {
   };
 
   type GroupRow = { id: string; tag: string; matched_at: string };
+  // ── staged release (W1, W21). Stage 1: the summary bundles (identifier, states, contact methods). Stage 1b: once SHE
+  // has recorded a clear conflict check for the group, each entry's contact ciphertext too. That gate is this server's
+  // (it withholds the ciphertext); a counselor colluding with the operator could skip it (W21). Stage 2: report
+  // requests, and only a survivor's own yes releases her report (below).
+  const conflictFor = db.prepare('SELECT result, created_at FROM conflict_checks WHERE group_id = ? AND counselor_id = ?');
+  const requestsForGroup = db.prepare(
+    `SELECT r.*, rel.id AS release_id, rel.status AS release_status, rel.expires_at AS release_expires_at, rel.first_opened_at AS release_first_opened_at
+       FROM report_requests r LEFT JOIN report_releases rel ON rel.request_id = r.id
+      WHERE r.group_id = ? AND r.counselor_id = ? ORDER BY r.created_at ASC, r.rowid ASC`,
+  );
+  type RequestJoinRow = ReportRequestRow & {
+    release_id: string | null;
+    release_status: 'active' | 'revoked' | null;
+    release_expires_at: string | null;
+    release_first_opened_at: string | null;
+  };
+  const toCounselorRequest = (r: RequestJoinRow): CounselorReportRequest => ({
+    id: r.id,
+    groupId: r.group_id,
+    entryId: r.entry_id,
+    status: r.status,
+    createdAt: r.created_at,
+    ...(r.decided_at != null && { decidedAt: r.decided_at }),
+    ...(r.release_id != null && {
+      release: {
+        id: r.release_id,
+        status: r.release_status!,
+        expiresAt: r.release_expires_at!,
+        ...(r.release_first_opened_at != null && { firstOpenedAt: r.release_first_opened_at }),
+      },
+    }),
+  });
   /** The group as released to `counselorId`: only if the matcher assigned it to her, and only entries past the delay. */
   const groupFor = (g: GroupRow, counselorId: string): CounselorMatchGroup | null => {
     const assigned = assignmentFor.get(g.tag, counselorId) as AssignmentRow | undefined;
     if (!assigned) return null;
+    const check = conflictFor.get(g.id, counselorId) as { result: 'clear' | 'conflict'; created_at: string } | undefined;
+    if (check?.result === 'conflict') return null;
+    const clear = check?.result === 'clear';
     const rows = groupEntriesFor.all(counselorId, g.tag, releaseCutoff()) as Array<{
       id: string;
       created_at: string;
       bundle: string;
+      contact_bundle: string | null;
       seal: string;
     }>;
-    const entries = rows.map((e) => ({ entryId: e.id, createdAt: e.created_at, bundle: JSON.parse(e.bundle), seal: JSON.parse(e.seal) as CounselorSeal }));
+    const entries = rows.map((e) => ({
+      entryId: e.id,
+      createdAt: e.created_at,
+      bundle: JSON.parse(e.bundle),
+      seal: JSON.parse(e.seal) as CounselorSeal,
+      ...(clear && e.contact_bundle && { contactBundle: JSON.parse(e.contact_bundle) }),
+    }));
     // A counselor needs two seals addressed to them to reconstruct; anything less is never released.
     if (entries.length < 2) return null;
     // Sybil signals (M2), computed by the matcher: accounts created within 24 h of each other, and entries sealed < 7
@@ -1486,7 +1610,19 @@ export function createApp(opts: CreateAppOptions): express.Express {
         createdAt: n.created_at,
       }),
     );
-    return { id: g.id, tag: g.tag, matchedAt: g.matched_at, entries, notes, signals, assignment: { reason: assigned.reason, assignedAt: assigned.assigned_at } };
+    const shown = new Set(entries.map((e) => e.entryId));
+    const reportRequests = (requestsForGroup.all(g.id, counselorId) as RequestJoinRow[]).filter((r) => shown.has(r.entry_id)).map(toCounselorRequest);
+    return {
+      id: g.id,
+      tag: g.tag,
+      matchedAt: g.matched_at,
+      entries,
+      notes,
+      signals,
+      assignment: { reason: assigned.reason, assignedAt: assigned.assigned_at },
+      ...(clear && { conflictCheck: { result: 'clear' as const, at: check.created_at } }),
+      reportRequests,
+    };
   };
 
   app.get('/api/counselor/groups', auth, counselorOnly, verifiedCounselor, async (req, res) => {
@@ -1527,26 +1663,310 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.status(201).json({ note });
   });
 
-  // The assigned counselor declines a group (a conflict of interest found by her conflict check, before she contacts
-  // anyone). The matcher reassigns it with her excluded, for as long as the tag has entries (apps/matcher). Logged to
-  // her own trail only.
-  app.post('/api/counselor/groups/:id/decline', auth, counselorOnly, verifiedCounselor, async (req, res) => {
-    const me = req.user!;
-    const g = groupById.get(parse(S.id, req.params.id)) as GroupRow | undefined;
-    if (!g || !groupFor(g, me.id)) throw new HttpError(404, 'group_not_found', 'Group not found.');
+  // ── conflict check (Stage 1 → 1b). Before she sees anyone's contact details, the assigned counselor checks the
+  // identifier and states against her own conflicts records (outside Matra) and records the result here:
+  //   'clear'    → the contact ciphertexts are included in her group from now on;
+  //   'conflict' → the matcher reassigns the group with her excluded (for as long as the tag has entries), her pending
+  //                report requests in it are cancelled, and it never comes back to her.
+  // Each result is a ledger row (hash of group, counselor, result and statement version) and a line in her own trail.
+  // Never in a survivor's trail: that would tell her (or a perpetrator posing as a survivor) that a match exists.
+  const recordConflictCheck = (g: GroupRow, counselorId: string, result: 'clear' | 'conflict', statementVersion: number) => {
+    db.transaction(() => {
+      const ts = new Date().toISOString();
+      const le = appendLedger(db, 'counselor.conflict_checked', g.id, sha256Hex(`${g.id}|${counselorId}|${result}|${statementVersion}`), ts);
+      db.prepare(
+        `INSERT INTO conflict_checks (group_id, counselor_id, result, statement_version, created_at, ledger_entry_id) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (group_id, counselor_id) DO UPDATE SET result = excluded.result, statement_version = excluded.statement_version,
+           created_at = excluded.created_at, ledger_entry_id = excluded.ledger_entry_id`,
+      ).run(g.id, counselorId, result, statementVersion, ts, le.id);
+      if (result === 'conflict') {
+        db.prepare(`UPDATE report_requests SET status = 'cancelled', decided_at = ? WHERE group_id = ? AND counselor_id = ? AND status = 'pending'`).run(
+          ts,
+          g.id,
+          counselorId,
+        );
+        audit(counselorId, 'counselor.declined_group', 'Declined a matched group (conflict of interest); the matcher passes it to another counselor');
+      } else {
+        audit(counselorId, 'counselor.conflict_checked', 'Recorded a conflict check for a matched group: no conflict');
+      }
+    })();
+  };
+  const declineGroup = async (g: GroupRow, counselorId: string) => {
     if (!(await matcherGate.ok())) throw new HttpError(503, 'matcher_unavailable', 'Declining isn’t available right now. Please try again later.');
     try {
-      await matcher.decline(g.tag, me.id);
+      await matcher.decline(g.tag, counselorId);
     } catch (e) {
       if ((e as { status?: number }).status === 404) throw new HttpError(404, 'group_not_found', 'Group not found.');
       console.warn(`[matra] matcher decline failed: ${(e as Error).message}`);
       throw new HttpError(503, 'matcher_unavailable', 'Declining isn’t available right now. Please try again later.');
     }
     // never shown to her again, even if the refresh below can't reach the matcher
-    db.prepare('DELETE FROM match_assignments WHERE tag = ? AND counselor_id = ?').run(g.tag, me.id);
+    db.prepare('DELETE FROM match_assignments WHERE tag = ? AND counselor_id = ?').run(g.tag, counselorId);
+    recordConflictCheck(g, counselorId, 'conflict', 1);
     await refreshAssignments();
-    audit(me.id, 'counselor.declined_group', 'Declined a matched group (conflict of interest); the matcher passes it to another counselor');
+  };
+  const releasedGroupOr404 = (req: Request): GroupRow => {
+    const g = groupById.get(parse(S.id, req.params.id)) as GroupRow | undefined;
+    if (!g || !groupFor(g, req.user!.id)) throw new HttpError(404, 'group_not_found', 'Group not found.');
+    return g;
+  };
+
+  app.post('/api/counselor/groups/:id/conflict-check', auth, counselorOnly, verifiedCounselor, async (req, res) => {
+    const me = req.user!;
+    const g = releasedGroupOr404(req);
+    const body = parse(S.conflictCheckRequest, req.body);
+    if (body.result === 'conflict') await declineGroup(g, me.id);
+    else if ((conflictFor.get(g.id, me.id) as { result: string } | undefined)?.result !== 'clear')
+      recordConflictCheck(g, me.id, 'clear', body.statementVersion);
+    res.json({ ok: true, result: body.result });
+  });
+
+  // The older "decline" action is a conflict check with result 'conflict' (same matcher call, ledger row and trail).
+  app.post('/api/counselor/groups/:id/decline', auth, counselorOnly, verifiedCounselor, async (req, res) => {
+    await declineGroup(releasedGroupOr404(req), req.user!.id);
     res.json({ ok: true });
+  });
+
+  // ── report requests (Stage 2). After a clear check, the counselor may ask ONE survivor in the group for her full
+  // report, and only after confirming she has already spoken with her and she expects it (so a request is never her
+  // first sign of a match: W1). One open request per (entry, counselor). After a no (a decline, or a revoked release)
+  // the counselor cannot ask again through Matra: a no is a no.
+  const requestById = db.prepare('SELECT * FROM report_requests WHERE id = ?');
+  const requestsForEntry = db.prepare(
+    `SELECT r.*, rel.status AS release_status, rel.expires_at AS release_expires_at FROM report_requests r
+       LEFT JOIN report_releases rel ON rel.request_id = r.id WHERE r.entry_id = ? AND r.counselor_id = ?`,
+  );
+  const requestJoinById = db.prepare(
+    `SELECT r.*, rel.id AS release_id, rel.status AS release_status, rel.expires_at AS release_expires_at, rel.first_opened_at AS release_first_opened_at
+       FROM report_requests r LEFT JOIN report_releases rel ON rel.request_id = r.id WHERE r.id = ?`,
+  );
+
+  app.post('/api/counselor/groups/:id/report-requests', auth, counselorOnly, verifiedCounselor, (req, res) => {
+    const me = req.user!;
+    const g = groupById.get(parse(S.id, req.params.id)) as GroupRow | undefined;
+    const released = g && groupFor(g, me.id);
+    if (!g || !released) throw new HttpError(404, 'group_not_found', 'Group not found.');
+    const body = parse(S.reportRequestCreate, req.body);
+    if (!released.conflictCheck) throw new HttpError(409, 'conflict_check_required', 'Record your conflict check for this group first.');
+    if (!released.entries.some((e) => e.entryId === body.entryId)) throw new HttpError(404, 'entry_not_found', 'Entry not found in this group.');
+    const earlier = requestsForEntry.all(body.entryId, me.id) as Array<ReportRequestRow & { release_status: string | null; release_expires_at: string | null }>;
+    if (earlier.some((r) => r.status === 'pending')) throw new HttpError(409, 'request_open', 'You have already asked her. She hasn’t decided yet.');
+    if (earlier.some((r) => r.status === 'declined' || r.release_status === 'revoked'))
+      throw new HttpError(409, 'she_said_no', 'She decided not to share her report. Matra will not ask her again.');
+    if (earlier.some((r) => r.release_status === 'active' && Date.parse(r.release_expires_at!) > Date.now()))
+      throw new HttpError(409, 'already_shared', 'She has already shared her report with you.');
+    const id = newId();
+    db.transaction(() => {
+      const ts = new Date().toISOString();
+      const le = appendLedger(db, 'report.requested', id, sha256Hex(JSON.stringify({ requestId: id, groupId: g.id, entryId: body.entryId, counselorId: me.id })), ts);
+      db.prepare(
+        `INSERT INTO report_requests (id, group_id, entry_id, counselor_id, status, created_at, decided_at, ledger_entry_id)
+         VALUES (?, ?, ?, ?, 'pending', ?, NULL, ?)`,
+      ).run(id, g.id, body.entryId, me.id, ts, le.id);
+      audit(me.id, 'counselor.requested_report', 'Asked a survivor you have spoken with for her full report');
+    })();
+    res.status(201).json({ request: toCounselorRequest(requestJoinById.get(id) as RequestJoinRow) });
+  });
+
+  app.post('/api/counselor/report-requests/:id/cancel', auth, counselorOnly, verifiedCounselor, (req, res) => {
+    const me = req.user!;
+    const r = requestById.get(parse(S.id, req.params.id)) as ReportRequestRow | undefined;
+    if (!r || r.counselor_id !== me.id) throw new HttpError(404, 'request_not_found', 'Request not found.');
+    if (r.status !== 'pending') throw new HttpError(409, 'request_not_pending', 'This request has already been decided.');
+    db.prepare(`UPDATE report_requests SET status = 'cancelled', decided_at = ? WHERE id = ?`).run(new Date().toISOString(), r.id);
+    audit(me.id, 'counselor.cancelled_request', 'Withdrew a request for a survivor’s report');
+    res.json({ request: toCounselorRequest(requestJoinById.get(r.id) as RequestJoinRow) });
+  });
+
+  // ── releases: what a survivor's yes created. The counselor reads them; the survivor revokes them.
+  const releaseSelect = `SELECT rel.*, r.group_id, r.entry_id,
+      (SELECT json_group_array(blob_id) FROM (SELECT blob_id FROM report_release_blobs b WHERE b.release_id = rel.id ORDER BY b.rowid)) AS blob_ids
+    FROM report_releases rel JOIN report_requests r ON r.id = rel.request_id`;
+  const releaseById = db.prepare(`${releaseSelect} WHERE rel.id = ?`);
+  const releaseByRequest = db.prepare(`${releaseSelect} WHERE rel.request_id = ?`);
+  const releasesForCounselor = db.prepare(`${releaseSelect} WHERE rel.counselor_id = ? ORDER BY rel.created_at DESC, rel.rowid DESC`);
+  const counselorLabel = (counselorId: string): string => {
+    const c = q.counselorProfileByUser.get(counselorId) as CounselorProfileRow | undefined;
+    return c ? `${c.display_name}${c.organization ? `, ${c.organization}` : ''}` : 'The legal options counselor';
+  };
+  /** The counselor's own active release, or 403/404 (revoked, expired, someone else's). */
+  const liveReleaseFor = (req: Request): ReportReleaseRow => {
+    const r = releaseById.get(parse(S.id, req.params.id)) as ReportReleaseRow | undefined;
+    if (!r || r.counselor_id !== req.user!.id) throw new HttpError(404, 'release_not_found', 'Report not found.');
+    if (r.status !== 'active') throw new HttpError(403, 'release_revoked', 'She has stopped sharing her report with you.');
+    if (!isReleaseLive(r)) throw new HttpError(403, 'release_expired', 'Access to this report has ended.');
+    return r;
+  };
+
+  app.get('/api/counselor/releases', auth, counselorOnly, verifiedCounselor, (req, res) => {
+    res.json({ releases: (releasesForCounselor.all(req.user!.id) as ReportReleaseRow[]).map(toRelease) });
+  });
+
+  app.get('/api/counselor/releases/:id/bundle', auth, counselorOnly, verifiedCounselor, (req, res) => {
+    const me = req.user!;
+    const r = liveReleaseFor(req);
+    const rec = q.recordById.get(r.record_id) as RecordRow;
+    const blobs = db
+      .prepare(
+        `SELECT rb.blob_id, rb.recipient_wrapped_key, b.content_hash, b.size_bytes
+           FROM report_release_blobs rb JOIN blobs b ON b.id = rb.blob_id
+          WHERE rb.release_id = ? ORDER BY rb.rowid ASC`,
+      )
+      .all(r.id) as Array<{ blob_id: string; recipient_wrapped_key: string; content_hash: string; size_bytes: number }>;
+    const when = new Date().toISOString();
+    if (!r.first_opened_at) db.prepare('UPDATE report_releases SET first_opened_at = ? WHERE id = ? AND first_opened_at IS NULL').run(when, r.id);
+    const bundle: ReportReleaseBundle = {
+      release: toRelease(releaseById.get(r.id) as ReportReleaseRow),
+      record: { id: rec.id, envelope: JSON.parse(rec.envelope), contentHash: rec.content_hash, createdAt: rec.created_at, ledgerEntryId: rec.ledger_entry_id },
+      recipientWrappedKey: JSON.parse(r.recipient_wrapped_key),
+      blobs: blobs.map((b) => ({ blobId: b.blob_id, recipientWrappedKey: JSON.parse(b.recipient_wrapped_key), contentHash: b.content_hash, sizeBytes: b.size_bytes })),
+    };
+    audit(me.id, 'counselor.opened_report', 'Opened a report a survivor shared with you');
+    audit(r.survivor_id, 'counselor.opened_report', `${counselorLabel(me.id)} (legal options counselor) opened your report at ${when}`);
+    res.json(bundle);
+  });
+
+  app.get('/api/counselor/releases/:id/blobs/:blobId', auth, counselorOnly, verifiedCounselor, (req, res) => {
+    const me = req.user!;
+    const r = liveReleaseFor(req);
+    const blobId = parse(S.id, req.params.blobId);
+    const covered = db.prepare('SELECT 1 FROM report_release_blobs WHERE release_id = ? AND blob_id = ?').get(r.id, blobId);
+    if (!covered) throw new HttpError(404, 'blob_not_found', 'File not found.');
+    const b = db.prepare('SELECT data, content_hash FROM blobs WHERE id = ?').get(blobId) as { data: Buffer; content_hash: string } | undefined;
+    if (!b) throw new HttpError(404, 'blob_not_found', 'File not found.');
+    audit(me.id, 'counselor.downloaded_evidence', 'Downloaded an evidence file a survivor shared with you');
+    audit(r.survivor_id, 'counselor.downloaded_evidence', `${counselorLabel(me.id)} (legal options counselor) downloaded one of your evidence files`);
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('X-Content-Hash', b.content_hash);
+    res.set('X-Blob-Id', blobId);
+    res.send(b.data);
+  });
+
+  // ── the survivor's side. She sees only requests about HER OWN entries (joined through match_entries.user_id): never
+  // the group, its size, the identifier, or anything about anyone else. Cancelled requests are not shown.
+  const requestsForSurvivor = db.prepare(
+    `SELECT r.* FROM report_requests r JOIN match_entries e ON e.id = r.entry_id
+      WHERE e.user_id = ? AND r.status != 'cancelled' ORDER BY r.created_at DESC, r.rowid DESC`,
+  );
+  const entryOwner = db.prepare('SELECT user_id FROM match_entries WHERE id = ?');
+  const toSurvivorRequest = (r: ReportRequestRow): SurvivorReportRequest => {
+    const c = q.counselorProfileByUser.get(r.counselor_id) as CounselorProfileRow | undefined;
+    const rel = releaseByRequest.get(r.id) as ReportReleaseRow | undefined;
+    return {
+      id: r.id,
+      entryId: r.entry_id,
+      status: r.status as SurvivorReportRequest['status'],
+      createdAt: r.created_at,
+      ...(r.decided_at != null && { decidedAt: r.decided_at }),
+      counselor: {
+        userId: r.counselor_id,
+        displayName: c?.display_name ?? 'A legal options counselor',
+        ...(c?.organization != null && { organization: c.organization }),
+        jurisdictions: c ? (JSON.parse(c.jurisdictions) as string[]) : [],
+        publicKey: c ? JSON.parse(c.public_key) : {},
+      },
+      ...(rel && { release: toRelease(rel) }),
+    };
+  };
+  /** Her own request (via her entry), or 404 — the same answer for someone else's request as for none. */
+  const ownRequest = (req: Request): ReportRequestRow => {
+    const r = requestById.get(parse(S.id, req.params.id)) as ReportRequestRow | undefined;
+    const owner = r && (entryOwner.get(r.entry_id) as { user_id: string } | undefined);
+    if (!r || owner?.user_id !== req.user!.id || r.status === 'cancelled') throw new HttpError(404, 'request_not_found', 'Request not found.');
+    return r;
+  };
+
+  app.get('/api/report-requests', auth, survivorOnly, (req, res) => {
+    res.json({ requests: (requestsForSurvivor.all(req.user!.id) as ReportRequestRow[]).map(toSurvivorRequest) });
+  });
+
+  app.post('/api/report-requests/:id/consent', auth, survivorOnly, (req, res) => {
+    const me = req.user!;
+    const r = ownRequest(req);
+    if (r.status !== 'pending') throw new HttpError(409, 'request_not_pending', 'You have already answered this request.');
+    const body = parse(S.reportConsentRequest, req.body);
+    const counselor = q.counselorProfileByUser.get(r.counselor_id) as CounselorProfileRow | undefined;
+    if (!counselor || counselor.verified !== 1) throw new HttpError(409, 'counselor_unavailable', 'This counselor is no longer available. Nothing was shared.');
+    // The counselor must still hold this group (not reassigned after a conflict, not removed from the roster).
+    const g = groupById.get(r.group_id) as GroupRow | undefined;
+    if (!g || !assignmentFor.get(g.tag, r.counselor_id))
+      throw new HttpError(409, 'counselor_unavailable', 'This counselor is no longer available. Nothing was shared.');
+    const ids = rosterIds();
+    if (ids && !ids.has(r.counselor_id)) throw new HttpError(409, 'counselor_unavailable', 'This counselor is no longer available. Nothing was shared.');
+    const record = q.recordById.get(body.recordId) as RecordRow | undefined;
+    if (!record) throw new HttpError(404, 'record_not_found', 'Record not found.');
+    if (record.owner_id !== me.id) throw new HttpError(403, 'forbidden', 'You can only share your own records.');
+    for (const b of body.blobs) {
+      const meta = q.blobMetaById.get(b.blobId) as BlobRow | undefined;
+      if (!meta) throw new HttpError(404, 'blob_not_found', 'One of the files was not found.');
+      if (meta.owner_id !== me.id) throw new HttpError(403, 'forbidden', 'You can only share your own files.');
+    }
+    // Bind the release to the key she confirmed (or the signed roster vouched for): a swapped key changes it (W3).
+    const fp = keyFingerprint(counselor.public_key);
+    if (body.counselorKeyFingerprint !== fp)
+      throw new HttpError(409, 'counselor_key_mismatch', "The counselor's key does not match the one you confirmed. Nothing was shared.");
+    if (!body.consentStatement.includes(fp))
+      throw new HttpError(400, 'consent_fingerprint_missing', 'The consent statement must name the confirmed key fingerprint.');
+    const id = newId();
+    const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
+    const blobIds = body.blobs.map((b) => b.blobId);
+    const contentHash = sha256Hex(
+      JSON.stringify({
+        releaseId: id,
+        requestId: r.id,
+        recordId: body.recordId,
+        counselorId: r.counselor_id,
+        counselorKeyFingerprint: fp,
+        consentStatement: body.consentStatement,
+        blobIds,
+        expiresAt,
+      }),
+    );
+    let ledgerEntry!: LedgerEntry;
+    db.transaction(() => {
+      ledgerEntry = appendLedger(db, 'report.released', id, contentHash);
+      db.prepare(
+        `INSERT INTO report_releases (id, request_id, survivor_id, counselor_id, record_id, recipient_wrapped_key, consent_statement, status,
+                                      created_at, expires_at, first_opened_at, revoked_at, ledger_entry_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, NULL, ?)`,
+      ).run(id, r.id, me.id, r.counselor_id, body.recordId, JSON.stringify(body.recipientWrappedKey), body.consentStatement, ledgerEntry.timestamp, expiresAt, ledgerEntry.id);
+      const ins = db.prepare('INSERT INTO report_release_blobs (release_id, blob_id, recipient_wrapped_key) VALUES (?, ?, ?)');
+      for (const b of body.blobs) ins.run(id, b.blobId, JSON.stringify(b.recipientWrappedKey));
+      db.prepare(`UPDATE report_requests SET status = 'consented', decided_at = ? WHERE id = ?`).run(ledgerEntry.timestamp, r.id);
+      audit(me.id, 'report.released', `You shared your report with ${counselorLabel(r.counselor_id)} (legal options counselor)`);
+      audit(r.counselor_id, 'counselor.report_received', 'A survivor shared her report with you');
+    })();
+    res.status(201).json({ release: toRelease(releaseById.get(id) as ReportReleaseRow), ledgerEntry });
+  });
+
+  app.post('/api/report-requests/:id/decline', auth, survivorOnly, (req, res) => {
+    const me = req.user!;
+    const r = ownRequest(req);
+    if (r.status !== 'pending') throw new HttpError(409, 'request_not_pending', 'You have already answered this request.');
+    db.transaction(() => {
+      const decidedAt = new Date().toISOString();
+      appendLedger(db, 'report.declined', r.id, sha256Hex(JSON.stringify({ requestId: r.id, decision: 'declined', decidedAt })), decidedAt);
+      db.prepare(`UPDATE report_requests SET status = 'declined', decided_at = ? WHERE id = ?`).run(decidedAt, r.id);
+      audit(me.id, 'report.declined', 'You decided not to share your report');
+      audit(r.counselor_id, 'counselor.request_declined', 'A survivor decided not to share her report');
+    })();
+    res.json({ request: toSurvivorRequest(requestById.get(r.id) as ReportRequestRow) });
+  });
+
+  app.post('/api/report-releases/:id/revoke', auth, survivorOnly, (req, res) => {
+    const me = req.user!;
+    const r = releaseById.get(parse(S.id, req.params.id)) as ReportReleaseRow | undefined;
+    if (!r || r.survivor_id !== me.id) throw new HttpError(404, 'release_not_found', 'Not found.');
+    if (r.status === 'revoked') throw new HttpError(409, 'already_revoked', 'You have already stopped sharing this.');
+    let ledgerEntry!: LedgerEntry;
+    db.transaction(() => {
+      const revokedAt = new Date().toISOString();
+      ledgerEntry = appendLedger(db, 'report.revoked', r.id, sha256Hex(JSON.stringify({ releaseId: r.id, status: 'revoked', revokedAt })), revokedAt);
+      db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ? WHERE id = ?`).run(revokedAt, r.id);
+      audit(me.id, 'report.revoked', `You stopped sharing your report with ${counselorLabel(r.counselor_id)}`);
+      audit(r.counselor_id, 'counselor.release_revoked', 'A survivor stopped sharing her report with you');
+    })();
+    res.json({ release: toRelease(releaseById.get(r.id) as ReportReleaseRow), ledgerEntry });
   });
 
   // ════════════ audit ════════════
@@ -1574,6 +1994,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
         `DELETE FROM share_blobs WHERE share_id IN (SELECT id FROM shares WHERE survivor_id = ? OR attorney_id = ?)`,
       ).run(me.id, me.id);
       db.prepare('DELETE FROM shares WHERE survivor_id = ? OR attorney_id = ?').run(me.id, me.id);
+      // staged release: her releases and the requests about her entries; or, for a counselor, everything she held
+      db.prepare(
+        'DELETE FROM report_release_blobs WHERE release_id IN (SELECT id FROM report_releases WHERE survivor_id = ? OR counselor_id = ?)',
+      ).run(me.id, me.id);
+      db.prepare('DELETE FROM report_releases WHERE survivor_id = ? OR counselor_id = ?').run(me.id, me.id);
+      db.prepare('DELETE FROM report_requests WHERE counselor_id = ? OR entry_id IN (SELECT id FROM match_entries WHERE user_id = ?)').run(me.id, me.id);
+      db.prepare('DELETE FROM conflict_checks WHERE counselor_id = ?').run(me.id);
       db.prepare('DELETE FROM blobs WHERE owner_id = ?').run(me.id);
       db.prepare('DELETE FROM records WHERE owner_id = ?').run(me.id);
       // sealed matching: her entries (and their seals), and — if a counselor — her seals, notes and profile

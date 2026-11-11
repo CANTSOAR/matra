@@ -417,7 +417,11 @@ export interface MatchContactPreferences {
   language?: string;
 }
 
-/** The plaintext a counselor can open ONLY after a match (2 distinct survivors). Never sent to the server in clear. */
+/**
+ * v1 bundle (before staged release): everything, including her contact details, in one ciphertext. New entries use
+ * MatchSummaryBundle + MatchContactDetails; a counselor's client still opens v1 bundles (legacy) and hides the details
+ * until the conflict check, in the UI only.
+ */
 export interface MatchContactBundle {
   v: 1;
   /** which kind of identifier matched, and its canonical form (e.g. "instagram:bad_guy") */
@@ -429,6 +433,109 @@ export interface MatchContactBundle {
   state?: string;
   /** USPS states she gave: where it happened and where she lives (also sealed to the matcher for routing). */
   states?: MatchStates;
+}
+
+// ── staged release ──
+/**
+ * Stage 1 of a match (staged release, W21): what the assigned counselor can open as soon as a group is released to her.
+ * The matched identifier, where it happened and where she lives, and HOW she would like to be contacted, but not her
+ * name, number, email or notes: those are in MatchContactDetails, which the server withholds until the counselor has
+ * recorded a conflict check. Encrypted under the entry key with AAD "bundle|" + tag, padded to 1 KiB (as v1 was).
+ */
+export interface MatchSummaryBundle {
+  v: 2;
+  identifier: { kind: 'email' | 'phone' | 'social'; canonical: string };
+  states: MatchStates;
+  methods: MatchContactPreferences['methods'];
+  language?: string;
+  consent: { statement: string; at: string };
+}
+
+/** Stage 1b: her contact details, under the SAME entry key with AAD "contact|" + tag (CreateMatchEntryRequest.contactBundle). */
+export interface MatchContactDetails {
+  v: 1;
+  name?: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+}
+
+/** The conflict-check statement versions the server accepts (text: apps/web/src/lib/disclosures.ts). */
+export const CONFLICT_CHECK_STATEMENT_VERSION = 1 as const;
+export type ConflictCheckResult = 'clear' | 'conflict';
+/** POST /api/counselor/groups/:id/conflict-check */
+export interface ConflictCheckRequest {
+  result: ConflictCheckResult;
+  statementVersion: typeof CONFLICT_CHECK_STATEMENT_VERSION;
+}
+
+export type ReportRequestStatus = 'pending' | 'consented' | 'declined' | 'cancelled';
+export type ReportReleaseStatus = 'active' | 'revoked';
+
+/**
+ * Stage 2: the counselor asks ONE matched survivor for her full report. The survivor decides alone; the counselor
+ * learns only the decision, never a reason. Nothing about one survivor is ever shown to another.
+ */
+export interface CounselorReportRequest {
+  id: string;
+  groupId: string;
+  entryId: string;
+  status: ReportRequestStatus;
+  createdAt: string;
+  decidedAt?: string;
+  /** after a yes: the release she created, and whether it is still active */
+  release?: { id: string; status: ReportReleaseStatus; expiresAt: string; firstOpenedAt?: string };
+}
+
+/** GET /api/report-requests: a request as the survivor sees it (only her own; nothing about anyone else). */
+export interface SurvivorReportRequest {
+  id: string;
+  /** her own sealed-match entry the request is about (her client decrypts its label for context) */
+  entryId: string;
+  status: Exclude<ReportRequestStatus, 'cancelled'>;
+  createdAt: string;
+  decidedAt?: string;
+  counselor: { userId: string; displayName: string; organization?: string; jurisdictions: string[]; publicKey: JsonWebKey };
+  release?: ReportRelease;
+}
+
+/** POST /api/report-requests/:id/consent: her record key (and any evidence keys she chose) wrapped to the counselor. */
+export interface ReportConsentRequest {
+  recordId: string;
+  recipientWrappedKey: WrappedKey;
+  blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+  consentStatement: string;
+  /** fingerprint of the counselor key she confirmed (or that the signed roster vouched for); the server rejects a mismatch */
+  counselorKeyFingerprint: string;
+  /** 1–365, default 90 */
+  expiresInDays?: number;
+}
+
+/** One survivor's yes: her report, released to ONE counselor. No survivor id is ever sent to the counselor. */
+export interface ReportRelease {
+  id: string;
+  requestId: string;
+  groupId: string;
+  entryId: string;
+  recordId: string;
+  counselorId: string;
+  status: ReportReleaseStatus;
+  consentStatement: string;
+  blobIds: string[];
+  createdAt: string;
+  expiresAt: string;
+  /** null until the counselor first opens it: revoking before then means she never sees it */
+  firstOpenedAt?: string;
+  revokedAt?: string;
+  ledgerEntryId: string;
+}
+
+/** GET /api/counselor/releases/:id/bundle: like ShareBundle, without any alias. */
+export interface ReportReleaseBundle {
+  release: ReportRelease;
+  record: { id: string; envelope: Envelope; contentHash: string; createdAt: string; ledgerEntryId: string };
+  recipientWrappedKey: WrappedKey;
+  blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey; contentHash: string; sizeBytes: number }>;
 }
 
 /** The two states routing uses (matcher-service): a counselor licensed in the incident state, else in hers. */
@@ -574,8 +681,10 @@ export interface AddMatchSealsRequest {
 export interface CreateMatchEntryRequest {
   /** 64 hex chars: HKDF(OPRF output, "tag"). Pseudorandom per perpetrator identifier. */
   tag: string;
-  /** MatchContactBundle encrypted under a fresh entry key (AAD = tag) */
+  /** MatchSummaryBundle encrypted under a fresh entry key ke (AAD = "bundle|" + tag) */
   bundle: Envelope;
+  /** MatchContactDetails under the same ke (AAD = "contact|" + tag); withheld from the counselor until her conflict check */
+  contactBundle: Envelope;
   /** her own label (encrypted under her master key) */
   labelEnvelope: Envelope;
   /** one per verified counselor: {tag, x, y, ce} sealed to that counselor */
@@ -592,8 +701,13 @@ export interface CounselorMatchGroup {
   /** the shared tag π (pseudorandom; bound into every seal's AAD so seals can't be moved between groups) */
   tag: string;
   matchedAt: string;
-  entries: Array<{ entryId: string; createdAt: string; bundle: Envelope; seal: CounselorSeal }>;
+  /** `contactBundle` is present only once this counselor has recorded a clear conflict check for the group. */
+  entries: Array<{ entryId: string; createdAt: string; bundle: Envelope; seal: CounselorSeal; contactBundle?: Envelope }>;
   notes: CounselorNote[];
+  /** her conflict check for this group, if recorded (a 'conflict' group is never returned: it is passed on) */
+  conflictCheck?: { result: 'clear'; at: string };
+  /** her report requests in this group (Stage 2), one entry each at most open */
+  reportRequests: CounselorReportRequest[];
   /**
    * Sybil warning signs, computed server-side without revealing accounts: some entries come from accounts created
    * within 24 hours of each other, and how many entries were sealed less than 7 days after their account was created.
@@ -721,6 +835,19 @@ export interface ApiError { error: string; code?: string }
  GET    /api/counselor/groups                         -> { groups: CounselorMatchGroup[] }  (verified counselor; only the groups the
                                                          matcher assigned to HER, each with its assignment reason)
  POST   /api/counselor/groups/:id/notes { entryId?, envelope } -> { note: CounselorNote }
+ POST   /api/counselor/groups/:id/conflict-check ConflictCheckRequest -> { ok: true, result } ('conflict' passes the group on)
+ POST   /api/counselor/groups/:id/decline                              -> { ok: true }  (same as a 'conflict' check)
+ POST   /api/counselor/groups/:id/report-requests { entryId, expected: true } -> { request: CounselorReportRequest }
+                                                         (after 'clear'; 409 request_open | already_shared)
+ POST   /api/counselor/report-requests/:id/cancel            -> { request: CounselorReportRequest } (pending only)
+ GET    /api/counselor/releases                              -> { releases: ReportRelease[] }
+ GET    /api/counselor/releases/:id/bundle                   -> ReportReleaseBundle (403 release_revoked | release_expired)
+ GET    /api/counselor/releases/:id/blobs/:blobId            -> octet-stream (same checks)
+
+ GET    /api/report-requests                                 -> { requests: SurvivorReportRequest[] } (survivor: her own)
+ POST   /api/report-requests/:id/consent ReportConsentRequest -> { release: ReportRelease, ledgerEntry: LedgerEntry }
+ POST   /api/report-requests/:id/decline                     -> { request: SurvivorReportRequest }
+ POST   /api/report-releases/:id/revoke                      -> { release: ReportRelease, ledgerEntry: LedgerEntry }
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
  POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)

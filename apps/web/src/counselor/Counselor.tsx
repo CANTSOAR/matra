@@ -5,13 +5,29 @@
  * assigned to THIS counselor (by state: licensed where it happened, else where a survivor lives; apps/matcher), and only
  * the seals addressed to her. The matcher's reason is shown in plain words (assignmentWords). Everything is opened here, on the counselor's device, with the counselor's
  * private key: the two shares are interpolated to recover the per-perpetrator key, which opens each survivor's
- * contact bundle (packages/crypto/src/matching.ts, reconstructMatchGroup). Outreach notes are encrypted under the
+ * summary bundle (packages/crypto/src/matching.ts, reconstructMatchGroup). Outreach notes are encrypted under the
  * counselor's own master key before they are saved.
+ *
+ * Staged release (docs/design/WEEKEND_MVP.md §3.6; W1, W21), in the order the counselor meets it:
+ *   1. What matched: the identifier, each person's states and HOW they'd like to be contacted (methods only).
+ *   2. Conflict check: she records "no conflict" (or passes the group on) before any name, number or email is shown.
+ *      The server withholds each person's contact ciphertext until then (a server gate, not a cryptographic one).
+ *   3. Contact details, outreach notes, and "ask for their full report" once she has spoken with them.
+ *   4. Reports a person chose to share with her alone (CounselorReport.tsx).
  */
-import { useState } from 'react';
-import { decryptJSON, encryptJSON, publicKeyFingerprint, reconstructMatchGroup, type ReconstructResult } from '@matra/crypto';
-import type { CounselorMatchGroup, CounselorNote, MatchContactBundle } from '@matra/shared';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  decryptJSON,
+  encryptJSON,
+  publicKeyFingerprint,
+  reconstructMatchGroup,
+  type ReconstructedBundle,
+  type ReconstructResult,
+} from '@matra/crypto';
+import type { CounselorMatchGroup, CounselorNote, MatchContactDetails, MatchSummaryBundle, ReportRelease } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
+import { CONFLICT_CHECK_STATEMENT } from '../lib/disclosures';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { US_STATES } from '../intake/script';
 export { CounselorGate, CounselorSignIn, RequireCounselor } from './guards';
@@ -86,8 +102,13 @@ export function CounselorPortal() {
   const me = useAsync(() => api.me(), [api]);
   const fp = useAsync(() => publicKeyFingerprint(session.user.publicKey), [session.user.publicKey]);
   const groups = useAsync(() => api.counselorGroups().then((r) => r.groups), [api]);
+  const releases = useAsync(() => api.counselorReleases().then((r) => r.releases), [api]);
   const profile = me.data?.counselorProfile;
   const [declined, setDeclined] = useState(false);
+  const reload = () => {
+    void groups.reload();
+    void releases.reload();
+  };
 
   return (
     <div className="stack-lg">
@@ -106,6 +127,10 @@ export function CounselorPortal() {
           Matra only ever sends you groups where at least two different people independently named the same person. You
           never receive single, unmatched entries. Each group is opened on this device with your private key.
         </p>
+        <p style={{ margin: 0 }}>
+          A group opens in stages: first what matched and how each person would like to be contacted; their contact
+          details after you record a conflict check; and a full report only if that person, alone, says yes.
+        </p>
       </div>
       {groups.loading && <Loading />}
       {groups.error && <ErrorNote>{groups.error}</ErrorNote>}
@@ -120,42 +145,77 @@ export function CounselorPortal() {
           key={g.id}
           group={g}
           index={i + 1}
-          onNote={() => void groups.reload()}
+          onChanged={reload}
           onDeclined={() => {
             setDeclined(true);
-            void groups.reload();
+            reload();
           }}
         />
       ))}
+      <SharedReports releases={releases.data} error={releases.error} />
     </div>
   );
 }
 
-function MatchGroup({ group, index, onNote, onDeclined }: { group: CounselorMatchGroup; index: number; onNote(): void; onDeclined(): void }) {
-  const { api, session } = useRequiredSession();
+/** Stage 2 results: reports individual survivors chose to share with this counselor. */
+function SharedReports({ releases, error }: { releases?: ReportRelease[]; error?: string }) {
+  const live = (releases ?? []).filter((r) => r.status === 'active' && Date.parse(r.expiresAt) > Date.now());
+  const ended = (releases ?? []).filter((r) => !live.includes(r));
+  if (!error && !releases?.length) return null;
+  return (
+    <section className="card stack" aria-labelledby="shared-reports" data-testid="counselor-releases">
+      <h2 id="shared-reports">Reports shared with you</h2>
+      {error && <ErrorNote>{error}</ErrorNote>}
+      <p className="small muted" style={{ margin: 0 }}>
+        Each was shared by one person, with you only. They see every time you open it, and can stop sharing at any time.
+      </p>
+      <ul className="list">
+        {live.map((r) => (
+          <li key={r.id} className="row" style={{ justifyContent: 'space-between' }}>
+            <span className="small">
+              Shared {formatDate(r.createdAt)} · access until {formatDate(r.expiresAt)}
+              {r.firstOpenedAt ? '' : ' · not opened yet'}
+            </span>
+            <Link className="btn btn-small btn-primary" to={`/counselor/reports/${r.id}`}>
+              Open report
+            </Link>
+          </li>
+        ))}
+        {ended.map((r) => (
+          <li key={r.id} className="small muted">
+            Shared {formatDate(r.createdAt)} ·{' '}
+            {r.status === 'revoked' ? `they stopped sharing ${formatDate(r.revokedAt)}` : `access ended ${formatDate(r.expiresAt)}`}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function MatchGroup({ group, index, onChanged, onDeclined }: { group: CounselorMatchGroup; index: number; onChanged(): void; onDeclined(): void }) {
+  const { session } = useRequiredSession();
+  const [wantOpen, setWantOpen] = useState(false);
   const [state, setState] = useState<{ busy?: boolean; result?: ReconstructResult; error?: string }>({});
-  const [decline, setDecline] = useState<{ asking?: boolean; busy?: boolean; error?: string }>({});
-  async function confirmDecline() {
-    setDecline({ asking: true, busy: true });
-    try {
-      await api.declineCounselorGroup(group.id);
-      onDeclined();
-    } catch (e) {
-      setDecline({ asking: true, error: friendlyError(e) });
-    }
-  }
-  async function open() {
-    setState({ busy: true });
-    try {
-      setState({ result: await reconstructMatchGroup(group.tag, group.entries, session.privateKey, session.user.id) });
-    } catch (e) {
-      setState({ error: friendlyError(e) });
-    }
-  }
+  // (Re)open on this device whenever the server's view of the group changes: after the conflict check the same group
+  // comes back with each person's contact ciphertext.
+  useEffect(() => {
+    if (!wantOpen) return;
+    let alive = true;
+    setState((s) => ({ ...s, busy: true, error: undefined }));
+    reconstructMatchGroup(group.tag, group.entries, session.privateKey, session.user.id).then(
+      (result) => alive && setState({ result }),
+      (e: unknown) => alive && setState({ error: friendlyError(e) }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [wantOpen, group, session.privateKey, session.user.id]);
   const r = state.result;
-  const first = r?.ok ? r.bundles[0]?.bundle.identifier : undefined;
+  const clear = group.conflictCheck?.result === 'clear';
+  const first = r?.ok ? r.bundles[0]?.summary.identifier : undefined;
   const alerts = r ? r.alerts.map((a) => ALERT_WORDS[a]) : [];
   const sig = group.signals;
+  const states = r?.ok ? [...new Set(r.bundles.flatMap((b) => [b.summary.states.incident, b.summary.states.survivor]).filter((s): s is string => !!s))] : [];
   return (
     <section className="card stack" aria-labelledby={`g-${group.id}`} data-testid="counselor-group">
       <div className="section-title">
@@ -172,31 +232,6 @@ function MatchGroup({ group, index, onNote, onDeclined }: { group: CounselorMatc
           {assignmentWords(group.assignment.reason)} The matcher assigned this group to you.
         </p>
       )}
-      <div className="small stack" data-testid="counselor-decline">
-        {!decline.asking ? (
-          <div>
-            <button className="btn btn-quiet btn-small" onClick={() => setDecline({ asking: true })}>
-              I can’t take this group (conflict of interest)
-            </button>
-          </div>
-        ) : (
-          <div className="card warn stack">
-            <p style={{ margin: 0 }}>
-              Decline this group? It will be passed to another counselor, and you won’t be given it again. Do this before
-              you contact anyone in it.
-            </p>
-            {decline.error && <ErrorNote>{decline.error}</ErrorNote>}
-            <div className="row">
-              <button className="btn btn-primary btn-small" onClick={() => void confirmDecline()} disabled={decline.busy}>
-                {decline.busy ? 'Declining…' : 'Yes, decline this group'}
-              </button>
-              <button className="btn btn-quiet btn-small" onClick={() => setDecline({})} disabled={decline.busy}>
-                Keep it
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
       {sig && (sig.accountsCreatedClose || sig.newAccountEntries > 0) && (
         <div className="card warn small" data-testid="counselor-sybil-signals">
           <strong>Check carefully:</strong>{' '}
@@ -208,7 +243,7 @@ function MatchGroup({ group, index, onNote, onDeclined }: { group: CounselorMatc
       )}
       {!r && (
         <div>
-          <button className="btn btn-primary btn-small" onClick={() => void open()} disabled={state.busy}>
+          <button className="btn btn-primary btn-small" onClick={() => setWantOpen(true)} disabled={state.busy}>
             {state.busy ? 'Opening with your private key…' : 'Open with my private key'}
           </button>
         </div>
@@ -232,8 +267,9 @@ function MatchGroup({ group, index, onNote, onDeclined }: { group: CounselorMatc
       )}
       {r?.ok && (
         <>
+          <h3 style={{ margin: 0 }}>What matched</h3>
           {r.canonicals.length === 1 && first && (
-            <p className="small">
+            <p className="small" style={{ margin: 0 }}>
               Identifier named: <span className="mono">{first.canonical}</span>
             </p>
           )}
@@ -243,24 +279,136 @@ function MatchGroup({ group, index, onNote, onDeclined }: { group: CounselorMatc
               shown. It may be malformed or fake.
             </ErrorNote>
           )}
-          <p className="small muted">
+          {clear ? (
+            <div className="small stack" data-testid="counselor-conflict-done">
+              <p style={{ margin: 0 }}>
+                Conflict check recorded {formatDate(group.conflictCheck!.at)}: no conflict. Contact details are shown below.
+              </p>
+              <DeclineGroup groupId={group.id} onDeclined={onDeclined} />
+            </div>
+          ) : (
+            <ConflictCheck groupId={group.id} canonicals={r.canonicals} states={states} onClear={onChanged} onDeclined={onDeclined} />
+          )}
+          <p className="small muted" style={{ margin: 0 }}>
             Each card is a different person. Reach out to each one separately; don’t mention the other.
           </p>
           {r.bundles.map((b, i) => (
             <SurvivorCard
               key={b.entryId}
               n={i + 1}
-              onLine={b.onLine}
-              groupId={group.id}
-              entryId={b.entryId}
-              bundle={b.bundle}
+              group={group}
+              opened={b}
+              clear={clear}
               notes={group.notes.filter((x) => x.entryId === b.entryId)}
-              onNote={onNote}
+              onChanged={onChanged}
             />
           ))}
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * Stage 1 → 1b. She checks the identifier(s) and states against her own conflicts records, outside Matra, and records
+ * the result. Contact details come only after "no conflict" (the server withholds them until then: W21).
+ */
+function ConflictCheck(props: { groupId: string; canonicals: string[]; states: string[]; onClear(): void; onDeclined(): void }) {
+  const { api } = useRequiredSession();
+  const [st, setSt] = useState<{ busy?: boolean; error?: string; confirmConflict?: boolean }>({});
+  async function record(result: 'clear' | 'conflict') {
+    setSt((s) => ({ ...s, busy: true, error: undefined }));
+    try {
+      await api.counselorConflictCheck(props.groupId, { result, statementVersion: CONFLICT_CHECK_STATEMENT.version });
+      if (result === 'clear') props.onClear();
+      else props.onDeclined();
+    } catch (e) {
+      setSt((s) => ({ ...s, busy: false, error: friendlyError(e) }));
+    }
+  }
+  return (
+    <div className="card warm stack" data-testid="counselor-conflict-check">
+      <h3 style={{ margin: 0 }}>Conflict check</h3>
+      <p className="small" style={{ margin: 0 }}>
+        Identifier{props.canonicals.length === 1 ? '' : 's'} to check:{' '}
+        {props.canonicals.map((c) => (
+          <span key={c} className="mono">
+            {c}{' '}
+          </span>
+        ))}
+        {props.states.length > 0 && <> · States: {props.states.map(stateName).join(', ')}</>}
+      </p>
+      <ul className="small" style={{ margin: 0, paddingLeft: '1.2em' }}>
+        {CONFLICT_CHECK_STATEMENT.lines.map((l) => (
+          <li key={l}>{l}</li>
+        ))}
+      </ul>
+      {st.error && <ErrorNote>{st.error}</ErrorNote>}
+      {!st.confirmConflict ? (
+        <div className="row">
+          <button className="btn btn-primary btn-small" onClick={() => void record('clear')} disabled={st.busy}>
+            I have no conflict
+          </button>
+          <button className="btn btn-small" onClick={() => setSt({ confirmConflict: true })} disabled={st.busy}>
+            I have a conflict
+          </button>
+        </div>
+      ) : (
+        <div className="card warn stack">
+          <p style={{ margin: 0 }}>Pass this group to another counselor? You won’t be given it again.</p>
+          <div className="row">
+            <button className="btn btn-primary btn-small" onClick={() => void record('conflict')} disabled={st.busy}>
+              {st.busy ? 'Passing it on…' : 'Yes, pass it on'}
+            </button>
+            <button className="btn btn-quiet btn-small" onClick={() => setSt({})} disabled={st.busy}>
+              Go back
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A conflict found after the check (before or after contacting anyone): the group is passed on, as with "I have a conflict". */
+function DeclineGroup({ groupId, onDeclined }: { groupId: string; onDeclined(): void }) {
+  const { api } = useRequiredSession();
+  const [decline, setDecline] = useState<{ asking?: boolean; busy?: boolean; error?: string }>({});
+  async function confirmDecline() {
+    setDecline({ asking: true, busy: true });
+    try {
+      await api.counselorConflictCheck(groupId, { result: 'conflict', statementVersion: CONFLICT_CHECK_STATEMENT.version });
+      onDeclined();
+    } catch (e) {
+      setDecline({ asking: true, error: friendlyError(e) });
+    }
+  }
+  return (
+    <div className="small stack" data-testid="counselor-decline">
+      {!decline.asking ? (
+        <div>
+          <button className="btn btn-quiet btn-small" onClick={() => setDecline({ asking: true })}>
+            I can’t take this group (conflict of interest)
+          </button>
+        </div>
+      ) : (
+        <div className="card warn stack">
+          <p style={{ margin: 0 }}>
+            Decline this group? It will be passed to another counselor, and you won’t be given it again. Requests you sent
+            that haven’t been answered are withdrawn.
+          </p>
+          {decline.error && <ErrorNote>{decline.error}</ErrorNote>}
+          <div className="row">
+            <button className="btn btn-primary btn-small" onClick={() => void confirmDecline()} disabled={decline.busy}>
+              {decline.busy ? 'Declining…' : 'Yes, decline this group'}
+            </button>
+            <button className="btn btn-quiet btn-small" onClick={() => setDecline({})} disabled={decline.busy}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -275,20 +423,29 @@ const ALERT_WORDS: Record<ReconstructResult['alerts'][number], string> = {
   identifier_mismatch: 'The reports name different identifiers (shown on each card). Check that they really refer to the same person.',
 };
 
-const contactMatchesIdentifier = (b: MatchContactBundle) => {
-  const c = b.identifier.canonical.toLowerCase();
+const contactMatchesIdentifier = (identifier: MatchSummaryBundle['identifier'], contact: MatchContactDetails) => {
+  const c = identifier.canonical.toLowerCase();
   const digits = (v?: string) => (v ?? '').replace(/\D/g, '');
-  if (c.startsWith('email:') && b.contact.email) return c === `email:${b.contact.email.trim().toLowerCase()}`;
-  if (c.startsWith('phone:') && b.contact.phone) {
-    const d = digits(b.contact.phone);
+  if (c.startsWith('email:') && contact.email) return c === `email:${contact.email.trim().toLowerCase()}`;
+  if (c.startsWith('phone:') && contact.phone) {
+    const d = digits(contact.phone);
     return d.length >= 7 && c.replace(/\D/g, '').endsWith(d.length === 10 ? d : d.slice(-10));
   }
   return false;
 };
 
-function SurvivorCard(props: { n: number; onLine: boolean; groupId: string; entryId: string; bundle: MatchContactBundle; notes: CounselorNote[]; onNote(): void }) {
+function SurvivorCard(props: {
+  n: number;
+  group: CounselorMatchGroup;
+  opened: ReconstructedBundle;
+  clear: boolean;
+  notes: CounselorNote[];
+  onChanged(): void;
+}) {
   const { api, session } = useRequiredSession();
-  const { bundle: b } = props;
+  const { summary: b, entryId } = props.opened;
+  // A legacy (v1) bundle carries her details inside; they are hidden until the check like v2 ones (UI-only for legacy).
+  const contact = props.clear ? props.opened.contact : undefined;
   const notes = useAsync(
     () => Promise.all(props.notes.map(async (n) => ({ n, plain: await decryptJSON<NotePlain>(n.envelope, session.masterKey).catch(() => null) }))),
     [props.notes, session.masterKey],
@@ -302,9 +459,9 @@ function SurvivorCard(props: { n: number; onLine: boolean; groupId: string; entr
     setError(null);
     try {
       const envelope = await encryptJSON({ status, ...(text.trim() && { text: text.trim() }) } satisfies NotePlain, session.masterKey);
-      await api.addCounselorNote(props.groupId, { entryId: props.entryId, envelope });
+      await api.addCounselorNote(props.group.id, { entryId, envelope });
       setText('');
-      props.onNote();
+      props.onChanged();
     } catch (e) {
       setError(friendlyError(e));
     } finally {
@@ -317,103 +474,187 @@ function SurvivorCard(props: { n: number; onLine: boolean; groupId: string; entr
       <p className="small" style={{ margin: 0 }}>
         Named: <span className="mono" data-testid="counselor-canonical">{b.identifier.canonical}</span>
       </p>
-      {!props.onLine && (
+      {!props.opened.onLine && (
         <p className="card warn small" style={{ margin: 0 }}>
           This report doesn’t line up with the others in this group. Treat it with extra care.
         </p>
       )}
-      {contactMatchesIdentifier(b) && (
+      {contact && contactMatchesIdentifier(b.identifier, contact) && (
         <p className="card warn small" style={{ margin: 0 }} data-testid="counselor-contact-is-identifier">
           The contact details on this card are the identifier that was named. This may be the named person, not a survivor.
         </p>
       )}
       <dl className="case-meta">
-        {b.contact.name && (
-          <div>
-            <dt>Name to use</dt>
-            <dd>{b.contact.name}</dd>
-          </div>
-        )}
-        <div>
-          <dt>How to reach them</dt>
-          <dd>{b.contact.methods.map((m) => METHOD_WORDS[m] ?? m).join(' · ')}</dd>
-        </div>
-        {b.contact.phone && (
-          <div>
-            <dt>Phone</dt>
-            <dd>{b.contact.phone}</dd>
-          </div>
-        )}
-        {b.contact.email && (
-          <div>
-            <dt>Email</dt>
-            <dd>{b.contact.email}</dd>
-          </div>
-        )}
-        {b.contact.language && (
-          <div>
-            <dt>Language</dt>
-            <dd>{b.contact.language}</dd>
-          </div>
-        )}
-        {b.states?.incident && (
+        {b.states.incident && (
           <div>
             <dt>Where it happened</dt>
             <dd>{stateName(b.states.incident)}</dd>
           </div>
         )}
-        {b.states?.survivor && (
+        {b.states.survivor && (
           <div>
             <dt>Where they live</dt>
             <dd>{stateName(b.states.survivor)}</dd>
           </div>
         )}
-        {!b.states && b.state && (
+        <div>
+          <dt>How to reach them</dt>
+          <dd>{b.methods.map((m) => METHOD_WORDS[m] ?? m).join(' · ') || 'Not given'}</dd>
+        </div>
+        {b.language && (
           <div>
-            <dt>State</dt>
-            <dd>{b.state}</dd>
+            <dt>Language</dt>
+            <dd>{b.language}</dd>
+          </div>
+        )}
+        {contact?.name && (
+          <div>
+            <dt>Name to use</dt>
+            <dd>{contact.name}</dd>
+          </div>
+        )}
+        {contact?.phone && (
+          <div>
+            <dt>Phone</dt>
+            <dd>{contact.phone}</dd>
+          </div>
+        )}
+        {contact?.email && (
+          <div>
+            <dt>Email</dt>
+            <dd>{contact.email}</dd>
           </div>
         )}
       </dl>
-      {b.contact.notes && <p className="small"><strong>Their note:</strong> {b.contact.notes}</p>}
+      {!props.clear && (
+        <p className="small muted" style={{ margin: 0 }} data-testid="counselor-contact-hidden">
+          Contact details are shown after your conflict check.
+        </p>
+      )}
+      {props.clear && props.opened.contactError && (
+        <ErrorNote>This person’s contact details did not open. They may have been tampered with; report it to Matra.</ErrorNote>
+      )}
+      {contact?.notes && <p className="small"><strong>Their note:</strong> {contact.notes}</p>}
       <details className="small">
         <summary>What they agreed to ({formatDate(b.consent.at)})</summary>
         <div className="consent-text">{b.consent.statement}</div>
       </details>
-      <div className="stack">
-        <h4 style={{ margin: 0 }}>Outreach notes <span className="small muted">(encrypted, only you can read them)</span></h4>
-        {notes.data?.length === 0 && <p className="small muted" style={{ margin: 0 }}>No notes yet.</p>}
-        <ul className="list small">
-          {notes.data?.map(({ n, plain }) => (
-            <li key={n.id}>
-              {formatDate(n.createdAt)} · <strong>{plain ? NOTE_STATUS[plain.status] ?? plain.status : 'Could not decrypt'}</strong>
-              {plain?.text && <> — {plain.text}</>}
-            </li>
-          ))}
-        </ul>
-        <div className="row">
-          <label className="field">
-            <span>Status</span>
-            <select value={status} onChange={(e) => setStatus(e.target.value as NotePlain['status'])}>
-              {Object.entries(NOTE_STATUS).map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
+      {props.clear && (
+        <>
+          <ReportRequestBlock group={props.group} entryId={entryId} onChanged={props.onChanged} />
+          <div className="stack">
+            <h4 style={{ margin: 0 }}>Outreach notes <span className="small muted">(encrypted, only you can read them)</span></h4>
+            {notes.data?.length === 0 && <p className="small muted" style={{ margin: 0 }}>No notes yet.</p>}
+            <ul className="list small">
+              {notes.data?.map(({ n, plain }) => (
+                <li key={n.id}>
+                  {formatDate(n.createdAt)} · <strong>{plain ? NOTE_STATUS[plain.status] ?? plain.status : 'Could not decrypt'}</strong>
+                  {plain?.text && <> — {plain.text}</>}
+                </li>
               ))}
-            </select>
-          </label>
-          <label className="field" style={{ flex: 1, minWidth: 0 }}>
-            <span>Note</span>
-            <input value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} />
-          </label>
-        </div>
-        <div>
-          <button className="btn btn-small" onClick={() => void save()} disabled={busy}>
-            {busy ? 'Saving…' : 'Save note'}
-          </button>
-        </div>
-        {error && <ErrorNote>{error}</ErrorNote>}
-      </div>
+            </ul>
+            <div className="row">
+              <label className="field">
+                <span>Status</span>
+                <select value={status} onChange={(e) => setStatus(e.target.value as NotePlain['status'])}>
+                  {Object.entries(NOTE_STATUS).map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field" style={{ flex: 1, minWidth: 0 }}>
+                <span>Note</span>
+                <input value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} />
+              </label>
+            </div>
+            <div>
+              <button className="btn btn-small" onClick={() => void save()} disabled={busy}>
+                {busy ? 'Saving…' : 'Save note'}
+              </button>
+            </div>
+            {error && <ErrorNote>{error}</ErrorNote>}
+          </div>
+        </>
+      )}
     </article>
+  );
+}
+
+/**
+ * Stage 2, per person: ask for their full report, only once you have spoken with them and they expect it (so a request
+ * is never their first sign of a match: W1). They decide alone; you learn only the decision. A no is final in Matra.
+ */
+function ReportRequestBlock({ group, entryId, onChanged }: { group: CounselorMatchGroup; entryId: string; onChanged(): void }) {
+  const { api } = useRequiredSession();
+  const [expected, setExpected] = useState(false);
+  const [st, setSt] = useState<{ busy?: boolean; error?: string }>({});
+  const mine = group.reportRequests.filter((r) => r.entryId === entryId);
+  const current = [...mine].reverse().find((r) => r.status !== 'cancelled');
+  async function run(fn: () => Promise<unknown>) {
+    setSt({ busy: true });
+    try {
+      await fn();
+      setExpected(false);
+      setSt({});
+      onChanged();
+    } catch (e) {
+      setSt({ error: friendlyError(e) });
+    }
+  }
+  const rel = current?.release;
+  const relLive = rel && rel.status === 'active' && Date.parse(rel.expiresAt) > Date.now();
+  return (
+    <div className="card soft stack small" data-testid="counselor-report-request">
+      <h4 style={{ margin: 0 }}>Their full report</h4>
+      {st.error && <ErrorNote>{st.error}</ErrorNote>}
+      {current?.status === 'pending' && (
+        <>
+          <p style={{ margin: 0 }}>
+            You asked on {formatDate(current.createdAt)}. They haven’t decided. Matra doesn’t remind them; they decide in
+            their own time, and can say no.
+          </p>
+          <div>
+            <button className="btn btn-quiet btn-small" disabled={st.busy} onClick={() => void run(() => api.cancelReportRequest(current.id))}>
+              Withdraw this request
+            </button>
+          </div>
+        </>
+      )}
+      {current?.status === 'declined' && <p style={{ margin: 0 }}>They decided not to share their report. Matra will not ask them again.</p>}
+      {current?.status === 'consented' && rel && relLive && (
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <span>They shared their report with you, until {formatDate(rel.expiresAt)}.</span>
+          <Link className="btn btn-primary btn-small" to={`/counselor/reports/${rel.id}`}>
+            Open their report
+          </Link>
+        </div>
+      )}
+      {current?.status === 'consented' && rel && !relLive && (
+        <p style={{ margin: 0 }}>{rel.status === 'revoked' ? 'They stopped sharing their report with you.' : 'Access to their report has ended.'}</p>
+      )}
+      {!current && (
+        <>
+          <p style={{ margin: 0 }}>
+            If this person wants you to see their written account, you can ask them here. They see the request in their
+            own space and decide alone; it is never shared with anyone else in this group.
+          </p>
+          <label className="check">
+            <input type="checkbox" checked={expected} onChange={(e) => setExpected(e.target.checked)} />
+            <span>I’ve spoken with this person and they expect this request.</span>
+          </label>
+          <div>
+            <button
+              className="btn btn-small"
+              disabled={!expected || st.busy}
+              onClick={() => void run(() => api.requestSurvivorReport(group.id, entryId))}
+            >
+              Ask for their full report
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

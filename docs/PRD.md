@@ -79,6 +79,7 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 - As a survivor, I am told plainly that a court could order me to hand over my records, and that police reports are shared with the defense, before I seal or share anything.
 - As a survivor, I can generate a VCCO application draft that tells me honestly about the 9-month police-report requirement and the 5-year filing deadline.
 - As a survivor, I can learn, through a counselor and never automatically, that someone else named the same person, and decide what, if anything, to do. *(N2)*
+- As a matched survivor, after the counselor has spoken with me, I see their request for my full report only in my own space, can take my time, choose whether evidence goes too, say yes or no with equally weighted buttons, and stop sharing later; nobody else who named the same person ever sees anything of mine. *(N2, staged release; advocate review pending)*
 - As a survivor, I am told at least 90 days ahead if Matra will close or change who can see my information, and nothing about my data moves unless I say yes. *(N14, N16)*
 
 **Attorney**
@@ -86,6 +87,10 @@ Most sexual assaults are never reported to police. BJS estimates that **24%** of
 - As an attorney, I can verify that the file I received matches the sealed ledger entry.
 - As an attorney, I can ask the survivor to prepare her account at my direction for the purpose of legal advice. *(N1)*
 - As an attorney, I lose access immediately when the survivor revokes, and I understand my duties for copies I already hold (MOU).
+
+**Legal Options Counselor**
+- As the assigned counselor, I first see only what matched, where, and how each person would like to be contacted; I record a conflict check before I see anyone's name, number or email, and I can pass the group on if I have a conflict. *(N2, staged release)*
+- As the assigned counselor, I can ask a survivor I have already spoken with for her full report; I learn only her decision, and I read her report only if she says yes, on my device, until she stops sharing. *(N2, staged release)*
 
 **Advocate / org admin**
 - As an advocate, I can review the full intake script and propose wording changes through a versioned review process.

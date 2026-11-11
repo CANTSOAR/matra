@@ -166,6 +166,8 @@ export const routingEnvelope = z.object({
 export const createMatchEntryRequest = z.object({
   tag: z.string().regex(/^[a-f0-9]{64}$/, 'tag must be 64 lowercase hex chars'),
   bundle: smallEnvelope,
+  // staged release: her contact details, withheld from the counselor until the conflict check
+  contactBundle: smallEnvelope,
   labelEnvelope: smallEnvelope,
   seals: sealList,
   replacesEntryId: id.optional(),
@@ -186,6 +188,27 @@ export const phoneVerificationCheck = z.object({
 export const counselorNoteRequest = z.object({
   entryId: id.optional(),
   envelope: smallEnvelope,
+});
+
+// ── staged release (counselor-first; W21) ──
+export const conflictCheckRequest = z.object({
+  result: z.enum(['clear', 'conflict']),
+  statementVersion: z.literal(1),
+});
+
+/** `expected: true`: the counselor confirms she has spoken with her and she expects this request (never a surprise). */
+export const reportRequestCreate = z.object({ entryId: id, expected: z.literal(true) });
+
+export const reportConsentRequest = z.object({
+  recordId: id,
+  recipientWrappedKey,
+  blobs: z
+    .array(z.object({ blobId: id, recipientWrappedKey }))
+    .max(200)
+    .refine((b) => new Set(b.map((x) => x.blobId)).size === b.length, 'duplicate blobId'),
+  consentStatement: z.string().trim().min(10).max(10_000),
+  counselorKeyFingerprint: z.string().regex(/^[0-9A-F]{4}(-[0-9A-F]{4}){7}$/, 'invalid fingerprint'),
+  expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
 export const attorneysQuery = z.object({

@@ -335,6 +335,61 @@ const MIGRATIONS: string[] = [
   ) WITHOUT ROWID;
   UPDATE matching_meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'key_epoch';
   `,
+  // ── v9: staged release (counselor-first; W1, W21). Each entry's contact details move into their own ciphertext
+  // (contact_bundle), which the server withholds from the assigned counselor until she records a conflict check
+  // (conflict_checks). Stage 2: she may ask one matched survivor for her full report (report_requests); only a survivor's
+  // own yes creates a report_release (her record key, and any evidence keys she chose, wrapped to the counselor's key
+  // on her device). One open request per (entry, counselor). No foreign keys: rows are deleted explicitly with the
+  // entry, the group, or either account (app.ts). key_epoch is bumped so existing clients re-seal into the split format.
+  `
+  ALTER TABLE match_entries ADD COLUMN contact_bundle TEXT;
+  CREATE TABLE conflict_checks (
+    group_id          TEXT NOT NULL,
+    counselor_id      TEXT NOT NULL,
+    result            TEXT NOT NULL CHECK (result IN ('clear','conflict')),
+    statement_version INTEGER NOT NULL,
+    created_at        TEXT NOT NULL,
+    ledger_entry_id   TEXT NOT NULL,
+    PRIMARY KEY (group_id, counselor_id)
+  );
+  CREATE TABLE report_requests (
+    id              TEXT PRIMARY KEY,
+    group_id        TEXT NOT NULL,
+    entry_id        TEXT NOT NULL,
+    counselor_id    TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK (status IN ('pending','consented','declined','cancelled')),
+    created_at      TEXT NOT NULL,
+    decided_at      TEXT,
+    ledger_entry_id TEXT NOT NULL
+  );
+  CREATE INDEX report_requests_entry ON report_requests(entry_id);
+  CREATE INDEX report_requests_group ON report_requests(group_id, counselor_id);
+  CREATE UNIQUE INDEX report_requests_one_open ON report_requests(entry_id, counselor_id) WHERE status = 'pending';
+  CREATE TABLE report_releases (
+    id                    TEXT PRIMARY KEY,
+    request_id            TEXT NOT NULL UNIQUE,
+    survivor_id           TEXT NOT NULL,
+    counselor_id          TEXT NOT NULL,
+    record_id             TEXT NOT NULL,
+    recipient_wrapped_key TEXT NOT NULL,
+    consent_statement     TEXT NOT NULL,
+    status                TEXT NOT NULL CHECK (status IN ('active','revoked')),
+    created_at            TEXT NOT NULL,
+    expires_at            TEXT NOT NULL,
+    first_opened_at       TEXT,
+    revoked_at            TEXT,
+    ledger_entry_id       TEXT NOT NULL
+  );
+  CREATE INDEX report_releases_survivor ON report_releases(survivor_id);
+  CREATE INDEX report_releases_counselor ON report_releases(counselor_id);
+  CREATE TABLE report_release_blobs (
+    release_id            TEXT NOT NULL,
+    blob_id               TEXT NOT NULL,
+    recipient_wrapped_key TEXT NOT NULL,
+    PRIMARY KEY (release_id, blob_id)
+  );
+  UPDATE matching_meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'key_epoch';
+  `,
 ];
 
 /**

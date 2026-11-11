@@ -16,6 +16,14 @@
  *                    the same person. Withdrawals write no ledger entry (the entry row is simply deleted).
  *                    There is deliberately NO 'escrow.matched' entry type: writing one at match time would let
  *                    anyone watching /api/ledger/head learn that a submission matched. matched_at lives in the DB only.
+ *   counselor.conflict_checked  SHA-256_hex(`${groupId}|${counselorId}|${result}|${statementVersion}`) (staged release)
+ *   report.requested SHA-256_hex(JSON.stringify({ requestId, groupId, entryId, counselorId }))
+ *   report.released  SHA-256_hex(JSON.stringify({ releaseId, requestId, recordId, counselorId, counselorKeyFingerprint,
+ *                    consentStatement, blobIds, expiresAt })) — attests her exact consent text, like share.granted
+ *   report.declined  SHA-256_hex(JSON.stringify({ requestId, decision: 'declined', decidedAt }))
+ *   report.revoked   SHA-256_hex(JSON.stringify({ releaseId, status: 'revoked', revokedAt }))
+ *                    None of these is written at match time: each follows a person's action after the group was
+ *                    released (the anti-probing rule for escrow.sealed still holds).
  *   account.shredded SHA-256_hex(JSON.stringify({ userId, recordIds, blobIds }))  (ids sorted ascending)
  */
 import { createHash, randomBytes } from 'node:crypto';
@@ -29,6 +37,11 @@ export type LedgerType =
   | 'share.revoked'
   | 'share.renewed'
   | 'escrow.sealed'
+  | 'counselor.conflict_checked'
+  | 'report.requested'
+  | 'report.released'
+  | 'report.declined'
+  | 'report.revoked'
   | 'account.shredded';
 
 export function sha256Hex(data: string | Uint8Array): string {

@@ -283,14 +283,27 @@ export function AttorneyCase() {
  * verified Legal Options Counselor (apps/web/src/counselor), who reaches out to each matched survivor separately.
  */
 
-function SharedBlob({ blob, item }: { blob: ShareBundle['blobs'][number]; item?: EvidenceItem }) {
+/**
+ * One shared evidence file: decrypt with the recipient's private key, check the hash she recorded, and only then offer
+ * the download. Also used by the counselor's report viewer (counselor/CounselorReport.tsx), which passes `download`.
+ */
+export function SharedBlob({
+  blob,
+  item,
+  download,
+}: {
+  blob: Pick<ShareBundle['blobs'][number], 'blobId' | 'recipientWrappedKey' | 'sizeBytes'>;
+  item?: EvidenceItem;
+  /** fetch the ciphertext (default: the attorney share route) */
+  download?: (blobId: string) => Promise<Uint8Array>;
+}) {
   const { api, session } = useRequiredSession();
   const [state, setState] = useState<{ busy?: boolean; url?: string; ok?: boolean; hash?: string; error?: string }>({});
   async function decrypt() {
     setState({ busy: true });
     try {
       const key = await unwrapKeyWithPrivate(blob.recipientWrappedKey, session.privateKey);
-      const ct = await api.downloadBlob(blob.blobId);
+      const ct = await (download ?? ((id: string) => api.downloadBlob(id)))(blob.blobId);
       const pt = await decryptBlob(ct, key);
       const hash = await sha256Hex(pt);
       const ok = !!item && hash === item.sha256;

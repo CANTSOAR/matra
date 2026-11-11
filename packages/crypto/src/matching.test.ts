@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ristretto255_oprf } from '@noble/curves/ed25519.js';
-import type { MatchContactBundle } from '@matra/shared';
+import type { MatchContactBundle, MatchSummaryBundle } from '@matra/shared';
 import * as c from './index';
 
 const hex = (h: string) => Uint8Array.from(h.replace(/\s+/g, '').match(/../g)!.map((b) => parseInt(b, 16)));
@@ -125,7 +125,7 @@ describe('threshold sharing and counselor reconstruction', () => {
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.failed).toEqual([]);
-      expect(ok.bundles.map((x) => [x.entryId, x.bundle.contact.name])).toEqual([['ea', 'A'], ['eb', 'B']]);
+      expect(ok.bundles.map((x) => [x.entryId, x.contact?.name])).toEqual([['ea', 'A'], ['eb', 'B']]);
     }
     const one = await c.reconstructMatchGroup(ea.tag, [entry('ea', ea)], priv, 'c1');
     expect(one).toMatchObject({ ok: false, reason: 'too_few_shares' });
@@ -167,7 +167,7 @@ describe('threshold sharing and counselor reconstruction', () => {
       // the key comes from the (ea, eb) line, whose intercept reproduces the tag; C's ciphertext is authentic, so it
       // opens with K_P — but its point is off the line, which is flagged
       expect(three.failed).toEqual([]);
-      expect(three.bundles.map((x) => [x.bundle.contact.name, x.onLine])).toEqual([['A', true], ['B', true], ['C', false]]);
+      expect(three.bundles.map((x) => [x.contact?.name, x.onLine])).toEqual([['A', true], ['B', true], ['C', false]]);
       expect(three.alerts).toContain('off_line_share');
     }
 
@@ -221,7 +221,7 @@ describe('regression decoy.mts (H1): a decoy line under the real tag cannot hide
     };
     return { priv: kp.privateKey, real, entry };
   }
-  const shown = (r: c.ReconstructResult) => (r.ok ? r.bundles.map((b) => b.bundle.contact.email).sort() : []);
+  const shown = (r: c.ReconstructResult) => (r.ok ? r.bundles.map((b) => b.contact?.email).sort() : []);
 
   it('decoy line with a different intercept: rejected in both orders, real reports shown, alert raised', async () => {
     const { priv, real, entry } = await scenario();
@@ -291,6 +291,129 @@ describe('survivor share x (INFO): dedicated HKDF-derived HMAC key, no fixed-IV 
     expect(await c.survivorShareX(k.masterKey, t1)).not.toBe(await c.survivorShareX(k.masterKey, 'b'.repeat(64)));
     const stray = await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
     await expect(c.survivorShareX(stray, t1)).rejects.toThrow(/sign in again/);
+  });
+});
+
+describe('staged release: summary and contact details are sealed apart (W21)', () => {
+  const shares = c.splitOprfKey(c.generateOprfKey().secretKey, 2, 3);
+  const keys = { t: 2, groupPublicKey: c.combineShareKeysForTest(shares).publicKey, holders: shares };
+  const oprf = (canonical: string) => {
+    const bl = c.blindMatchIdentifier(canonical);
+    return c.finalizeThresholdOprf(bl, keys, shares.slice(0, 2).map((sh) => ({ index: sh.index, ...c.oprfBlindEvaluate(sh, bl.blinded) })));
+  };
+  const summary = (incident: string): MatchSummaryBundle => ({
+    v: 2,
+    identifier: { kind: 'phone', canonical: 'phone:+12015550142' },
+    states: { incident, survivor: 'NJ' },
+    methods: ['text'],
+    consent: { statement: 'I agree.', at: '2026-11-11T00:00:00.000Z' },
+  });
+  async function setup() {
+    const mk = (await c.deriveKeys('counselor', c.newKdfSalt(), 1000)).masterKey;
+    const id = await c.generateIdentity(mk);
+    const priv = await c.unwrapPrivateKey(id.wrappedPrivateKey, mk);
+    const counselors = [{ userId: 'c1', publicKey: id.publicKey }];
+    const s = c.derivePerpetratorSecrets(oprf('phone:+12015550142'));
+    const make = async (who: string, name: string, phone: string) => {
+      const x = await c.survivorShareX((await c.deriveKeys(who, c.newKdfSalt(), 1000)).masterKey, s.tag);
+      return c.buildMatchEntry({ secrets: s, x, bundle: summary('NY'), contact: { v: 1, name, phone }, counselors });
+    };
+    return { priv, make, tag: s.tag, counselors };
+  }
+
+  it('without the contact ciphertext only the summary opens; with it, the details open too', async () => {
+    const { priv, make, tag } = await setup();
+    const a = await make('a', 'A', '(555) 010-0100');
+    const b = await make('b', 'B', '(555) 010-0300');
+    expect(a.contactBundle).toBeDefined();
+    // the summary ciphertext holds no contact details at all
+    const stage1 = await c.reconstructMatchGroup(tag, [
+      { entryId: 'a', seal: a.seals[0]!, bundle: a.bundle },
+      { entryId: 'b', seal: b.seals[0]!, bundle: b.bundle },
+    ], priv, 'c1');
+    expect(stage1.ok).toBe(true);
+    if (!stage1.ok) return;
+    expect(stage1.bundles.map((x) => x.contact)).toEqual([undefined, undefined]);
+    expect(stage1.bundles.map((x) => [x.summary.states, x.summary.methods, x.legacyBundle])).toEqual([
+      [{ incident: 'NY', survivor: 'NJ' }, ['text'], false],
+      [{ incident: 'NY', survivor: 'NJ' }, ['text'], false],
+    ]);
+    expect(JSON.stringify(stage1.bundles)).not.toMatch(/010-0/);
+    const stage2 = await c.reconstructMatchGroup(tag, [
+      { entryId: 'a', seal: a.seals[0]!, bundle: a.bundle, contactBundle: a.contactBundle! },
+      { entryId: 'b', seal: b.seals[0]!, bundle: b.bundle, contactBundle: b.contactBundle! },
+    ], priv, 'c1');
+    expect(stage2.ok && stage2.bundles.map((x) => [x.contact?.name, x.contact?.phone])).toEqual([
+      ['A', '(555) 010-0100'],
+      ['B', '(555) 010-0300'],
+    ]);
+  });
+
+  it('a contact ciphertext swapped between entries, or moved from another tag, does not open (AAD and key)', async () => {
+    const { priv, make, tag, counselors } = await setup();
+    const a = await make('a', 'A', '1');
+    const b = await make('b', 'B', '2');
+    // swapped: each entry has its own ke, so B's contact does not open under A's key
+    const swapped = await c.reconstructMatchGroup(tag, [
+      { entryId: 'a', seal: a.seals[0]!, bundle: a.bundle, contactBundle: b.contactBundle! },
+      { entryId: 'b', seal: b.seals[0]!, bundle: b.bundle, contactBundle: a.contactBundle! },
+    ], priv, 'c1');
+    expect(swapped.ok && swapped.bundles.map((x) => [x.contact, x.contactError])).toEqual([
+      [undefined, true],
+      [undefined, true],
+    ]);
+    // the same ke, but the contact ciphertext sealed for another tag: the AAD "contact|tag" no longer matches
+    const other = c.derivePerpetratorSecrets(oprf('phone:+12015550199'));
+    const moved = await c.buildMatchEntry({ secrets: other, x: 7n, bundle: summary('NY'), contact: { v: 1, name: 'X' }, counselors });
+    expect(moved.tag).not.toBe(tag);
+    const r = await c.reconstructMatchGroup(tag, [
+      { entryId: 'a', seal: a.seals[0]!, bundle: a.bundle, contactBundle: moved.contactBundle! },
+      { entryId: 'b', seal: b.seals[0]!, bundle: b.bundle },
+    ], priv, 'c1');
+    expect(r.ok && r.bundles[0]!.contactError).toBe(true);
+    // and the summary ciphertext cannot be passed off as the contact one (different AAD label)
+    const asContact = await c.reconstructMatchGroup(tag, [
+      { entryId: 'a', seal: a.seals[0]!, bundle: a.bundle, contactBundle: a.bundle },
+      { entryId: 'b', seal: b.seals[0]!, bundle: b.bundle },
+    ], priv, 'c1');
+    expect(asContact.ok && asContact.bundles[0]!.contactError).toBe(true);
+  });
+
+  it('a legacy v1 bundle still opens: summarised, with its details flagged legacyBundle', async () => {
+    const { priv, make, tag, counselors } = await setup();
+    const a = await make('a', 'A', '1');
+    const s = c.derivePerpetratorSecrets(oprf('phone:+12015550142'));
+    const x = await c.survivorShareX((await c.deriveKeys('legacy', c.newKdfSalt(), 1000)).masterKey, s.tag);
+    const legacy = await c.buildMatchEntry({
+      secrets: s,
+      x,
+      bundle: {
+        v: 1,
+        identifier: { kind: 'phone', canonical: 'phone:+12015550142' },
+        contact: { name: 'L', methods: ['call'], phone: '9', language: 'es' },
+        consent: { statement: 'ok', at: 'now' },
+        state: 'NJ',
+      },
+      counselors,
+    });
+    const r = await c.reconstructMatchGroup(tag, [
+      { entryId: 'a', seal: a.seals[0]!, bundle: a.bundle },
+      { entryId: 'l', seal: legacy.seals[0]!, bundle: legacy.bundle },
+    ], priv, 'c1');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const l = r.bundles.find((b) => b.entryId === 'l')!;
+    expect(l.legacyBundle).toBe(true);
+    expect(l.summary).toMatchObject({ v: 2, states: { incident: 'NJ' }, methods: ['call'], language: 'es' });
+    expect(l.contact).toEqual({ v: 1, name: 'L', phone: '9' });
+  });
+
+  it('splitContact keeps methods and language in the summary and everything identifying in the details', () => {
+    expect(c.splitContact({ name: 'N', methods: ['text', 'email'], phone: 'p', email: 'e', notes: 'n', language: 'fr' })).toEqual({
+      methods: ['text', 'email'],
+      language: 'fr',
+      details: { v: 1, name: 'N', phone: 'p', email: 'e', notes: 'n' },
+    });
   });
 });
 

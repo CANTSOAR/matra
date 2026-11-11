@@ -25,10 +25,14 @@
  *            HKDF-derived from her passphrase material ("matra/match-x", deriveKeys), so the SAME survivor naming the
  *            SAME person always produces the SAME point (she cannot match herself, exactly like P1's U = H(user id)),
  *            but x differs per perpetrator, so her points are unlinkable across perpetrators (research §4.5).
- *   Entry  : ke  = fresh AES key;     bundle = AES-GCM(ke, pad(MatchContactBundle), AAD = "bundle|" || π)
+ *   Entry  : ke  = fresh AES key;     bundle  = AES-GCM(ke, pad(MatchSummaryBundle),  AAD = "bundle|" || π)
+ *                                       contact = AES-GCM(ke, pad(MatchContactDetails), AAD = "contact|" || π)
  *            ce  = AES-GCM(K_P, ke, AAD = "ce|" || π)
  *            c_j = SealTo(pk_counselor_j, {π, x, y, ce})    (RSA-OAEP-256 + AES-256-GCM hybrid, AAD binds π and j)
- *            Sent to the server: { π, bundle, c_1..c_n, label (hers, under her master key, padded) }.
+ *            Sent to the server: { π, bundle, contact, c_1..c_n, label (hers, under her master key, padded) }.
+ *            Staged release (W21): the summary (identifier, states, contact METHODS) is released with the group; the
+ *            contact ciphertext only after the counselor records a conflict check. That gate is the SERVER's (it
+ *            withholds the ciphertext); cryptographically both open with the same ke.
  *            Counselors j come from the organization-signed roster when the build pins the roster key.
  *   Reveal : the server releases {bundle, c_j} ONLY for tags that have entries from ≥ 2 distinct survivor accounts,
  *            each older than the release delay, and only to counselor j. The counselor opens the seals, tries EVERY
@@ -65,6 +69,9 @@ import type {
   Envelope,
   EscrowEntry,
   MatchContactBundle,
+  MatchContactDetails,
+  MatchContactPreferences,
+  MatchSummaryBundle,
   MatchingConfig,
   MatchStates,
   OprfEvaluateRequest,
@@ -331,20 +338,24 @@ export interface SealedShare {
 export async function buildMatchEntry(args: {
   secrets: PerpetratorSecrets;
   x: bigint;
-  bundle: MatchContactBundle;
+  /** v2 summary (staged release); a v1 MatchContactBundle is still accepted (tests of legacy entries) */
+  bundle: MatchSummaryBundle | MatchContactBundle;
+  /** her contact details, sealed separately under the same entry key (AAD "contact|" + tag) */
+  contact?: MatchContactDetails;
   counselors: Array<{ userId: string; publicKey: JsonWebKey }>;
-}): Promise<Pick<CreateMatchEntryRequest, 'tag' | 'bundle' | 'seals'> & { share: SealedShare }> {
+}): Promise<Pick<CreateMatchEntryRequest, 'tag' | 'bundle' | 'seals'> & { contactBundle?: Envelope; share: SealedShare }> {
   const { secrets, x, bundle, counselors } = args;
   if (!counselors.length) throw new Error('no counselor available to receive matches');
   const tag = secrets.tag;
   const ke = await generateContentKey();
   const bundleEnv = await sealAad(ke, padJson(bundle), `bundle|${tag}`);
+  const contactBundle = args.contact && (await sealAad(ke, padJson(args.contact), `contact|${tag}`));
   const keRaw = new Uint8Array(await subtle.exportKey('raw', ke));
   const ce = await sealAad(await entryKeyFromIntercept(secrets.intercept), keRaw, `ce|${tag}`);
   const share: SealedShare = { v: 2, tag, x: fieldToHex(x), y: fieldToHex(shareY(secrets, x)), ce };
   const seals: CounselorSeal[] = [];
   for (const c of counselors) seals.push(await sealShareToCounselor(share, c));
-  return { tag, bundle: bundleEnv, seals, share };
+  return { tag, bundle: bundleEnv, ...(contactBundle && { contactBundle }), seals, share };
 }
 
 /** SealTo(pk_counselor, {π, x, y, ce}): RSA-OAEP-256 wraps a fresh AES-256-GCM key; AAD binds π and the counselor. */
@@ -358,6 +369,33 @@ export async function sealShareToCounselor(share: SealedShare, counselor: { user
 }
 
 // ═══════════════════════════════ reveal (counselor side) ═══════════════════════════════
+
+/** Stage 1 view of either bundle version (a legacy v1 bundle's single `state` counts as the incident state). */
+export function summaryFromBundle(b: MatchSummaryBundle | MatchContactBundle): MatchSummaryBundle {
+  if (b.v === 2) return b;
+  return {
+    v: 2,
+    identifier: b.identifier,
+    states: b.states ?? (b.state ? { incident: b.state } : {}),
+    methods: b.contact?.methods ?? [],
+    ...(b.contact?.language && { language: b.contact.language }),
+    consent: b.consent,
+  };
+}
+
+function detailsFromLegacy(b: MatchContactBundle): MatchContactDetails {
+  const c = b.contact ?? { methods: [] };
+  return { v: 1, ...(c.name && { name: c.name }), ...(c.phone && { phone: c.phone }), ...(c.email && { email: c.email }), ...(c.notes && { notes: c.notes }) };
+}
+
+/** Split her contact preferences into what the counselor sees first (methods, language) and the details (Stage 1b). */
+export function splitContact(c: MatchContactPreferences): { methods: MatchContactPreferences['methods']; language?: string; details: MatchContactDetails } {
+  return {
+    methods: c.methods,
+    ...(c.language && { language: c.language }),
+    details: { v: 1, ...(c.name && { name: c.name }), ...(c.phone && { phone: c.phone }), ...(c.email && { email: c.email }), ...(c.notes && { notes: c.notes }) },
+  };
+}
 
 /**
  * Open one seal addressed to `counselorId`. The group's tag is part of the AAD, so a seal the server moved from
@@ -387,7 +425,18 @@ export type ReconstructAlert = 'multiple_lines' | 'foreign_line' | 'off_line_sha
 
 export interface ReconstructedBundle {
   entryId: string;
-  bundle: MatchContactBundle;
+  /** the bundle exactly as opened: v2 summary, or a legacy v1 bundle */
+  bundle: MatchSummaryBundle | MatchContactBundle;
+  /** Stage 1, normalised from either version: identifier, states, contact methods, consent */
+  summary: MatchSummaryBundle;
+  /**
+   * Her contact details: from the separate contact ciphertext once the server releases it (after the conflict check),
+   * or, for a legacy v1 bundle, from inside the bundle (then the gate is the counselor UI's only: `legacyBundle`).
+   */
+  contact?: MatchContactDetails;
+  legacyBundle: boolean;
+  /** a contact ciphertext was supplied but did not open under this entry's key and tag (moved or tampered) */
+  contactError?: boolean;
   /** her share's x coordinate (hex) — equal x means the same survivor */
   x: string;
   /** the point lies on the line most entries agree on */
@@ -421,17 +470,17 @@ export type ReconstructResult =
  */
 export async function reconstructMatchGroup(
   tag: string,
-  entries: Array<{ entryId: string; seal: CounselorSeal; bundle: Envelope }>,
+  entries: Array<{ entryId: string; seal: CounselorSeal; bundle: Envelope; contactBundle?: Envelope }>,
   privateKey: CryptoKey,
   counselorId: string,
 ): Promise<ReconstructResult> {
-  const opened: Array<{ entryId: string; x: bigint; y: bigint; ce: Envelope; bundle: Envelope }> = [];
+  const opened: Array<{ entryId: string; x: bigint; y: bigint; ce: Envelope; bundle: Envelope; contactBundle?: Envelope }> = [];
   const failed: string[] = [];
   const alerts = new Set<ReconstructAlert>();
   for (const e of entries) {
     try {
       const s = await openCounselorSeal(e.seal, privateKey, counselorId, tag);
-      opened.push({ entryId: e.entryId, x: hexToField(s.x), y: hexToField(s.y), ce: s.ce, bundle: e.bundle });
+      opened.push({ entryId: e.entryId, x: hexToField(s.x), y: hexToField(s.y), ce: s.ce, bundle: e.bundle, ...(e.contactBundle && { contactBundle: e.contactBundle }) });
     } catch {
       failed.push(e.entryId);
     }
@@ -479,7 +528,20 @@ export async function reconstructMatchGroup(
     try {
       const keRaw = await openCe(key, o);
       const ke = await subtle.importKey('raw', keRaw as BufferSource, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-      const bundle = JSON.parse(dec.decode(await openAad(ke, o.bundle, `bundle|${tag}`))) as MatchContactBundle;
+      const bundle = JSON.parse(dec.decode(await openAad(ke, o.bundle, `bundle|${tag}`))) as MatchSummaryBundle | MatchContactBundle;
+      const summary = summaryFromBundle(bundle);
+      const legacyBundle = bundle.v === 1;
+      let contact: MatchContactDetails | undefined = legacyBundle ? detailsFromLegacy(bundle) : undefined;
+      let contactError = false;
+      if (!legacyBundle && o.contactBundle) {
+        try {
+          contact = JSON.parse(dec.decode(await openAad(ke, o.contactBundle, `contact|${tag}`))) as MatchContactDetails;
+          if (contact.v !== 1) throw new Error('unknown contact version');
+        } catch {
+          contact = undefined;
+          contactError = true;
+        }
+      }
       if (seenX.has(o.x)) {
         duplicates.push(o.entryId);
         alerts.add('duplicate_share');
@@ -488,12 +550,12 @@ export async function reconstructMatchGroup(
       seenX.add(o.x);
       const onLine = onLineOf(main, o);
       if (!onLine) alerts.add('off_line_share');
-      bundles.push({ entryId: o.entryId, bundle, x: fieldToHex(o.x), onLine });
+      bundles.push({ entryId: o.entryId, bundle, summary, ...(contact && { contact }), legacyBundle, ...(contactError && { contactError }), x: fieldToHex(o.x), onLine });
     } catch {
       failed.push(o.entryId);
     }
   }
-  const canonicals = [...new Set(bundles.map((b) => b.bundle.identifier?.canonical ?? ''))];
+  const canonicals = [...new Set(bundles.map((b) => b.summary.identifier?.canonical ?? ''))];
   if (canonicals.length > 1) alerts.add('identifier_mismatch');
   return { ok: true, tag, bundles, people: bundles.length, failed, duplicates, canonicals, alerts: [...alerts] };
 }
@@ -773,15 +835,17 @@ export async function submitMatchEntry(
   const y = await evaluateMatchOprf(t, keys, b);
   const secrets = derivePerpetratorSecrets(y);
   const x = await survivorShareX(args.masterKey, secrets.tag);
-  const bundle: MatchContactBundle = {
-    v: 1,
+  // Staged release: the summary goes with the group; the details only after the counselor's conflict check (server gate).
+  const { methods, language, details } = splitContact(args.contact);
+  const bundle: MatchSummaryBundle = {
+    v: 2,
     identifier: { kind: args.identifier.kind, canonical: args.identifier.canonical },
-    contact: args.contact,
+    states,
+    methods,
+    ...(language && { language }),
     consent: { statement: args.consentStatement, at: new Date().toISOString() },
-    ...((states.incident ?? states.survivor) && { state: states.incident ?? states.survivor }),
-    ...((states.incident || states.survivor) && { states }),
   };
-  const built = await buildMatchEntry({ secrets, x, bundle, counselors });
+  const built = await buildMatchEntry({ secrets, x, bundle, contact: details, counselors });
   const label: MatchLabel = {
     v: 2,
     label: args.label,
@@ -799,6 +863,7 @@ export async function submitMatchEntry(
   const { entry } = await t.createEntry({
     tag: built.tag,
     bundle: built.bundle,
+    contactBundle: built.contactBundle!,
     seals: built.seals,
     labelEnvelope: await encryptLabel(label, args.masterKey),
     ...(args.replacesEntryId && { replacesEntryId: args.replacesEntryId }),
