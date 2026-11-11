@@ -3,7 +3,7 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "version": "0.1.0",
-  "description": "Matra \u2014 One-Touch Justice Pipeline (MVP)",
+  "description": "Matra — One-Touch Justice Pipeline (MVP)",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -19,6 +19,11 @@
     "seed": "npm run seed -w @matra/server",
     "demo": "node scripts/demo.mjs",
     "demo:reset": "node scripts/demo-reset.mjs",
+    "stack:init": "node scripts/stack-init.mjs",
+    "stack:up": "docker compose --env-file .stack/stack.env build app && docker compose --env-file .stack/stack.env up -d && echo \"Matra: http://localhost:8080  (Server view: /inspector)\"",
+    "stack:down": "docker compose --env-file .stack/stack.env down",
+    "stack:logs": "docker compose --env-file .stack/stack.env logs -f",
+    "stack:reset": "docker compose --env-file .stack/stack.env down -v; node scripts/stack-init.mjs && npm run stack:up",
     "e2e": "playwright test && playwright test -c playwright.demo.config.ts",
     "e2e:demo": "playwright test -c playwright.demo.config.ts",
     "e2e:prod": "playwright test -c playwright.prod.config.ts",

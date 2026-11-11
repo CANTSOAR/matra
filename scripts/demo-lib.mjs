@@ -12,6 +12,7 @@
  * 0600, plus public.json with the pins). Everything in it is throwaway demo material for FICTIONAL data.
  */
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -177,6 +178,31 @@ export function run(cmd, args, env = process.env) {
     child.stdout.on('data', (d) => (out += d));
     child.on('exit', (code) => (code === 0 ? resolve(out) : reject(new Error(`${path.basename(cmd)} ${args.join(' ')} exited ${code}`))));
   });
+}
+
+/**
+ * Generate every demo secret into `dir` (shared by demo:reset and stack:init) and return the public pins: a 2-of-3 OPRF
+ * dealer ceremony (one share file per key holder) and the holder-token key; the server pepper; the phone-token HMAC key;
+ * the matcher key and its app-server token; the SIMULATED attestation "platform" key; the demo organization's
+ * counselor-roster signing key; and the measurement of the matcher code as it is now.
+ */
+export async function generateKeys(dir, env) {
+  const ceremony = JSON.parse(
+    await run(TSX, ['apps/server/src/oprf-ceremony.ts', '--threshold', String(THRESHOLD), '--holders', String(HOLDERS.length), '--out', dir, '--force', '--token-key'], env),
+  );
+  const secret = (f) => fs.writeFileSync(path.join(dir, f), randomBytes(32).toString('hex'), { mode: 0o600 });
+  for (const f of ['pepper.key', 'phone-hash.key', 'matcher.key', 'matcher-token.key', 'attestation-platform.key']) secret(f);
+  // The demo organization's roster key (sign-roster --generate): the secret is given only to the seed, which signs the roster.
+  const roster = await run(TSX, ['apps/server/src/sign-roster.ts', '--generate'], env);
+  const rosterSecret = /secret[^:]*:\s*([0-9a-f]{64})/.exec(roster)?.[1];
+  const rosterPublicKey = /public[^:]*:\s*(\S+)/.exec(roster)?.[1];
+  if (!rosterSecret || !rosterPublicKey) throw new Error('could not read the generated roster key');
+  fs.writeFileSync(path.join(dir, 'roster-signing.key'), rosterSecret, { mode: 0o600 });
+  const platformPublicKey = (
+    await run(TSX, ['apps/matcher/src/measure-cli.ts', '--platform-pubkey'], { ...env, MATRA_ATTESTATION_PLATFORM_KEY_FILE: path.join(dir, 'attestation-platform.key') })
+  ).trim();
+  const measurement = (await run(TSX, ['apps/matcher/src/measure-cli.ts'], env)).trim();
+  return { ...ceremony, rosterPublicKey, platformPublicKey, measurement, createdAt: new Date().toISOString() };
 }
 
 /** Start the three key holders and the matcher, and wait until they answer. */

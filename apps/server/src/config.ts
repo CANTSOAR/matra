@@ -217,7 +217,7 @@ export function loadOprfThreshold(env: Env = process.env): OprfThresholdSettings
     for (const u of urls) if (!/^https?:\/\//.test(u)) throw new Error(`MATRA_OPRF_HOLDER_URLS: not an http(s) URL: ${u}`);
     // Holder tokens are bearer credentials (bound to one blinded element, 60 s): on plain http an on-path attacker could
     // capture one and spend a survivor's quota. Production only allows http:// to a loopback address.
-    if (production && urls.some((u) => u.startsWith('http://') && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(u)))
+    if (production && urls.some((u) => !plainHttpAllowed(u, env)))
       throw new Error('MATRA_OPRF_HOLDER_URLS: plain http:// to a non-loopback host is refused in production. Use https between institutions.');
     groupKeyFromShares(publicKeys.map((pk, i) => ({ index: i + 1, publicKey: fromBase64(pk) })), t); // throws if inconsistent
     const tokenKey = loadSecretBytes('MATRA_HOLDER_TOKEN_KEY', { env, devFile: path.join(DATA_DIR, 'holder-token.key'), label: 'the holder-token signing key', required });
@@ -347,6 +347,18 @@ export function loadOprfLimits(env: Env = process.env): { perDay: number; lifeti
 // ───────────── demo mode and mock providers (docs/design/WEEKEND_MVP.md §1.2) ─────────────
 
 /** MATRA_DEMO_MODE=1: a fictional-data demo. Allows mock/simulated providers in production and forces the DEMO banner. */
+/**
+ * Whether a URL to another Matra service may be used in production: https always; plain http:// only to loopback, or,
+ * in a fictional-data demo (MATRA_DEMO_MODE=1) that also sets MATRA_DEMO_PRIVATE_NETWORK=1, to any host: the
+ * single-machine Docker Compose stack, where the services talk over a private bridge network (compose.yaml). Between
+ * institutions it is always https.
+ */
+export function plainHttpAllowed(url: string, env: Env = process.env): boolean {
+  if (!url.startsWith('http://')) return true;
+  if (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url)) return true;
+  return loadDemoMode(env) && env.MATRA_DEMO_PRIVATE_NETWORK === '1';
+}
+
 export function loadDemoMode(env: Env = process.env): boolean {
   return env.MATRA_DEMO_MODE === '1';
 }
@@ -476,7 +488,7 @@ export function loadMatcherConfig(env: Env = process.env, o: { releaseDelayHours
   const url = env.MATRA_MATCHER_URL?.trim();
   if (url) {
     if (!/^https?:\/\//.test(url)) throw new Error(`MATRA_MATCHER_URL: not an http(s) URL: ${url}`);
-    if (production && url.startsWith('http://') && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url))
+    if (production && !plainHttpAllowed(url, env))
       throw new Error('MATRA_MATCHER_URL: plain http:// to a non-loopback host is refused in production.');
     if (production && (!platformKey || !measurement))
       throw new Error('MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT must be set in production: the app server verifies the matcher before forwarding anything.');

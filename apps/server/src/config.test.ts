@@ -103,6 +103,10 @@ describe('threshold OPRF shares in production (M3, W14)', () => {
     expect(() => loadOprfThreshold({ ...env, MATRA_OPRF_HOLDER_URLS: plain })).toThrow(/plain http:\/\/ to a non-loopback host/);
     expect(loadOprfThreshold({ ...env, MATRA_OPRF_HOLDER_URLS: 'http://127.0.0.1:4311,http://localhost:4312,https://h3.example.org' }).mode).toBe('remote');
     expect(loadOprfThreshold({ ...env, NODE_ENV: 'development', MATRA_OPRF_HOLDER_URLS: plain }).mode).toBe('remote');
+    // the Compose demo's private network: only a fictional-data demo that opts in, never on the flag alone
+    expect(() => loadOprfThreshold({ ...env, MATRA_OPRF_HOLDER_URLS: plain, MATRA_DEMO_PRIVATE_NETWORK: '1' })).toThrow(/non-loopback/);
+    expect(() => loadOprfThreshold({ ...env, MATRA_OPRF_HOLDER_URLS: plain, MATRA_DEMO_MODE: '1' })).toThrow(/non-loopback/);
+    expect(loadOprfThreshold({ ...env, MATRA_OPRF_HOLDER_URLS: plain, MATRA_DEMO_MODE: '1', MATRA_DEMO_PRIVATE_NETWORK: '1' }).mode).toBe('remote');
   });
 
   it('a standalone holder needs its share and the pinned token public key in production', () => {

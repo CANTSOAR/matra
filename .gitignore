@@ -40,3 +40,6 @@ apps/matcher/data
 
 # Demo stack (npm run demo / demo:reset): throwaway demo keys and databases, fictional data
 .demo/
+
+# Docker Compose demo stack: generated keys and pins (npm run stack:init)
+.stack/

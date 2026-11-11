@@ -1,0 +1,146 @@
+# Matra as five separate services on one machine: FICTIONAL-DATA DEMO (docs/ops/MULTI_PARTY_DEPLOY.md).
+#
+#   npm run stack:init     keys + pins into .stack/ (run once, or again to rotate everything)
+#   npm run stack:up       build the image, start everything, seed the fictional accounts once
+#   open http://localhost:8080          (Server view: http://localhost:8080/inspector)
+#   npm run stack:down     stop (data kept)  ·  npm run stack:reset  stop, delete volumes and keys, init again
+#
+# One image, five roles. Only the app server is published to the host; the key holders and the matcher are reachable
+# only from inside the private `matra` network, and each container mounts only its own secrets. Each service keeps its
+# own database in its own volume, as it would at a separate institution. Between real institutions the services talk
+# https, never plain http (MATRA_DEMO_PRIVATE_NETWORK is accepted only together with MATRA_DEMO_MODE=1).
+
+x-image: &image
+  image: matra:stack
+  build:
+    context: .
+    args:
+      MATRA_DEMO_MODE: "1"
+      MATRA_OPRF_THRESHOLD: ${MATRA_OPRF_THRESHOLD:?run npm run stack:init first}
+      MATRA_OPRF_GROUP_PUBKEY: ${MATRA_OPRF_GROUP_PUBKEY}
+      MATRA_OPRF_SHARE_PUBKEYS: ${MATRA_OPRF_SHARE_PUBKEYS}
+      MATRA_COUNSELOR_ROSTER_PUBKEY: ${MATRA_COUNSELOR_ROSTER_PUBKEY}
+      MATRA_ATTESTATION_PLATFORM_PUBKEY: ${MATRA_ATTESTATION_PLATFORM_PUBKEY}
+      MATRA_MATCHER_MEASUREMENT: ${MATRA_MATCHER_MEASUREMENT}
+  networks: [matra]
+  restart: unless-stopped
+
+x-demo-env: &demo-env
+  NODE_ENV: production
+  MATRA_DEMO_MODE: "1"
+  MATRA_INSPECTOR: "1"
+  PORT: "8080"
+
+x-holder: &holder
+  <<: *image
+  command: ["node", "--import", "tsx", "apps/server/src/holder-server.ts"]
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval: 5s
+    retries: 30
+
+# The app server's configuration, shared with the one-shot seed.
+x-app-env: &app-env
+  <<: *demo-env
+  MATRA_DEMO_PRIVATE_NETWORK: "1"
+  MATRA_DEMO_BANNER: "1"
+  MATRA_MATCH_RELEASE_DELAY_HOURS: "0"
+  MATRA_DB_PATH: /data/.demo/matra.db
+  MATRA_OPRF_THRESHOLD: ${MATRA_OPRF_THRESHOLD}
+  MATRA_OPRF_HOLDERS: ${MATRA_OPRF_HOLDERS}
+  MATRA_OPRF_GROUP_PUBKEY: ${MATRA_OPRF_GROUP_PUBKEY}
+  MATRA_OPRF_SHARE_PUBKEYS: ${MATRA_OPRF_SHARE_PUBKEYS}
+  MATRA_OPRF_HOLDER_URLS: http://holder1:8080,http://holder2:8080,http://holder3:8080
+  MATRA_HOLDER_TOKEN_KEY_FILE: /run/secrets/holder-token
+  MATRA_MATCHER_URL: http://matcher:8080
+  MATRA_MATCHER_TOKEN_FILE: /run/secrets/matcher-token
+  MATRA_COUNSELOR_ROSTER_PUBKEY: ${MATRA_COUNSELOR_ROSTER_PUBKEY}
+  MATRA_ATTESTATION_PLATFORM_PUBKEY: ${MATRA_ATTESTATION_PLATFORM_PUBKEY}
+  MATRA_MATCHER_MEASUREMENT: ${MATRA_MATCHER_MEASUREMENT}
+  MATRA_SMS_PROVIDER: mock
+  MATRA_PHONE_HASH_KEY_FILE: /run/secrets/phone-hash
+
+services:
+  holder1:
+    <<: *holder
+    environment: { <<: *demo-env, MATRA_HOLDER_INDEX: "1", MATRA_OPRF_SHARE_FILE: /run/secrets/oprf-share-1, MATRA_HOLDER_TOKEN_PUBKEY: "${MATRA_HOLDER_TOKEN_PUBKEY}", MATRA_HOLDER_DB_PATH: /data/holder.db }
+    secrets: [oprf-share-1]
+    volumes: [holder1-data:/data]
+  holder2:
+    <<: *holder
+    environment: { <<: *demo-env, MATRA_HOLDER_INDEX: "2", MATRA_OPRF_SHARE_FILE: /run/secrets/oprf-share-2, MATRA_HOLDER_TOKEN_PUBKEY: "${MATRA_HOLDER_TOKEN_PUBKEY}", MATRA_HOLDER_DB_PATH: /data/holder.db }
+    secrets: [oprf-share-2]
+    volumes: [holder2-data:/data]
+  holder3:
+    <<: *holder
+    environment: { <<: *demo-env, MATRA_HOLDER_INDEX: "3", MATRA_OPRF_SHARE_FILE: /run/secrets/oprf-share-3, MATRA_HOLDER_TOKEN_PUBKEY: "${MATRA_HOLDER_TOKEN_PUBKEY}", MATRA_HOLDER_DB_PATH: /data/holder.db }
+    secrets: [oprf-share-3]
+    volumes: [holder3-data:/data]
+
+  matcher:
+    <<: *image
+    command: ["node", "--import", "tsx", "apps/matcher/src/server.ts"]
+    environment:
+      <<: *demo-env
+      MATRA_MATCHER_KEY_FILE: /run/secrets/matcher-key
+      MATRA_MATCHER_TOKEN_FILE: /run/secrets/matcher-token
+      MATRA_ATTESTATION_PLATFORM_KEY_FILE: /run/secrets/attestation-platform
+      MATRA_MATCHER_DB_PATH: /data/matcher.db
+      MATRA_COUNSELOR_ROSTER_PUBKEY: ${MATRA_COUNSELOR_ROSTER_PUBKEY}
+    secrets: [matcher-key, matcher-token, attestation-platform]
+    volumes: [matcher-data:/data]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      retries: 30
+
+  # One-shot: registers the fictional accounts through the real API code, once per app volume.
+  seed:
+    <<: *image
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - >-
+        if [ -f /data/.demo/seeded ]; then echo "already seeded"; exit 0; fi;
+        MATRA_PEPPER=$$(cat /run/secrets/pepper) node --import tsx apps/server/src/demo-seed.ts && touch /data/.demo/seeded
+    environment: { <<: *app-env, MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE: /run/secrets/roster-signing }
+    secrets: [pepper, holder-token, matcher-token, phone-hash, roster-signing]
+    volumes: [app-data:/data]
+    depends_on:
+      holder1: { condition: service_healthy }
+      holder2: { condition: service_healthy }
+      holder3: { condition: service_healthy }
+      matcher: { condition: service_healthy }
+
+  app:
+    <<: *image
+    command: ["sh", "-c", "MATRA_PEPPER=$$(cat /run/secrets/pepper) exec node --import tsx apps/server/src/index.ts"]
+    environment: *app-env
+    secrets: [pepper, holder-token, matcher-token, phone-hash]
+    volumes: [app-data:/data]
+    ports: ["8080:8080"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+
+secrets:
+  oprf-share-1: { file: .stack/keys/oprf-share-1.key }
+  oprf-share-2: { file: .stack/keys/oprf-share-2.key }
+  oprf-share-3: { file: .stack/keys/oprf-share-3.key }
+  holder-token: { file: .stack/keys/holder-token.key }
+  pepper: { file: .stack/keys/pepper.key }
+  phone-hash: { file: .stack/keys/phone-hash.key }
+  matcher-key: { file: .stack/keys/matcher.key }
+  matcher-token: { file: .stack/keys/matcher-token.key }
+  attestation-platform: { file: .stack/keys/attestation-platform.key }
+  roster-signing: { file: .stack/keys/roster-signing.key }
+
+volumes:
+  holder1-data:
+  holder2-data:
+  holder3-data:
+  matcher-data:
+  app-data:
+
+networks:
+  matra:

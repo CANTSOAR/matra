@@ -50,7 +50,9 @@ ENV MATRA_OPRF_THRESHOLD=$MATRA_OPRF_THRESHOLD \
     MATRA_ATTESTATION_PLATFORM_PUBKEY=$MATRA_ATTESTATION_PLATFORM_PUBKEY \
     MATRA_MATCHER_MEASUREMENT=$MATRA_MATCHER_MEASUREMENT \
     MATRA_DEMO_MODE=$MATRA_DEMO_MODE
-RUN npm run build && npm prune --omit=dev --no-audit --no-fund
+RUN npm run build && npm prune --omit=dev --no-audit --no-fund \
+# the speech model runs in her browser (bundled into apps/web/dist above); no server process imports these (~470 MB)
+ && rm -rf node_modules/@huggingface node_modules/onnxruntime-node node_modules/onnxruntime-web node_modules/onnxruntime-common node_modules/sharp node_modules/@img
 
 # ── runtime: non-root, only what the server needs ──
 FROM node:22-slim
@@ -67,7 +69,8 @@ COPY --from=build /app/apps/matcher apps/matcher
 COPY --from=build /app/apps/web/package.json apps/web/package.json
 COPY --from=build /app/apps/web/dist apps/web/dist
 # (.dockerignore already keeps both data directories out; this is a second guard against a developer's dev keys)
-RUN rm -rf apps/server/data apps/matcher/data && mkdir -p apps/server/data && chown -R node:node apps/server/data
+RUN rm -rf apps/server/data apps/matcher/data && mkdir -p apps/server/data /data/.demo && chown -R node:node apps/server/data /data
+# (/data: one volume per service in the Compose stack, compose.yaml)
 USER node
 VOLUME ["/app/apps/server/data"]
 EXPOSE 8080
