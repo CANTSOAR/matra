@@ -1,8 +1,9 @@
 /**
  * Legal Options Counselor portal (Callisto's "LOC" role, carried forward).
  *
- * The server releases ONLY matched groups (≥ 2 distinct survivors named the same unique identifier), and only the
- * seals addressed to this counselor. Everything is opened here, on the counselor's device, with the counselor's
+ * The server releases ONLY matched groups (≥ 2 distinct survivors named the same unique identifier) that the matcher
+ * assigned to THIS counselor (by state: licensed where it happened, else where a survivor lives; apps/matcher), and only
+ * the seals addressed to her. The matcher's reason is shown in plain words (assignmentWords). Everything is opened here, on the counselor's device, with the counselor's
  * private key: the two shares are interpolated to recover the per-perpetrator key, which opens each survivor's
  * contact bundle (packages/crypto/src/matching.ts, reconstructMatchGroup). Outreach notes are encrypted under the
  * counselor's own master key before they are saved.
@@ -12,7 +13,26 @@ import { decryptJSON, encryptJSON, publicKeyFingerprint, reconstructMatchGroup, 
 import type { CounselorMatchGroup, CounselorNote, MatchContactBundle } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
+import { US_STATES } from '../intake/script';
 export { CounselorGate, CounselorSignIn, RequireCounselor } from './guards';
+
+const stateName = (code: string) => US_STATES.find((s) => s.value === code)?.label ?? code;
+
+/**
+ * The matcher's reason, in plain words: `incident_state:NJ`, `survivor_state:NY`, either prefixed `reassigned:` (the
+ * counselor first assigned declined or left the roster).
+ */
+export function assignmentWords(reason: string): string {
+  const reassigned = reason.startsWith('reassigned:');
+  const [kind, code] = reason.replace(/^reassigned:/, '').split(':');
+  const where =
+    kind === 'incident_state'
+      ? `this happened in ${stateName(code ?? '')}, where you’re licensed`
+      : kind === 'survivor_state'
+        ? `someone in this group lives in ${stateName(code ?? '')}, where you’re licensed (no counselor licensed where it happened was available)`
+        : 'of how the matcher routed it';
+  return `${reassigned ? 'Reassigned' : 'Assigned'} to you because ${where}.${reassigned ? ' The counselor it went to first could not take it.' : ''}`;
+}
 
 export function EthicsBanner() {
   return (
@@ -118,6 +138,11 @@ function MatchGroup({ group, index, onNote }: { group: CounselorMatchGroup; inde
         Matched {formatDate(group.matchedAt)}
         {first && <> · on {first.kind === 'social' ? 'a social media profile' : first.kind === 'phone' ? 'a phone number' : 'an email address'}</>}
       </p>
+      {group.assignment && (
+        <p className="small" style={{ margin: 0 }} data-testid="counselor-assignment">
+          {assignmentWords(group.assignment.reason)} Only you were given this group.
+        </p>
+      )}
       {sig && (sig.accountsCreatedClose || sig.newAccountEntries > 0) && (
         <div className="card warn small" data-testid="counselor-sybil-signals">
           <strong>Check carefully:</strong>{' '}
@@ -277,7 +302,19 @@ function SurvivorCard(props: { n: number; onLine: boolean; groupId: string; entr
             <dd>{b.contact.language}</dd>
           </div>
         )}
-        {b.state && (
+        {b.states?.incident && (
+          <div>
+            <dt>Where it happened</dt>
+            <dd>{stateName(b.states.incident)}</dd>
+          </div>
+        )}
+        {b.states?.survivor && (
+          <div>
+            <dt>Where they live</dt>
+            <dd>{stateName(b.states.survivor)}</dd>
+          </div>
+        )}
+        {!b.states && b.state && (
           <div>
             <dt>State</dt>
             <dd>{b.state}</dd>

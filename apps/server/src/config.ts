@@ -16,6 +16,7 @@ import {
 import { holderTokenPublicKeyFromSeed, type RemoteHolderConfig } from './holders.js';
 import { DEFAULT_HOLDER_DAILY_BUDGET } from './holder.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, TwilioVerifySmsVerifier, type PhoneSendLimits, type SmsVerifier } from './sms.js';
+import { HttpMatcher, InProcessMatcher, type MatcherClient, type MatcherPins } from './matcher-client.js';
 
 /** apps/server/data */
 export const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -444,4 +445,62 @@ export function loadPhoneVerification(env: Env = process.env): PhoneVerification
     allowedCountryCodes,
     sendLimits,
   };
+}
+
+/** apps/matcher/data: where a development matcher process keeps its generated token (read here so dev works as-is). */
+const MATCHER_DEV_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'matcher', 'data');
+
+/**
+ * The matcher service (src/matcher-client.ts, apps/matcher; W15, W18):
+ *   MATRA_MATCHER_URL                  a separate matcher process; with MATRA_MATCHER_TOKEN / _FILE (≥ 32 chars; dev:
+ *                                      read from apps/matcher/data/matcher-token.key, which the dev matcher writes).
+ *                                      Production refuses plain http:// to a non-loopback host.
+ *   (unset)                            in-process matcher with SIMULATED attestation: development, tests, single-host demo.
+ *                                      Production refuses it unless MATRA_DEMO_MODE=1. Its keys: MATRA_MATCHER_KEY,
+ *                                      MATRA_ATTESTATION_PLATFORM_KEY (each value or _FILE; dev: generated into
+ *                                      apps/server/data). Its DB: MATRA_MATCHER_DB_PATH (default in memory; every entry is
+ *                                      re-sent at startup).
+ *   MATRA_ATTESTATION_PLATFORM_PUBKEY  pins: the platform key (base64) and the matcher build measurement (hex) this
+ *   MATRA_MATCHER_MEASUREMENT          server verifies before forwarding anything. Production with a separate matcher
+ *                                      requires both. A simulated attestation is accepted only unpinned (development)
+ *                                      or with MATRA_DEMO_MODE=1.
+ */
+export function loadMatcherConfig(env: Env = process.env, o: { releaseDelayHours: number }): { client: MatcherClient; pins: MatcherPins; description: string } {
+  const production = isProduction(env);
+  const demo = loadDemoMode(env);
+  const platformKey = env.MATRA_ATTESTATION_PLATFORM_PUBKEY?.trim() || undefined;
+  const measurement = env.MATRA_MATCHER_MEASUREMENT?.trim().toLowerCase() || undefined;
+  if (measurement && !/^[0-9a-f]{64}$/.test(measurement)) throw new Error('MATRA_MATCHER_MEASUREMENT must be 64 hex characters (npm run -w @matra/matcher measure)');
+  if (platformKey && fromBase64(platformKey).length !== 32) throw new Error('MATRA_ATTESTATION_PLATFORM_PUBKEY must be a base64 32-byte Ed25519 public key');
+  const pins: MatcherPins = { platformKey, measurement, allowSimulated: (!platformKey && !measurement) || demo };
+  const url = env.MATRA_MATCHER_URL?.trim();
+  if (url) {
+    if (!/^https?:\/\//.test(url)) throw new Error(`MATRA_MATCHER_URL: not an http(s) URL: ${url}`);
+    if (production && url.startsWith('http://') && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url))
+      throw new Error('MATRA_MATCHER_URL: plain http:// to a non-loopback host is refused in production.');
+    if (production && (!platformKey || !measurement))
+      throw new Error('MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT must be set in production: the app server verifies the matcher before forwarding anything.');
+    let token = env.MATRA_MATCHER_TOKEN?.trim();
+    const file = env.MATRA_MATCHER_TOKEN_FILE || (!production ? path.join(MATCHER_DEV_DIR, 'matcher-token.key') : undefined);
+    if (!token && file && fs.existsSync(file)) token = fs.readFileSync(file, 'utf8').trim();
+    if (!token || token.length < 32)
+      throw new Error('MATRA_MATCHER_TOKEN (or MATRA_MATCHER_TOKEN_FILE), at least 32 characters, must be set to use MATRA_MATCHER_URL (start the dev matcher once to generate one).');
+    return { client: new HttpMatcher({ url, token }), pins, description: `separate matcher at ${url}` };
+  }
+  assertMockAllowed('matcher attestation (simulated)', env);
+  const key = loadSecretBytes('MATRA_MATCHER_KEY', { env, devFile: path.join(DATA_DIR, 'matcher.key'), label: 'the matcher key' });
+  const platformSecretKey = loadSecretBytes('MATRA_ATTESTATION_PLATFORM_KEY', {
+    env,
+    devFile: path.join(DATA_DIR, 'attestation-platform.key'),
+    label: 'the simulated attestation platform key',
+  });
+  const rosterKey = env.MATRA_COUNSELOR_ROSTER_PUBKEY?.trim() ? fromBase64(env.MATRA_COUNSELOR_ROSTER_PUBKEY.trim()) : undefined;
+  const client = new InProcessMatcher({
+    key,
+    platformSecretKey,
+    dbPath: env.MATRA_MATCHER_DB_PATH || ':memory:',
+    releaseDelayMs: o.releaseDelayHours * 3_600_000,
+    rosterKey,
+  });
+  return { client, pins, description: 'in-process matcher, SIMULATED attestation (no separation from this server)' };
 }

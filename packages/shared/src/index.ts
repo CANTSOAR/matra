@@ -425,8 +425,16 @@ export interface MatchContactBundle {
   contact: MatchContactPreferences;
   /** the exact explanation she agreed to, and when */
   consent: { statement: string; at: string };
-  /** USPS state of the incident or residence, if she gave one (assignment data for routing) */
+  /** USPS state of the incident or residence, if she gave one. Kept for bundles sealed before `states` existed. */
   state?: string;
+  /** USPS states she gave: where it happened and where she lives (also sealed to the matcher for routing). */
+  states?: MatchStates;
+}
+
+/** The two states routing uses (matcher-service): a counselor licensed in the incident state, else in hers. */
+export interface MatchStates {
+  incident?: string;
+  survivor?: string;
 }
 
 /** Hybrid RSA-OAEP-256 + AES-256-GCM ciphertext addressed to one counselor. */
@@ -479,10 +487,64 @@ export interface SignedCounselorRoster {
   signature: string;
 }
 
+/**
+ * v2 adds each counselor's licensed states (USPS codes), which the matcher uses to assign a group to ONE counselor.
+ * A v1 roster still verifies, but lists nobody as licensed anywhere, so the matcher assigns nothing (re-sign it).
+ */
 export interface CounselorRosterPayload {
-  v: 1;
+  v: 1 | 2;
   issuedAt: string;
-  counselors: Array<{ userId: string; publicKey: { kty: 'RSA'; n: string; e: string } }>;
+  counselors: Array<{ userId: string; publicKey: { kty: 'RSA'; n: string; e: string }; licensedStates?: string[] }>;
+}
+
+// ── matcher service ──
+/**
+ * Routing data for one entry, sealed by her client to the matcher's attested key (packages/crypto attestation.ts).
+ * The app server stores and forwards it but cannot open it. States are USPS codes.
+ */
+export interface MatchRoutingTag {
+  v: 1;
+  tag: string;
+  incidentState?: string;
+  survivorState?: string;
+}
+/** ECIES (ephemeral ECDH P-256 + HKDF-SHA256 + AES-256-GCM, AAD = "routing|" + tag) ciphertext of a MatchRoutingTag. */
+export interface RoutingEnvelope {
+  v: 1;
+  /** ephemeral P-256 public key (JWK: kty, crv, x, y) */
+  epk: JsonWebKey;
+  iv: string;
+  ct: string;
+}
+/**
+ * What the matcher's platform says about it. `payload` is canonical JSON of AttestationPayload; `signature` is base64
+ * Ed25519 by the PLATFORM key over "matra/attestation/v1|" + payload. platform 'simulated' is a local stand-in signed
+ * by a dev key: it is NOT hardware attestation (docs/threat-model.md W18).
+ */
+export interface AttestationDocument {
+  payload: string;
+  signature: string;
+}
+export interface AttestationPayload {
+  v: 1;
+  platform: 'simulated' | 'nitro' | 'confidential-space';
+  /** hex SHA-256 of the matcher build (apps/matcher `npm run measure`) */
+  measurement: string;
+  /** the matcher's static P-256 key that routing tags are sealed to (JWK: kty, crv, x, y) */
+  encKey: JsonWebKey;
+  /** base64 Ed25519 public key the matcher signs with (reserved: signed assignments) */
+  signKey: string;
+  /** 64 hex chars, chosen by the verifier */
+  nonce: string;
+  issuedAt: string;
+}
+/**
+ * Why a group went to its counselor, from the matcher: `incident_state:NJ`, `survivor_state:NY`, either prefixed
+ * `reassigned:` after a decline or a roster change.
+ */
+export interface MatchAssignmentInfo {
+  reason: string;
+  assignedAt: string;
 }
 
 // ── phone verification ──
@@ -520,6 +582,8 @@ export interface CreateMatchEntryRequest {
   seals: CounselorSeal[];
   /** Re-seal after a key rotation: her older entry with this id is deleted in the same transaction. */
   replacesEntryId?: string;
+  /** Her routing tag (incident and home state) sealed to the matcher's attested key. Only the matcher can open it. */
+  routing: RoutingEnvelope;
 }
 
 /** A matched group as released to ONE counselor: only seals addressed to that counselor, never user ids. */
@@ -535,6 +599,8 @@ export interface CounselorMatchGroup {
    * within 24 hours of each other, and how many entries were sealed less than 7 days after their account was created.
    */
   signals: { accountsCreatedClose: boolean; newAccountEntries: number };
+  /** Why the matcher assigned this group to this counselor (matcher-service). */
+  assignment?: MatchAssignmentInfo;
 }
 
 /** Outreach note, encrypted client-side under the counselor's own master key. */
@@ -640,6 +706,8 @@ export interface ApiError { error: string; code?: string }
  POST   /api/matching/oprf/:index OprfEvaluateRequest -> OprfEvaluateResponse (verified-adult survivor; account quota charged once per distinct blinded element, plus a per-holder quota;
                                                          503 holder_unavailable when holder i is down;
                                                          403 phone_not_verified until she has confirmed a phone)
+ GET    /api/matching/attestation?nonce=<64 hex>      -> AttestationDocument (public; proxied from the matcher service; her
+                                                         client verifies it before sealing routing data to its key)
  GET    /api/matching/verification                    -> PhoneVerificationStatus (survivor)
  POST   /api/matching/verification/start PhoneVerificationStartRequest -> PhoneVerificationStartResponse (adult survivor;
                                                          400 phone_invalid | phone_not_supported · 429 rate_limited · 503 sms_unavailable)
@@ -650,7 +718,8 @@ export interface ApiError { error: string; code?: string }
  GET    /api/matching/entries                         -> { entries: EscrowEntry[] }
  DELETE /api/matching/entries/:id                     -> { ok: true }  (withdraw: deletes her entry)
 
- GET    /api/counselor/groups                         -> { groups: CounselorMatchGroup[] }  (verified counselor; matched groups only)
+ GET    /api/counselor/groups                         -> { groups: CounselorMatchGroup[] }  (verified counselor; only the groups the
+                                                         matcher assigned to HER, each with its assignment reason)
  POST   /api/counselor/groups/:id/notes { entryId?, envelope } -> { note: CounselorNote }
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)

@@ -205,6 +205,9 @@ describe('threshold OPRF: client orchestration (matching.ts)', () => {
     createEntry: async () => {
       throw new Error('not reached');
     },
+    attestation: async () => {
+      throw new Error('not reached');
+    },
   });
 
   it('pins that differ from the served key set, or a served set that is inconsistent, are refused', () => {

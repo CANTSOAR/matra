@@ -1,5 +1,5 @@
 /**
- * Admin CLI: sign the current list of verified Legal Options Counselors (with their RSA public keys) with the
+ * Admin CLI: sign the current list of verified Legal Options Counselors (with their RSA public keys and licensed states) with the
  * ORGANIZATION's Ed25519 key, and store the signed roster where /api/matching/config serves it (review M4).
  *
  *   npm run -w @matra/server sign-roster -- --generate        print a NEW org key pair (do this once, offline)
@@ -45,16 +45,19 @@ if (pinned && pinned !== publicKey) {
 const db = openDb(resolveDbPath());
 const rows = db
   .prepare(
-    `SELECT c.user_id, c.display_name, c.organization, u.public_key FROM counselor_profiles c JOIN users u ON u.id = c.user_id
+    `SELECT c.user_id, c.display_name, c.organization, c.jurisdictions, u.public_key FROM counselor_profiles c JOIN users u ON u.id = c.user_id
       WHERE c.verified = 1 ORDER BY c.display_name`,
   )
-  .all() as Array<{ user_id: string; display_name: string; organization: string | null; public_key: string }>;
+  .all() as Array<{ user_id: string; display_name: string; organization: string | null; jurisdictions: string; public_key: string }>;
+// Roster v2: each counselor's licensed states (counselor_profiles.jurisdictions), which the matcher routes groups by.
+// Check them against her license before signing: the signature is what makes them authoritative.
 const roster = signCounselorRoster(
-  rows.map((r) => ({ userId: r.user_id, publicKey: JSON.parse(r.public_key) as JsonWebKey })),
+  rows.map((r) => ({ userId: r.user_id, publicKey: JSON.parse(r.public_key) as JsonWebKey, licensedStates: JSON.parse(r.jurisdictions) as string[] })),
   secretKey,
 );
 console.log(`Counselors in the roster (${rows.length}):`);
-for (const r of rows) console.log(`  ${r.display_name}${r.organization ? ` · ${r.organization}` : ''}  (${r.user_id})`);
+for (const r of rows)
+  console.log(`  ${r.display_name}${r.organization ? ` · ${r.organization}` : ''}  licensed: ${(JSON.parse(r.jurisdictions) as string[]).join(', ') || 'none'}  (${r.user_id})`);
 if (args.includes('--dry-run')) {
   console.log(JSON.stringify(roster, null, 2));
 } else {

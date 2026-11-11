@@ -16,11 +16,11 @@
  *   409 username_taken | already_revoked | already_sealed | phone_limit_reached
  *   413 payload_too_large   415 unsupported_media_type   500 internal
  *   429 rate_limited | rate_limited_daily | rate_limited_lifetime
- *   503 holder_unavailable (one OPRF key holder is down; any t of m are enough) | sms_unavailable
+ *   503 holder_unavailable (one OPRF key holder is down; any t of m are enough) | sms_unavailable | matcher_unavailable
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import { createHmac, randomBytes, randomInt } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
@@ -80,6 +80,7 @@ import {
 import * as S from './schemas.js';
 import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimits } from './oprf.js';
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
+import { InProcessMatcher, MatcherGate, type MatcherClient, type MatcherPins, type MatcherRosterInput } from './matcher-client.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
@@ -131,6 +132,12 @@ export interface CreateAppOptions {
       /** [min, max] ms before buffered phone-token counts are written to the DB (random in between). Default 10–60 min. */
       tokenFlushDelayMs?: [number, number];
     };
+    /**
+     * The matcher service (src/matcher-client.ts, apps/matcher): which groups are released, and to which ONE counselor.
+     * Default (tests): an in-process matcher with an in-memory DB, fresh random keys, and no pins (simulated allowed).
+     * config.ts loadMatcherConfig builds this from the environment.
+     */
+    matcher?: { client: MatcherClient; pins: MatcherPins };
   };
 }
 
@@ -244,6 +251,8 @@ interface MatchEntryRow {
   created_at: string;
   ledger_entry_id: string;
   key_epoch: number;
+  routing_envelope: string | null;
+  matcher_synced: number;
   /** JSON array, from a subquery (survivor list only) */
   counselor_ids?: string;
 }
@@ -416,6 +425,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Refuses an inconsistent or degenerate key set (shares from different ceremonies, duplicates, identity keys).
   const groupPublicKey = toBase64(groupKeyFromShares(holders.publicKeys().map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })), holders.t));
   const releaseDelayMs = Math.max(0, opts.matching?.releaseDelayHours ?? 72) * 3_600_000;
+  const matcher: MatcherClient =
+    opts.matching?.matcher?.client ??
+    new InProcessMatcher({ key: new Uint8Array(randomBytes(32)), platformSecretKey: new Uint8Array(randomBytes(32)), releaseDelayMs });
+  const matcherGate = new MatcherGate(matcher, opts.matching?.matcher?.pins ?? { allowSimulated: true });
 
   // ── key pinning in the DB (review M5): t, the group key and the share public keys are recorded on first start; a
   // silent key change would make every existing entry unmatchable (and could be used to partition survivors), so it is
@@ -991,6 +1004,77 @@ export function createApp(opts: CreateAppOptions): express.Express {
   pruneSeals();
   pruneGroups();
 
+  // ── matcher service (src/matcher-client.ts; W15, W18). Every sealed entry is forwarded to the matcher with: its tag, a
+  // pseudonymous survivor reference (HMAC of the account id under the pepper: the matcher counts distinct survivors
+  // without user ids), its time, the HOUR her account was created (Sybil signals), and her routing tag, which only the
+  // matcher can open. Forwarding happens after the response, on one serialized sync loop (also at startup, every
+  // minute, and before counselors read their groups); entries stay matcher_synced = 0 until the matcher has them, and
+  // withdrawals wait in matcher_pending_deletes. Nothing is forwarded while the matcher's attestation fails.
+  const survivorRef = (userId: string) => createHmac('sha256', pepper).update(`matcher-ref|${userId}`).digest('hex');
+  const toHour = (iso: string) => new Date(Math.floor(Date.parse(iso) / 3_600_000) * 3_600_000).toISOString();
+  const unsyncedEntries = db.prepare(
+    `SELECT e.id, e.user_id, e.tag, e.created_at, e.routing_envelope, u.created_at AS account_created_at
+       FROM match_entries e JOIN users u ON u.id = e.user_id WHERE e.matcher_synced = 0 ORDER BY e.created_at ASC, e.rowid ASC`,
+  );
+  const markSynced = db.prepare('UPDATE match_entries SET matcher_synced = 1 WHERE id = ?');
+  const queueMatcherDelete = db.prepare('INSERT OR IGNORE INTO matcher_pending_deletes (entry_id) VALUES (?)');
+  const pendingDeletes = db.prepare('SELECT entry_id FROM matcher_pending_deletes');
+  const donePendingDelete = db.prepare('DELETE FROM matcher_pending_deletes WHERE entry_id = ?');
+  /** What the matcher needs to know about counselors: the signed roster (if any), who is verified, and (unpinned dev) states. */
+  const matcherRoster = (): MatcherRosterInput => {
+    const list = sealableCounselors();
+    const roster = signedRoster();
+    return {
+      ...(roster && { roster }),
+      verifiedIds: list.map((c) => c.user_id),
+      counselors: list.map((c) => ({ userId: c.user_id, licensedStates: JSON.parse(c.jurisdictions) as string[] })),
+    };
+  };
+  let lastRosterSent = '';
+  const syncOnce = async () => {
+    if (!(await matcherGate.ok())) return;
+    const step = async (what: string, fn: () => Promise<void>) => {
+      try {
+        await fn();
+        return true;
+      } catch (e) {
+        console.warn(`[matra] matcher sync (${what}) failed: ${(e as Error).message}`);
+        return false;
+      }
+    };
+    const roster = matcherRoster();
+    const rosterKey = JSON.stringify(roster);
+    if (rosterKey !== lastRosterSent && (await step('roster', () => matcher.putRoster(roster)))) lastRosterSent = rosterKey;
+    for (const { entry_id } of pendingDeletes.all() as Array<{ entry_id: string }>) {
+      if (!(await step('withdrawal', () => matcher.removeEntry(entry_id)))) return;
+      donePendingDelete.run(entry_id);
+    }
+    type Unsynced = { id: string; user_id: string; tag: string; created_at: string; routing_envelope: string | null; account_created_at: string };
+    for (const e of unsyncedEntries.all() as Unsynced[]) {
+      const sent = await step('entry', () =>
+        matcher.upsertEntry({
+          entryId: e.id,
+          tag: e.tag,
+          survivorRef: survivorRef(e.user_id),
+          createdAt: e.created_at,
+          accountCreatedAt: toHour(e.account_created_at),
+          routing: e.routing_envelope ? JSON.parse(e.routing_envelope) : null,
+        }),
+      );
+      if (!sent) return;
+      markSynced.run(e.id);
+    }
+  };
+  let syncChain: Promise<void> = Promise.resolve();
+  /** Run one sync after any in flight (serialized; never throws). */
+  const syncMatcher = (): Promise<void> => (syncChain = syncChain.then(syncOnce, syncOnce).catch(() => undefined));
+  // The matcher may have lost state (an in-memory matcher, a restore): resend every entry once at startup (idempotent).
+  db.prepare('UPDATE match_entries SET matcher_synced = 0').run();
+  setImmediate(() => void syncMatcher());
+  setInterval(() => void syncMatcher(), 60_000).unref();
+  app.locals.syncMatcher = syncMatcher;
+  app.locals.matcherGateReset = () => matcherGate.reset();
+
   // ── phone verify-then-forget (W13, W19; src/sms.ts). Pending challenges live only in this Map, for 10 minutes: the
   // raw number is in memory just long enough for the provider's check call, and never written anywhere.
   const requirePhone = opts.matching?.requirePhoneVerification ?? true;
@@ -1161,6 +1245,21 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ verified: true });
   });
 
+  // The matcher's attestation, proxied so the browser keeps connect-src 'self'. Public (it says nothing about anyone);
+  // rate-limited per client (keyed by an HMAC of the IP, in memory only). Her client verifies it before sealing.
+  const attestationLimiter = new RateLimiter(60, 60_000);
+  app.get('/api/matching/attestation', async (req, res) => {
+    const { nonce } = parse(S.attestationQuery, req.query);
+    if (!attestationLimiter.hit(hashIp(req))) throw new HttpError(429, 'rate_limited', 'Too many requests. Please wait a minute and try again.');
+    let doc;
+    try {
+      doc = await matcher.attestation(nonce);
+    } catch {
+      throw new HttpError(503, 'matcher_unavailable', 'Sealed matching isn’t available right now.');
+    }
+    res.json(doc);
+  });
+
   app.get('/api/matching/config', auth, verifiedAdultSurvivor, (_req, res) => {
     pruneSeals();
     const roster = signedRoster();
@@ -1230,6 +1329,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const deleteEntry = (entryId: string) => {
     db.prepare('DELETE FROM match_seals WHERE entry_id = ?').run(entryId);
     db.prepare('DELETE FROM match_entries WHERE id = ?').run(entryId);
+    queueMatcherDelete.run(entryId);
   };
   const markMatched = db.prepare(
     `INSERT OR IGNORE INTO match_groups (id, tag, matched_at)
@@ -1256,9 +1356,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
       if (replaces) deleteEntry(replaces);
       const le = appendLedger(db, 'escrow.sealed', id, envelopeContentHash(body.bundle), ts);
       db.prepare(
-        `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id, key_epoch)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, me.id, body.tag, canonicalEnvelope(body.bundle), canonicalEnvelope(body.labelEnvelope), ts, le.id, keyEpoch);
+        `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id, key_epoch, routing_envelope)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, me.id, body.tag, canonicalEnvelope(body.bundle), canonicalEnvelope(body.labelEnvelope), ts, le.id, keyEpoch, JSON.stringify(body.routing));
       const ins = db.prepare('INSERT INTO match_seals (entry_id, counselor_id, seal) VALUES (?, ?, ?)');
       for (const seal of body.seals) ins.run(id, seal.counselorId, JSON.stringify(seal satisfies CounselorSeal));
       audit(me.id, 'escrow.created', replaces ? 'Re-sealed an identifier under the current matching keys' : 'Sealed an identifier for sealed matching');
@@ -1266,6 +1366,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
       markMatched.run(newId(), body.tag, ts, body.tag);
       if (replaces) pruneGroups();
     })();
+    // Forwarded to the matcher after the response, the same way for a match or a miss.
+    void syncMatcher();
     res.status(201).json({ entry: toSurvivorEscrow(q.matchEntryById.get(id) as MatchEntryRow) });
   });
 
@@ -1304,6 +1406,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       pruneGroups();
       audit(me.id, 'escrow.withdrawn', 'You withdrew a sealed identifier. It was deleted.');
     })();
+    void syncMatcher();
     res.json({ ok: true });
   });
 
@@ -1327,34 +1430,53 @@ export function createApp(opts: CreateAppOptions): express.Express {
       ORDER BY g.matched_at ASC, g.rowid ASC`,
   );
   const groupById = db.prepare('SELECT id, tag, matched_at FROM match_groups WHERE id = ?');
-  // UNIQUE(user_id, tag) ⇒ every entry of a group comes from a different survivor. user_id is never returned; the
-  // account creation time is used only for the Sybil signals below and never leaves the server.
+  // UNIQUE(user_id, tag) ⇒ every entry of a group comes from a different survivor. user_id is never returned.
   const groupEntriesFor = db.prepare(
-    `SELECT e.id, e.created_at, e.bundle, s.seal, u.created_at AS account_created_at FROM match_entries e
+    `SELECT e.id, e.created_at, e.bundle, s.seal FROM match_entries e
        JOIN match_seals s ON s.entry_id = e.id AND s.counselor_id = ?
-       JOIN users u ON u.id = e.user_id
       WHERE e.tag = ? AND e.created_at <= ? ORDER BY e.created_at ASC, e.rowid ASC`,
   );
   const notesFor = db.prepare('SELECT * FROM counselor_notes WHERE group_id = ? AND counselor_id = ? ORDER BY created_at ASC, rowid ASC');
+  type AssignmentRow = { tag: string; counselor_id: string; reason: string; assigned_at: string; signals: string; signature: string | null };
+  const assignmentFor = db.prepare('SELECT * FROM match_assignments WHERE tag = ? AND counselor_id = ?');
+  /**
+   * Refresh the cached assignments from the matcher. If it can't be reached (or doesn't attest), the cache stays as it
+   * was: groups already released stay visible to their counselor, and NEW groups wait (fail closed).
+   */
+  const refreshAssignments = async () => {
+    await syncMatcher();
+    if (!(await matcherGate.ok())) return;
+    let list;
+    try {
+      list = await matcher.assignments();
+    } catch (e) {
+      console.warn(`[matra] matcher assignments unavailable (${(e as Error).message}); using the cached ones.`);
+      return;
+    }
+    db.transaction(() => {
+      db.prepare('DELETE FROM match_assignments').run();
+      const ins = db.prepare('INSERT INTO match_assignments (tag, counselor_id, reason, assigned_at, signals, signature) VALUES (?, ?, ?, ?, ?, ?)');
+      for (const a of list) ins.run(a.tag, a.counselorId, a.reason, a.assignedAt, JSON.stringify(a.signals), a.signature || null);
+    })();
+  };
 
   type GroupRow = { id: string; tag: string; matched_at: string };
+  /** The group as released to `counselorId`: only if the matcher assigned it to her, and only entries past the delay. */
   const groupFor = (g: GroupRow, counselorId: string): CounselorMatchGroup | null => {
+    const assigned = assignmentFor.get(g.tag, counselorId) as AssignmentRow | undefined;
+    if (!assigned) return null;
     const rows = groupEntriesFor.all(counselorId, g.tag, releaseCutoff()) as Array<{
       id: string;
       created_at: string;
       bundle: string;
       seal: string;
-      account_created_at: string;
     }>;
     const entries = rows.map((e) => ({ entryId: e.id, createdAt: e.created_at, bundle: JSON.parse(e.bundle), seal: JSON.parse(e.seal) as CounselorSeal }));
     // A counselor needs two seals addressed to them to reconstruct; anything less is never released.
     if (entries.length < 2) return null;
-    // Sybil signals (M2): accounts created within 24 h of each other, and entries sealed < 7 days after account creation.
-    const created = rows.map((r) => Date.parse(r.account_created_at)).sort((a, b) => a - b);
-    const signals = {
-      accountsCreatedClose: created.some((t, i) => i > 0 && t - created[i - 1]! < 86_400_000),
-      newAccountEntries: rows.filter((r) => Date.parse(r.created_at) - Date.parse(r.account_created_at) < 7 * 86_400_000).length,
-    };
+    // Sybil signals (M2), computed by the matcher: accounts created within 24 h of each other, and entries sealed < 7
+    // days after their account was created.
+    const signals = JSON.parse(assigned.signals) as CounselorMatchGroup['signals'];
     const notes = (notesFor.all(g.id, counselorId) as Array<{ id: string; group_id: string; entry_id: string | null; envelope: string; created_at: string }>).map(
       (n): CounselorNote => ({
         id: n.id,
@@ -1364,12 +1486,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
         createdAt: n.created_at,
       }),
     );
-    return { id: g.id, tag: g.tag, matchedAt: g.matched_at, entries, notes, signals };
+    return { id: g.id, tag: g.tag, matchedAt: g.matched_at, entries, notes, signals, assignment: { reason: assigned.reason, assignedAt: assigned.assigned_at } };
   };
 
-  app.get('/api/counselor/groups', auth, counselorOnly, verifiedCounselor, (req, res) => {
+  app.get('/api/counselor/groups', auth, counselorOnly, verifiedCounselor, async (req, res) => {
     const me = req.user!;
     pruneSeals();
+    await refreshAssignments();
     const groups = (releasedGroups.all(releaseCutoff()) as GroupRow[]).map((g) => groupFor(g, me.id)).filter((g): g is CounselorMatchGroup => !!g);
     // Logged to the counselor's own trail only. Never to a survivor's: that would tell her (or a perpetrator posing
     // as a survivor) that a match exists.
@@ -1433,6 +1556,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       db.prepare('DELETE FROM records WHERE owner_id = ?').run(me.id);
       // sealed matching: her entries (and their seals), and — if a counselor — her seals, notes and profile
       db.prepare('DELETE FROM match_seals WHERE entry_id IN (SELECT id FROM match_entries WHERE user_id = ?)').run(me.id);
+      db.prepare('INSERT OR IGNORE INTO matcher_pending_deletes (entry_id) SELECT id FROM match_entries WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM match_entries WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM match_seals WHERE counselor_id = ?').run(me.id);
       db.prepare('DELETE FROM counselor_notes WHERE counselor_id = ?').run(me.id);
@@ -1451,6 +1575,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
       appendLedger(db, 'account.shredded', me.id, sha256Hex(JSON.stringify({ userId: me.id, recordIds, blobIds })));
     })();
+    void syncMatcher(); // her entries leave the matcher; a counselor's departure changes its roster
     res.json({ ok: true });
   });
 

@@ -43,7 +43,9 @@
  *   • Shamir t-of-m key split (P1 had one key server): any t evaluations combined in the exponent then Finalize ==
  *     VOPRF under the unsplit key (see threshold.test.ts).
  *   • Per-survivor-per-perpetrator x instead of U = H(user id) (see above).
- *   • No assignment-data (DLOC) ciphertext: Matra has one counselor tier; `state` rides inside the bundle.
+ *   • Assignment data (P1's DLOC ciphertext) is a separate routing tag {π, incident state, her state} sealed to the
+ *     matcher service's ATTESTED key (./attestation.ts), not to a counselor: the matcher assigns each group to ONE
+ *     counselor licensed in one of those states (apps/matcher). The states also ride inside the bundle for the counselor.
  *   • The counselor key is the counselor's existing RSA-OAEP-3072 identity key (WebCrypto), not libsodium box.
  *   • Name-only matching is NOT supported: full names are rejected by the normalizer (names are not unique enough).
  *   • The survivor does not keep cU = E(kU, ke); she keeps her own label under her master key instead, holding the
@@ -56,6 +58,7 @@ import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type {
   AddMatchSealsRequest,
+  AttestationDocument,
   CounselorRosterPayload,
   CounselorSeal,
   CreateMatchEntryRequest,
@@ -63,6 +66,7 @@ import type {
   EscrowEntry,
   MatchContactBundle,
   MatchingConfig,
+  MatchStates,
   OprfEvaluateRequest,
   OprfEvaluateResponse,
   SignedCounselorRoster,
@@ -80,6 +84,7 @@ import {
   wrapKeyForRecipient,
 } from './index';
 import type { NormalizedIdentifier } from './normalize';
+import { newAttestationNonce, sealRouting, verifyAttestation, type VerifiedAttestation } from './attestation';
 import { checkThresholdKeys, finalizeThresholdOprfReport, ThresholdOprfError, type HolderEvaluation, type ThresholdKeyConfig } from './threshold';
 
 const enc = new TextEncoder();
@@ -98,6 +103,7 @@ const FIELD_BYTES = 33;
 // Identifier normalization lives in ./normalize.ts, threshold OPRF in ./threshold.ts (both re-exported here).
 export * from './normalize';
 export * from './threshold';
+export * from './attestation';
 
 export function matchInput(canonical: string): Uint8Array {
   return enc.encode(`${MATCH_DOMAIN}|${canonical}`);
@@ -496,24 +502,31 @@ export async function reconstructMatchGroup(
 
 export const ROSTER_DOMAIN = 'matra/counselor-roster/v1';
 
-/** Canonical roster JSON: counselors sorted by userId, keys in fixed order, RSA public keys reduced to {kty, n, e}. */
+/** USPS codes, upper case, de-duplicated and sorted (invalid entries dropped). */
+export const normalizeLicensedStates = (states: readonly string[] | undefined): string[] =>
+  Array.from(new Set((states ?? []).map((s) => String(s).trim().toUpperCase()).filter((s) => /^[A-Z]{2}$/.test(s)))).sort();
+
+/**
+ * Canonical roster JSON (v2): counselors sorted by userId, keys in fixed order, RSA public keys reduced to {kty, n, e},
+ * licensed states normalized. The matcher assigns a group only to a counselor licensed in one of its states.
+ */
 export function canonicalRosterPayload(
-  counselors: Array<{ userId: string; publicKey: JsonWebKey }>,
+  counselors: Array<{ userId: string; publicKey: JsonWebKey; licensedStates?: readonly string[] }>,
   issuedAt = new Date().toISOString(),
 ): string {
   const list = [...counselors]
     .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0))
     .map((c) => {
       if (c.publicKey.kty !== 'RSA' || !c.publicKey.n || !c.publicKey.e) throw new Error('counselor key must be an RSA public key');
-      return { userId: c.userId, publicKey: { kty: 'RSA' as const, n: c.publicKey.n, e: c.publicKey.e } };
+      return { userId: c.userId, publicKey: { kty: 'RSA' as const, n: c.publicKey.n, e: c.publicKey.e }, licensedStates: normalizeLicensedStates(c.licensedStates) };
     });
-  const payload: CounselorRosterPayload = { v: 1, issuedAt, counselors: list };
+  const payload: CounselorRosterPayload = { v: 2, issuedAt, counselors: list };
   return JSON.stringify(payload);
 }
 
 /** Organization (offline, CLI): sign the verified counselor roster with the org's Ed25519 secret key (32 bytes). */
 export function signCounselorRoster(
-  counselors: Array<{ userId: string; publicKey: JsonWebKey }>,
+  counselors: Array<{ userId: string; publicKey: JsonWebKey; licensedStates?: readonly string[] }>,
   orgSecretKey: Uint8Array,
   issuedAt?: string,
 ): SignedCounselorRoster {
@@ -530,15 +543,18 @@ export function generateRosterKey(): { secretKey: Uint8Array; publicKey: Uint8Ar
   return ed25519.keygen();
 }
 
-/** Verify a signed roster against the pinned org public key. Returns the payload, or null if anything is off. */
+/**
+ * Verify a signed roster against the pinned org public key. Returns the payload, or null if anything is off. A v1
+ * roster (before licensed states) verifies with `licensedStates: []` for everyone.
+ */
 export function verifyCounselorRoster(signed: SignedCounselorRoster | undefined, orgPublicKey: Uint8Array): CounselorRosterPayload | null {
   if (!signed) return null;
   try {
     const sig = fromBase64(signed.signature);
     if (sig.length !== 64 || !ed25519.verify(sig, enc.encode(`${ROSTER_DOMAIN}|${signed.payload}`), orgPublicKey)) return null;
     const p = JSON.parse(signed.payload) as CounselorRosterPayload;
-    if (p.v !== 1 || !Array.isArray(p.counselors)) return null;
-    return p;
+    if ((p.v !== 1 && p.v !== 2) || !Array.isArray(p.counselors)) return null;
+    return { ...p, counselors: p.counselors.map((c) => ({ ...c, licensedStates: p.v === 2 ? normalizeLicensedStates(c.licensedStates) : [] })) };
   } catch {
     return null;
   }
@@ -584,6 +600,8 @@ export interface MatchTransport {
    */
   onBadHolders?(indices: number[]): void;
   createEntry(req: CreateMatchEntryRequest): Promise<{ entry: EscrowEntry }>;
+  /** The matcher's attestation document for this nonce (GET /api/matching/attestation, proxied by the app server). */
+  attestation(nonce: string): Promise<AttestationDocument>;
   listEntries?(): Promise<{ entries: EscrowEntry[] }>;
   addSeals?(entryId: string, req: AddMatchSealsRequest): Promise<{ entry: EscrowEntry }>;
 }
@@ -594,6 +612,37 @@ export interface MatchPins {
   oprf?: { t: number; groupPublicKey: string; holders: string[] };
   /** base64 Ed25519 public key of the organization that signs the counselor roster */
   rosterKey?: string;
+  /**
+   * The matcher this app trusts: the platform's base64 Ed25519 key and the hex measurement of the published matcher
+   * build. Without it (development) any attestation is accepted, with a console warning.
+   */
+  attestation?: { platformKey: string; measurement: string };
+  /** accept a SIMULATED attestation even though `attestation` is pinned (demo builds only, MATRA_DEMO_MODE=1) */
+  allowSimulatedAttestation?: boolean;
+}
+
+/**
+ * Fetch and verify the matcher's attestation with a fresh nonce, BEFORE anything is sealed to its key or sent to an
+ * OPRF key holder. Pinned builds check the platform key and the measurement and refuse a simulated platform unless it
+ * is a demo build; unpinned (development) builds accept whatever the matcher presents, with one warning.
+ */
+let warnedUnpinnedMatcher = false;
+export async function verifiedMatcher(t: MatchTransport, pins?: MatchPins): Promise<VerifiedAttestation> {
+  const nonce = newAttestationNonce();
+  const doc = await t.attestation(nonce);
+  const pinned = pins?.attestation;
+  if (!pinned) {
+    if (!warnedUnpinnedMatcher)
+      console.warn('[matra] sealed matching: no pinned matcher attestation in this build; accepting the matcher’s simulated attestation (development only).');
+    warnedUnpinnedMatcher = true;
+    return verifyAttestation(doc, { nonce, allowSimulated: true });
+  }
+  return verifyAttestation(doc, {
+    nonce,
+    platformKey: pinned.platformKey,
+    expectedMeasurement: pinned.measurement,
+    allowSimulated: !!pins?.allowSimulatedAttestation,
+  });
 }
 
 /**
@@ -606,7 +655,10 @@ export interface MatchLabel {
   identifier: { kind: MatchContactBundle['identifier']['kind']; canonical: string; platform?: string };
   contact: MatchContactBundle['contact'];
   consentStatement: string;
+  /** labels sealed before routing: the incident (or else her home) state; re-seals route it as the incident state */
   state?: string;
+  /** the incident state and her home state, so re-seals keep their routing */
+  states?: MatchStates;
   keyEpoch: number;
   share: SealedShare;
 }
@@ -693,7 +745,8 @@ export async function submitMatchEntry(
     identifier: Extract<NormalizedIdentifier, { ok: true }>;
     contact: MatchContactBundle['contact'];
     consentStatement: string;
-    state?: string;
+    /** where it happened and where she lives (USPS codes): in her bundle, and sealed to the matcher for routing */
+    states?: MatchStates;
     /** what she sees in her list ("Ryan · phone number") */
     label: string;
     config?: MatchingConfig;
@@ -706,6 +759,9 @@ export async function submitMatchEntry(
   const keys = matchingOprfKeys(config, args.pins);
   const counselors = counselorsToSealTo(config, args.pins?.rosterKey);
   if (!counselors.length) throw new Error('no counselor available to receive matches');
+  // The matcher's attestation is checked first: if it fails, no key holder is asked and nothing is charged or sealed.
+  const matcher = await verifiedMatcher(t, args.pins);
+  const states = cleanStates(args.states);
   const b = blindMatchIdentifier(args.identifier.canonical);
   const y = await evaluateMatchOprf(t, keys, b);
   const secrets = derivePerpetratorSecrets(y);
@@ -715,7 +771,8 @@ export async function submitMatchEntry(
     identifier: { kind: args.identifier.kind, canonical: args.identifier.canonical },
     contact: args.contact,
     consent: { statement: args.consentStatement, at: new Date().toISOString() },
-    ...(args.state && { state: args.state }),
+    ...((states.incident ?? states.survivor) && { state: states.incident ?? states.survivor }),
+    ...((states.incident || states.survivor) && { states }),
   };
   const built = await buildMatchEntry({ secrets, x, bundle, counselors });
   const label: MatchLabel = {
@@ -728,7 +785,7 @@ export async function submitMatchEntry(
     },
     contact: args.contact,
     consentStatement: args.consentStatement,
-    ...(args.state && { state: args.state }),
+    ...((states.incident || states.survivor) && { states }),
     keyEpoch: config.keyEpoch,
     share: built.share,
   };
@@ -738,6 +795,7 @@ export async function submitMatchEntry(
     seals: built.seals,
     labelEnvelope: await encryptLabel(label, args.masterKey),
     ...(args.replacesEntryId && { replacesEntryId: args.replacesEntryId }),
+    routing: await sealRouting({ v: 1, tag: built.tag, incidentState: states.incident, survivorState: states.survivor }, matcher.encKey),
   });
   return { entry, tag: secrets.tag };
 }
@@ -772,7 +830,7 @@ export async function refreshMatchEntries(
         identifier: { ok: true, kind: label.identifier.kind, canonical: label.identifier.canonical, ...(label.identifier.platform && { platform: label.identifier.platform }) },
         contact: label.contact,
         consentStatement: label.consentStatement,
-        ...(label.state && { state: label.state }),
+        states: label.states ?? (label.state ? { incident: label.state } : {}),
         label: label.label,
         config,
         ...(args.pins && { pins: args.pins }),
@@ -790,6 +848,16 @@ export async function refreshMatchEntries(
     out.sealsAdded += seals.length;
   }
   return out;
+}
+
+function cleanStates(s: MatchStates | undefined): MatchStates {
+  const one = (v: string | undefined) => {
+    const u = v?.trim().toUpperCase();
+    return u && /^[A-Z]{2}$/.test(u) ? u : undefined;
+  };
+  const incident = one(s?.incident);
+  const survivor = one(s?.survivor);
+  return { ...(incident && { incident }), ...(survivor && { survivor }) };
 }
 
 /** Encrypt a note to oneself. */

@@ -44,6 +44,12 @@ services:
       # Changing it later only means a phone already used can enable accounts again.
       - key: MATRA_PHONE_HASH_KEY
         generateValue: true
+      # The matcher runs inside this server with a SIMULATED attestation (demo only; refused in production without
+      # MATRA_DEMO_MODE=1). Its key and the simulated platform key, generated once by Render. Not hardware attestation.
+      - key: MATRA_MATCHER_KEY
+        generateValue: true
+      - key: MATRA_ATTESTATION_PLATFORM_KEY
+        generateValue: true
       # Render terminates TLS in one proxy hop; needed for per-IP rate limiting.
       - key: MATRA_TRUST_PROXY
         value: "1"

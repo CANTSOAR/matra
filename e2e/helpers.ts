@@ -29,6 +29,8 @@ export const test = base.extend<{ consoleProblems: string[] }>({
       if (/Download the React DevTools/.test(text)) return;
       // Dev/e2e builds don't pin the counselor-roster key; the sealed-matching client says so once (expected).
       if (/no pinned counselor-roster key in this build/.test(text)) return;
+      // Nor the matcher's attestation pins (platform key + measurement); the client accepts the simulated one, once.
+      if (/no pinned matcher attestation in this build/.test(text)) return;
       // Scenario 5b: the phone-limit refusal (409 phone_limit_reached) is an expected response the page explains.
       if (/status of 409/.test(text) && /\/api\/matching\/verification\/check$/.test(m.location().url)) return;
       consoleProblems.push(`[${m.type()}] ${text}`);

@@ -34,3 +34,6 @@ docs/legal-research/private/
 
 # Throwaway threshold-OPRF keys for e2e:prod (playwright.prod.config.ts)
 e2e/.keys/
+
+# Matcher service dev keys and database
+apps/matcher/data

@@ -109,7 +109,9 @@ from the paper (no AGPL code copied) with modern standard primitives. Code: `pac
 `apps/web/src/counselor/` (counselor portal). **Not audited.**
 
 **Parties.** Survivor client · OPRF key holders 1..m (any t of them; default 2-of-3) · app server (stores ciphertext and tags, no
-secrets) · verified Legal Options Counselor(s) (an RSA-OAEP-3072 identity key, like attorneys).
+secrets) · the **matcher** (decides which groups are released and to which ONE counselor, from routing data the app
+server cannot read; see "Matcher" below) · verified Legal Options Counselor(s) (an RSA-OAEP-3072 identity key, like
+attorneys).
 
 **What can be matched.** Only unique identifiers, canonicalised on the device (`packages/crypto/src/normalize.ts`):
 email (lower-case; trailing dot removed; internationalised domains converted to punycode; `+tag` removed **only** for
@@ -156,11 +158,12 @@ exact consent text she agreed to and when, the identifier kind and canonical for
 every time she names the same person) and the OPRF key epoch. A τ is **matched** when entries from **2 distinct
 accounts** exist (a single, always-executed SQL statement). Survivors always see `sealed` (no match time, no τ); her
 audit trail never mentions a match or a counselor; the ledger gets exactly one `escrow.sealed` per submission. **Only
-matched groups are released, only to verified counselors, each receives only the seals addressed to them, and only
-once the entries are older than the release delay** (`MATRA_MATCH_RELEASE_DELAY_HOURS`, default 72; an entry younger
-than that neither counts toward nor appears in a released group). Unmatched entries are never served to anyone but
+matched groups are released, each to the ONE verified counselor the matcher assigned it to, who receives only the seals
+addressed to her, and only once the entries are older than the release delay** (`MATRA_MATCH_RELEASE_DELAY_HOURS`,
+default 72; an entry younger than that neither counts toward nor appears in a released group; the matcher and the app
+server each apply it). Unmatched entries are never served to anyone but
 their owner. Counselors (and attorneys) cannot call the OPRF endpoints. With each group the server sends **Sybil
-signals** computed without revealing accounts: whether some entries come from accounts created within 24 h of each
+signals**, computed by the matcher without revealing accounts: whether some entries come from accounts created within 24 h of each
 other, and how many were sealed < 7 days after account creation; the portal shows them as a warning. A survivor can
 **withdraw** any entry at any time (`DELETE /api/matching/entries/:id` deletes it, its seals and counselor notes about
 it); groups with no entries left are deleted with all their counselor notes (also on account deletion).
@@ -262,7 +265,8 @@ share's key) is rejected by index while the remaining holders still produce the 
 **Deviations from Callisto (P1), on purpose.** VOPRF with per-holder DLEQ proofs instead of a plain OPRF (a key holder
 can't silently return wrong evaluations, research A9). τ derived from the intercept so reconstruction can verify the
 line. Per-survivor-per-perpetrator x (P1 used U = H(user id) for every perpetrator, which links a survivor's entries).
-No separate assignment-data / DLOC ciphertext (one counselor tier; `state` rides inside the bundle). Counselor key =
+P1's assignment data (DLOC) becomes a routing tag sealed to the matcher's attested key rather than to a counselor tier
+(see "Matcher"). Counselor key =
 RSA-OAEP identity key instead of libsodium box. Matched groups are released by the server only after threshold and the
 release delay. This **mitigates, but does not close,** research A7 (a counselor holding `sk_LOC` testing guesses): a
 counselor cannot call the OPRF and never receives single-survivor seals, but a counselor colluding with (or running) a
@@ -297,13 +301,62 @@ number and the time, and Matra's own timestamped activity for the account (sign-
 lined up with it; whoever holds the hash key and the database can test a guessed number (W19). Open questions: Q-013,
 Q-038.
 
+**Matcher (W15, W18; `apps/matcher`, `apps/server/src/matcher-client.ts`, `packages/crypto/src/attestation.ts`).** A
+separate service, not the app server, decides which matched groups exist, when each is released, and which **one**
+counselor gets it. It holds only entry ids, tags, a pseudonymous survivor reference (HMAC of the account id under the
+app server's pepper, so it can count distinct survivors without user ids), when each entry was sealed, the **hour**
+the account was created (Sybil signals), and the two states from each survivor's **routing tag**: the incident state
+and her home state, taken from her record on her device. Her client seals the routing tag to the matcher's static
+P-256 key with ECIES (ephemeral ECDH P-256, HKDF-SHA256 with salt = both public keys and info
+`matra/matcher-routing/v1`, AES-256-GCM with AAD `routing|τ`, plaintext padded to 256 bytes): the app server stores and
+forwards it but cannot open it, and cannot move it to another entry (the AAD binds τ). This is standard ECIES from
+WebCrypto primitives, not RFC 9180 HPKE. Assignment is deterministic: candidate states are the group's incident states
+by frequency (ties alphabetical), then its survivors' states; the first state with a counselor licensed there (the
+roster's `licensedStates`, now part of the org-signed roster v2) wins, the least-loaded such counselor is chosen (ties:
+lowest SHA-256(τ | counselor id)), and the reason (`incident_state:NJ`, `survivor_state:NY`, `reassigned:…`) is recorded
+and shown to the counselor in plain words. If nobody is licensed in any of the group's states, the group is **not
+released** (ops sees only a count). An assignment is sticky while its counselor stays on the roster, licensed there,
+and has not declined; otherwise it is reassigned with her excluded. The app server forwards entries after responding
+(the same way for a match or a miss), retries every minute, queues withdrawals until the matcher has them, and caches
+assignments so released groups survive a matcher outage while new groups wait for it (fail closed). It runs
+in-process (development, tests, single-host demo: the app server then holds the matcher key, so there is **no
+separation**) or as its own process (`npm run -w @matra/matcher start`, bearer token `MATRA_MATCHER_TOKEN`).
+
+*Attestation (SIMULATED).* The matcher serves `GET /v1/attestation?nonce=` (proxied by the app server at
+`/api/matching/attestation`): an Ed25519-signed document `{ platform, measurement, encKey, signKey, nonce, issuedAt }`.
+The measurement is SHA-256 over every file in `apps/matcher/src` (except tests) and its `package.json`
+(`npm run -w @matra/matcher measure` prints it for publication). The survivor's client fetches it with a fresh nonce
+**before** anything else (so a failure costs no OPRF quota), checks the platform signature, nonce, freshness (5 min)
+and that the measurement equals the value pinned in the build (`MATRA_ATTESTATION_PLATFORM_PUBKEY`,
+`MATRA_MATCHER_MEASUREMENT`), and only then seals the routing tag to `encKey`; otherwise she sees "This matcher isn't
+running the code this app trusts" and nothing is sealed. The app server makes the same check with the same pins at
+first use and every 10 minutes, and forwards nothing while it fails. **This is not attestation.** Tonight's
+"platform" is a dev Ed25519 key (`MATRA_ATTESTATION_PLATFORM_KEY`) held by whoever runs the matcher, and the
+measurement is computed by the matcher process from its own files: anyone holding that key can sign any measurement,
+and a modified process can report the published one. It exercises the protocol so that a real platform (AWS Nitro
+Enclaves: NSM document over PCR0; GCP Confidential Space: attestation token over the image digest, from a reproducible
+build) becomes a verifier plus configuration (`MATRA_ATTESTATION=nitro|confidential-space` exist as stubs that refuse
+to start). Pinned production builds refuse a `simulated` platform unless built with `MATRA_DEMO_MODE=1`; the matcher
+and the app server refuse to run the simulated attester in production unless `MATRA_DEMO_MODE=1`; unpinned
+development builds accept any attestation with a console warning.
+
+*What does not change.* The app server still stores τ (it must, to serve seals), so it still sees which entries share a
+τ and could still compute groups itself. What the matcher adds: routing data the app server cannot read; release and
+assignment decided by published code (attested, once attestation is real); and one counselor per group instead of
+all. A malicious app server can still withhold groups, or serve a released group's seals to another listed counselor
+(seals exist for every counselor). The matcher signs each assignment with its attested `signKey`; the counselor's
+client does **not** verify that signature yet, so re-routing is not detected (W18). Open legal questions: Q-017
+(automatic assignment to one counselor), Q-035 (which state's law governs), Q-042 (an uninspectable matcher).
+
 **Data migration.** Schema v5 drops all existing matching data (entries, seals, groups, counselor notes, OPRF quotas):
 the tag derivation and seal format changed, old entries cannot be converted without the plaintext identifiers, and
 they only ever held demo data.
 
 **Metadata still visible to Matra.** Which accounts submitted, when, and how many entries; the τ equality classes
 (how many survivors named the same, unknown, person — including groups of one); that a group matched and when;
-each entry's key epoch and which counselors it is sealed to; OPRF quota counters (the account-level budget always;
+each entry's key epoch and which counselors it is sealed to; which counselor each released group was assigned to and
+why (the reason names a state, so the app server learns the state of released groups; it never stores per-entry
+states); OPRF quota counters (the account-level budget always;
 per-holder counters in in-process mode, while in remote mode each holder keeps its own counters under a pseudonymous
 subject, plus its daily totals); counselor note counts and times; whether an account confirmed a phone, and keyed
 phone hashes with counts (no account id; linkable by time together with the SMS provider's records, W19).

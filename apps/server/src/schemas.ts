@@ -152,13 +152,27 @@ const sealList = z
   .max(MAX_SEALS_PER_ENTRY)
   .refine((a) => new Set(a.map((x) => x.counselorId)).size === a.length, 'duplicate counselorId');
 
+const b64url = (max: number) => z.string().min(1).max(max).regex(/^[A-Za-z0-9_-]+$/, 'must be base64url');
+
+/** Her routing tag sealed to the matcher (packages/crypto attestation.ts). The matcher opens it; here only its shape. */
+export const routingEnvelope = z.object({
+  v: z.literal(1),
+  epk: z.object({ kty: z.literal('EC'), crv: z.literal('P-256'), x: b64url(64), y: b64url(64) }),
+  iv: base64(64).refine((s) => b64Len(s) === 12, 'iv must be 12 bytes'),
+  // the plaintext is padded to 256 bytes, + the 16-byte GCM tag
+  ct: base64(1024).refine((s) => b64Len(s) === 272, 'routing ct must be 272 bytes'),
+});
+
 export const createMatchEntryRequest = z.object({
   tag: z.string().regex(/^[a-f0-9]{64}$/, 'tag must be 64 lowercase hex chars'),
   bundle: smallEnvelope,
   labelEnvelope: smallEnvelope,
   seals: sealList,
   replacesEntryId: id.optional(),
+  routing: routingEnvelope,
 });
+
+export const attestationQuery = z.object({ nonce: z.string().regex(/^[0-9a-f]{64}$/, 'nonce must be 64 lowercase hex chars') });
 
 export const addMatchSealsRequest = z.object({ seals: sealList });
 

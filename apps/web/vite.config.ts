@@ -73,9 +73,30 @@ const matchPins = {
   }
 }
 
+/**
+ * The matcher this build trusts (matcher-service; docs/threat-model.md W18). Both or neither:
+ *   MATRA_ATTESTATION_PLATFORM_PUBKEY  base64 Ed25519 key of the attestation platform
+ *   MATRA_MATCHER_MEASUREMENT          hex measurement of the published matcher build (npm run -w @matra/matcher measure)
+ * Pinned builds refuse a matcher that is not that build, and refuse a SIMULATED attestation unless MATRA_DEMO_MODE=1 at
+ * build time (__MATRA_DEMO__, a fictional-data demo build). Unset (development): any attestation, with a warning.
+ */
+const attestationPins = {
+  platformKey: (process.env.MATRA_ATTESTATION_PLATFORM_PUBKEY || '').trim(),
+  measurement: (process.env.MATRA_MATCHER_MEASUREMENT || '').trim().toLowerCase(),
+};
+if (!!attestationPins.platformKey !== !!attestationPins.measurement)
+  throw new Error('Matcher pins are all-or-nothing: set both MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT, or neither (see docs/DEPLOY.md).');
+if (attestationPins.measurement && !/^[0-9a-f]{64}$/.test(attestationPins.measurement))
+  throw new Error('MATRA_MATCHER_MEASUREMENT must be 64 hex characters (npm run -w @matra/matcher measure)');
+const demoBuild = process.env.MATRA_DEMO_MODE === '1';
+
 export default defineConfig({
   plugins: [react()],
-  define: { __MATRA_MATCH_PINS__: JSON.stringify(matchPins) },
+  define: {
+    __MATRA_MATCH_PINS__: JSON.stringify(matchPins),
+    __MATRA_ATTESTATION__: JSON.stringify(attestationPins),
+    __MATRA_DEMO__: JSON.stringify(demoBuild),
+  },
   // The transcription worker (src/voice/worker.ts) is an ES module worker: it code-splits and uses import.meta.
   worker: { format: 'es', plugins: () => [ortRuntimeFromModels()] },
   build: voiceHarness

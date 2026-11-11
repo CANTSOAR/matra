@@ -3,6 +3,7 @@ import { createApp, flushPhoneTokens } from './app.js';
 import {
   WEB_DIST_DIR,
   loadDemoMode,
+  loadMatcherConfig,
   loadMatchingSettings,
   loadOprfLimits,
   loadOprfThreshold,
@@ -43,6 +44,11 @@ const pepper = loadPepper();
 // and refuses to start without MATRA_PHONE_HASH_KEY (src/sms.ts, docs/DEPLOY.md).
 const phone = loadPhoneVerification();
 console.log(`[matra] sealed matching: phone verification ${phone.required ? `required (${phone.verifier.name} SMS provider)` : 'OFF (development)'}`);
+const matchingSettings = loadMatchingSettings();
+// The matcher service (W15, W18): a separate process (MATRA_MATCHER_URL), or in-process with simulated attestation,
+// which production refuses unless MATRA_DEMO_MODE=1.
+const matcher = loadMatcherConfig(process.env, { releaseDelayHours: matchingSettings.releaseDelayHours });
+console.log(`[matra] sealed matching: ${matcher.description}`);
 if (oprf.remote) {
   // Each reachable holder must serve exactly its pinned share public key; a down holder only warns (t of m suffice).
   const { reachable } = await new RemoteHolderPool(oprf.t, oprf.remote, pepper).verifyKeys();
@@ -63,7 +69,8 @@ const app = createApp({
   matching: {
     oprf,
     limits: loadOprfLimits(),
-    ...loadMatchingSettings(),
+    ...matchingSettings,
+    matcher: { client: matcher.client, pins: matcher.pins },
     requirePhoneVerification: phone.required,
     phone: {
       verifier: phone.verifier,

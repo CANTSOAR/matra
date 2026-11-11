@@ -31,8 +31,22 @@ const waitFor = (i: number) => `until curl -sf http://127.0.0.1:${HOLDER_PORT + 
 // Phone verification (W13): production refuses the mock SMS provider unless MATRA_DEMO_MODE=1 (this stack is a
 // fictional-data demo, and the scenarios read the mock's on-screen code), and needs a phone-token key outside the DB dir.
 const phoneKey = `node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > "${KEYS}/phone-hash.key"`;
+// The matcher (W18) runs as its OWN process too (apps/matcher, port 4320, its own DB), with a SIMULATED attestation
+// (production allows that only with MATRA_DEMO_MODE=1). The app server pins its platform key and its measurement, as a
+// production deployment with a separate matcher must.
+const MATCHER_PORT = Number(process.env.MATRA_E2E_MATCHER_PORT) || 4320;
+const rand = (f: string) => `node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > "${KEYS}/${f}"`;
+const matcherKeys = ['matcher.key', 'matcher-token.key', 'attestation-platform.key'].map(rand).join(' && ');
+const matcherSecrets = `MATRA_MATCHER_KEY_FILE="${KEYS}/matcher.key" MATRA_MATCHER_TOKEN_FILE="${KEYS}/matcher-token.key" MATRA_ATTESTATION_PLATFORM_KEY_FILE="${KEYS}/attestation-platform.key"`;
+const matcherCmd =
+  `NODE_ENV=production MATRA_DEMO_MODE=1 ${matcherSecrets} MATRA_MATCHER_DB_PATH="${path.dirname(DB)}/matcher.db" ` +
+  `MATRA_MATCH_RELEASE_DELAY_HOURS=0 PORT=${MATCHER_PORT} npm run -s -w @matra/matcher start`;
+const matcherPins =
+  `MATRA_MATCHER_URL=http://127.0.0.1:${MATCHER_PORT} MATRA_MATCHER_TOKEN_FILE="${KEYS}/matcher-token.key" ` +
+  `MATRA_ATTESTATION_PLATFORM_PUBKEY="$(MATRA_ATTESTATION_PLATFORM_KEY_FILE="${KEYS}/attestation-platform.key" npm run -s -w @matra/matcher measure -- --platform-pubkey)" ` +
+  `MATRA_MATCHER_MEASUREMENT="$(npm run -s -w @matra/matcher measure)"`;
 const env =
-  `NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY_FILE="${KEYS}/phone-hash.key" MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}" MATRA_MATCH_RELEASE_DELAY_HOURS=0 ` +
+  `${matcherPins} NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY_FILE="${KEYS}/phone-hash.key" MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}" MATRA_MATCH_RELEASE_DELAY_HOURS=0 ` +
   `MATRA_OPRF_HOLDER_URLS=${holders.map((i) => `http://127.0.0.1:${HOLDER_PORT + i}`).join(',')} ` +
   `MATRA_OPRF_SHARE_PUBKEYS="${pub("p.holders.map((h) => h.publicKey).join(',')")}" MATRA_HOLDER_TOKEN_KEY_FILE="${KEYS}/holder-token.key"`;
 
@@ -43,13 +57,15 @@ export default defineConfig({
     {
       command: [
         `test -f apps/web/dist/index.html || (echo "run npm run build first" >&2; exit 1)`,
-        `rm -f "${DB}" "${DB}-wal" "${DB}-shm" "${path.dirname(DB)}"/holder-*.db*`,
+        `rm -f "${DB}" "${DB}-wal" "${DB}-shm" "${path.dirname(DB)}"/holder-*.db* "${path.dirname(DB)}"/matcher.db*`,
         `mkdir -p "${path.dirname(DB)}" "${KEYS}"`,
         ceremony,
         phoneKey,
-        // holders in the background (Playwright stops the whole process group at the end of the run)
-        `(${holders.map((i) => `${holderCmd(i)} &`).join(' ')} true)`,
+        matcherKeys,
+        // holders and the matcher in the background (Playwright stops the whole process group at the end of the run)
+        `(${holders.map((i) => `${holderCmd(i)} &`).join(' ')} ${matcherCmd} & true)`,
         ...holders.map(waitFor),
+        `until curl -sf http://127.0.0.1:${MATCHER_PORT}/v1/health >/dev/null; do sleep 0.2; done`,
         `${env} npm run seed --silent`,
         `${env} PORT=${PORT} MATRA_AUTO_VERIFY_ATTORNEYS=1 MATRA_DEMO_BANNER=1 npm start --silent`,
       ].join(' && '),

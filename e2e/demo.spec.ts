@@ -44,8 +44,21 @@ const NARRATIVE =
   "We were at a party at a coworker's apartment. I remember the music was too loud and the hallway smelled like cologne.\n\n" +
   'He said he\'d walk me to my car… I said "no thanks, I\'m fine" — twice.\nI don\'t remember the drive home clearly.';
 
-const COUNSELOR = 'counselor.demo';
+// Two seeded counselors: counselor.demo is licensed in NJ, counselor.ny in NY. The matcher gives each matched group to
+// ONE counselor, licensed where it happened if possible (apps/matcher).
+const COUNSELOR_NJ = 'counselor.demo';
+const COUNSELOR_NY = 'counselor.ny';
 const COUNSELOR_PASS = 'demo-counselor-passphrase';
+
+async function counselorSignIn(page: Page, username: string) {
+  await page.goto('/');
+  await page.getByRole('link', { name: 'I’m an attorney' }).click();
+  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.getByLabel('Username').fill(username);
+  await page.getByLabel('Passphrase').fill(COUNSELOR_PASS);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('heading', { name: 'Matched sealed reports' })).toBeVisible({ timeout: 90_000 });
+}
 
 async function openStory(page: Page) {
   await nav(page, 'My story');
@@ -435,7 +448,7 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await ctx.close();
 });
 
-test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the counselor sees one matched group with two separate contact bundles', async ({ page }) => {
+test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the matcher gives the group to the counselor licensed where it happened (NY), with two separate contact bundles; the NJ counselor sees nothing', async ({ page }) => {
   // Survivor B names the same Instagram profile as a URL (A typed "@demo_handle_123"), and a different phone number.
   await registerSurvivor(page, ALIAS_B);
   // She confirms a phone first, from the sealed-match page: the same phone as A, written differently (2 accounts allowed).
@@ -459,6 +472,15 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await savePage(page);
   await chip(page, 'Best way to reach you', 'Text message');
   await fill(page, { 'Phone number or email to use': '(555) 010-0300' });
+  await savePage(page);
+  await page.locator('[data-topic-panel]').getByRole('button', { name: 'Back to your story' }).last().click();
+  // It happened in New York: the matcher routes the group to a counselor licensed there (sealed to the matcher only).
+  await openTopic(page, 'whenWhere');
+  // (the "when" page, then the place page, are left empty: she only gives the state)
+  await savePage(page);
+  await expect(page.locator('[data-topic-panel]').getByLabel('Where did it happen? Describe it any way you can.')).toBeVisible();
+  await savePage(page);
+  await fill(page, { State: { select: 'NY' } });
   await savePage(page);
   await page.locator('[data-topic-panel]').getByRole('button', { name: 'Back to your story' }).last().click();
   await storyMap(page).getByRole('button', { name: /^Review/ }).click();
@@ -493,17 +515,18 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await page.getByTestId('lock-signout').click();
   await expect(page.getByRole('heading', { name: 'For attorneys' })).toBeVisible();
 
-  // The legal options counselor (verified, seeded) signs in and sees exactly one matched group.
-  await page.goto('/');
-  await page.getByRole('link', { name: 'I’m an attorney' }).click();
-  await page.getByRole('link', { name: 'Sign in' }).click();
-  await page.getByLabel('Username').fill(COUNSELOR);
-  await page.getByLabel('Passphrase').fill(COUNSELOR_PASS);
-  await page.getByRole('button', { name: 'Unlock' }).click();
-  await expect(page.getByRole('heading', { name: 'Matched sealed reports' })).toBeVisible({ timeout: 90_000 });
+  // The NJ-licensed counselor is not given this group: it happened in NY.
+  await counselorSignIn(page, COUNSELOR_NJ);
+  await expect(page.getByText('No matches right now.')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('counselor-group')).toHaveCount(0);
+  await page.getByTestId('lock-signout').click();
+
+  // The NY-licensed counselor (verified, seeded) signs in and sees exactly one matched group, and why it is hers.
+  await counselorSignIn(page, COUNSELOR_NY);
   await expect(page.getByTestId('counselor-ethics')).toContainText('not evidence');
   const groups = page.getByTestId('counselor-group');
   await expect(groups).toHaveCount(1);
+  await expect(groups.getByTestId('counselor-assignment')).toContainText('Assigned to you because this happened in New York, where you’re licensed.');
   await groups.getByRole('button', { name: 'Open with my private key' }).click();
   await expect(groups.getByText('instagram:demo_handle_123').first()).toBeVisible({ timeout: 30_000 });
   // every card shows the identifier its bundle names (review L1)

@@ -1080,3 +1080,49 @@ Code shape:
 - e2e: scenario 1 verifies after sealing (sealed-screen card), scenario 5's survivor B verifies first from the
   sealed-match page with the same phone in another format, and a new scenario 5b shows the third account's limit
   message. `e2e/helpers.ts` allows exactly the expected 409 from `/api/matching/verification/check`.
+
+### matcher-service
+
+Built before metadata-min and staged-release (neither had landed), so:
+- `logging.ts` does not exist yet: the matcher logs `[matcher] METHOD <route pattern> status ms` with its own tiny
+  middleware (no ids, tags, tokens, IPs or query strings). Swap it for `requestLogger()` when metadata-min lands.
+- `docs/PRIVACY_DATA_INVENTORY.md` does not exist yet. metadata-min should add: the matcher DB (`matcher_entries`: entry
+  id, tag, survivor_ref = HMAC(pepper, "matcher-ref|" + user id), sealed-at time, account-creation **hour**, incident and
+  survivor state in clear; `matcher_assignments`: tag, counselor id or null, reason, time, excluded counselors, Sybil
+  signals, signature; `matcher_roster`), and on the app server `match_entries.routing_envelope` (ciphertext),
+  `match_entries.matcher_synced`, `match_assignments` (the cached reason names a state per released group) and
+  `matcher_pending_deletes` (entry ids only).
+- `/v1/debug/state` and the inspector's matcher pane are left to the demo feature (§4).
+
+Code shape:
+- `apps/matcher/src/app.ts` holds `createMatcherApp` and `server.ts` is only the entrypoint (the holder's split), so
+  tests import the app without starting a server. `config.ts` (env, secrets, attester choice) and `measure-cli.ts`
+  (`npm run measure`) are extra files; `index.ts` exports `createMatcher({ dbPath, keys, releaseDelayMs, rosterKey })`.
+- The matcher has its own small secret loader (`loadMatcherSecret`) rather than importing the app server's
+  `loadSecretBytes`, so `@matra/matcher` does not depend on `@matra/server`. Same rules: value or `_FILE` outside its DB
+  directory, required in production, generated once into `apps/matcher/data/` in development (gitignored).
+- `matcher_assignments.counselor_id` is nullable in the matcher DB: an unassigned group keeps a row (reason
+  `unassigned:…`, its excluded counselors) so a decline is remembered while nobody else is available.
+- Stickiness also ends when the counselor is no longer licensed in any of the group's states (needed for "v1 roster →
+  nothing assigned", and the obvious rule when a license lapses).
+- Signed assignments (the stretch): the matcher signs each assignment with its attested `signKey` and the app server
+  stores the signature, but the counselor portal does **not** verify it yet; W18 says re-routing is undetected.
+- The app server re-sends every entry to the matcher at startup (`matcher_synced` reset), so the in-process matcher can
+  use an in-memory DB by default (`MATRA_MATCHER_DB_PATH` for a file). Withdrawals and account deletions are queued in
+  a new table `matcher_pending_deletes` (part of v8) until the matcher has them.
+- Forwarding is not awaited by `POST /api/matching/entries` (same code path for a match or a miss); the sync loop runs
+  after each entry, every 60 s, at startup, and before `GET /api/counselor/groups`. Tests call `syncMatcher(app)`.
+- `MatchLabel` and the bundle gain `states: { incident?, survivor? }`; `state` is kept on the bundle for older readers.
+  Old labels' single `state` is re-sealed as the incident state.
+- `CreateMatchEntryRequest.routing` is required and its ciphertext length is fixed (256-byte padded plaintext).
+- `MatchTransport.attestation(nonce)` is required; `verifiedMatcher()` runs **before** the OPRF calls so a refused
+  attestation costs no quota. `MatchPins` gains `attestation` and `allowSimulatedAttestation` (the web build sets the
+  latter from `__MATRA_DEMO__`).
+- Server pins: production with a separate matcher requires `MATRA_ATTESTATION_PLATFORM_PUBKEY` and
+  `MATRA_MATCHER_MEASUREMENT`; production in-process needs `MATRA_DEMO_MODE=1` plus `MATRA_MATCHER_KEY` and
+  `MATRA_ATTESTATION_PLATFORM_KEY` (render.yaml generates both).
+- Seed: `counselor.demo` is now licensed in NJ only and a second counselor, `counselor.ny`, in NY (same passphrase).
+  e2e scenario 5 sets B's incident state to NY: the NY counselor gets the group with the NY reason, the NJ counselor
+  sees "No matches right now".
+- Test helpers' `sealMatch` defaults to `states: { incident: 'NJ' }` (where test counselors are licensed), so existing
+  tests still get a group; the M6 roster test now shows reassignment instead of two counselors seeing one group.

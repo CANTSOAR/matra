@@ -312,6 +312,29 @@ const MIGRATIONS: string[] = [
   ALTER TABLE users ADD COLUMN matching_verified INTEGER NOT NULL DEFAULT 0;
   UPDATE users SET matching_verified = 1 WHERE id IN (SELECT user_id FROM match_entries);
   `,
+  // ── v8: matcher service (apps/matcher; W15, W18). Each entry gains her routing tag sealed to the matcher's attested
+  // key (this server cannot open it) and whether it has been forwarded to the matcher. match_assignments caches the
+  // matcher's answer (which ONE counselor each group went to, and why), so groups already released stay visible while
+  // the matcher is unreachable; new groups wait for it (fail closed). matcher_pending_deletes queues withdrawals and
+  // account deletions until the matcher has them. key_epoch is bumped so existing clients re-seal on next sign-in,
+  // this time with routing data. For counselors, counselor_profiles.jurisdictions means the states she is LICENSED in
+  // (the roster's licensedStates).
+  `
+  ALTER TABLE match_entries ADD COLUMN routing_envelope TEXT;
+  ALTER TABLE match_entries ADD COLUMN matcher_synced INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE match_assignments (
+    tag          TEXT PRIMARY KEY,
+    counselor_id TEXT NOT NULL,
+    reason       TEXT NOT NULL,
+    assigned_at  TEXT NOT NULL,
+    signals      TEXT NOT NULL,             -- JSON MatchSignals, computed by the matcher
+    signature    TEXT                       -- the matcher's Ed25519 signature over the assignment
+  );
+  CREATE TABLE matcher_pending_deletes (
+    entry_id TEXT PRIMARY KEY
+  ) WITHOUT ROWID;
+  UPDATE matching_meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'key_epoch';
+  `,
 ];
 
 /**

@@ -94,6 +94,11 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 | `MATRA_MATCH_RELEASE_DELAY_HOURS` | `72` | A matched group reaches counselors only once its entries are this old (slows Sybil / counselor guessing). `0` only for tests |
 | `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_GROUP_PUBKEY`, `MATRA_OPRF_SHARE_PUBKEYS` | build time | Pinned into the **web build** (Vite): t, the group public key and the share public keys (comma-separated, index order), as printed by `oprf-ceremony` (also `GET /api/matching/oprf/<i>/key`). The client refuses a key set that differs. All three or none: the build fails if only some are set, or if they are not one consistent t-of-m key set (checked with the same code the client uses). Docker: `--build-arg`. The old `MATRA_OPRF_PUBKEY_A/B` make the build fail |
 | `MATRA_COUNSELOR_ROSTER_PUBKEY` | build time | Pinned into the web build: base64 Ed25519 public key of the organization that signs the counselor roster. With it, survivors seal only to counselors in the signed roster. Docker: `--build-arg` |
+| `MATRA_MATCHER_KEY` (or `_FILE`) | random, ≥ 32 chars | **In-process matcher** (no `MATRA_MATCHER_URL`; demo only): the matcher's secret (its routing P-256 key and signing key are derived from it). **Secret**, outside the database directory; required in production. Changing it makes existing routing tags unreadable (their groups route as "no state" until survivors re-seal) |
+| `MATRA_ATTESTATION_PLATFORM_KEY` (or `_FILE`) | random, ≥ 32 chars | In-process matcher: the **simulated** attestation platform's Ed25519 key. It is not a hardware key: whoever holds it can sign any measurement (W18). Required in production, where the simulated matcher also needs `MATRA_DEMO_MODE=1` |
+| `MATRA_MATCHER_DB_PATH` | unset (in memory) | In-process matcher's own database. In memory by default: the app server re-sends every entry at startup (assignments are recomputed; load balancing may then differ) |
+| `MATRA_MATCHER_URL`, `MATRA_MATCHER_TOKEN` (or `_FILE`) | unset | **Separate matcher process** (`npm run -w @matra/matcher start`): its base URL and the shared bearer token (≥ 32 chars). **Secret** (the token). Plain `http://` is refused in production except to loopback |
+| `MATRA_ATTESTATION_PLATFORM_PUBKEY`, `MATRA_MATCHER_MEASUREMENT` | unset in a single-host demo | The matcher pins, on the **app server** and in the **web build** (Vite; Docker `--build-arg`): the platform's base64 public key and the hex measurement printed by `npm run -w @matra/matcher measure`. Both or neither. With a separate matcher, production requires them. A pinned build refuses a simulated attestation unless it was built with `MATRA_DEMO_MODE=1` |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | **unset** | Development only. On a demo, verify attorneys explicitly (see below) |
 | `MATRA_SERVE_WEB`, `MATRA_WEB_DIR` | unset | Advanced: turn web serving on or off, or serve from another directory |
 
@@ -108,7 +113,34 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 5. **Sign the roster** after every counselor verification or removal: `MATRA_COUNSELOR_ROSTER_SIGNING_KEY=<secret> npm run -w @matra/server sign-roster` against the production database (for example from the host's maintenance shell, typing the key only for that command; `--dry-run` prints without storing). The server serves the signed roster; seals for counselors who are no longer listed are deleted, and survivors' apps add seals for new counselors on their next sign-in.
 6. Without pins (development, the e2e suite) everything works, and the app logs one warning that the counselor list is not pinned.
 
-Upgrading an existing instance: database schema v5 **drops all sealed-matching data** (entries, seals, groups, counselor notes, OPRF quotas), because the matching format changed and old entries can't be converted. Matching only ever held demo data; survivors can seal again. Schema v6 (threshold OPRF) drops the OPRF quota counters, and the first start with threshold shares is a **key change**: start once with `MATRA_OPRF_ROTATE=1` (new key epoch; survivors' apps re-seal their entries on next sign-in). Schema v7 (phone verification) adds `phone_tokens` and `users.matching_verified`; accounts that already have sealed entries are marked verified so their apps can still re-seal, and every other survivor confirms a phone the next time she turns on a sealed match. Set `MATRA_PHONE_HASH_KEY` and the SMS provider (or `MATRA_DEMO_MODE=1` + `MATRA_SMS_PROVIDER=mock` for a demo) before upgrading, or the server refuses to start. Remove `MATRA_OPRF_KEY_A/B` from the environment, or the server refuses to start. Since the holder-quota fix (quotas keyed by index and share public key, plus an account-level budget), existing per-holder counters are no longer read, so every survivor's per-holder count starts again once; and holder tokens now carry `bh`, so upgrade the holders together with the app server (an upgraded holder refuses tokens without it).
+## The matcher service
+
+The matcher (apps/matcher) decides which matched groups are released and to which **one** counselor, by state: a
+counselor licensed where it happened, else where a survivor lives (SECURITY_WHITEPAPER.md §4a "Matcher", threat model
+W18). A counselor's licensed states are her profile's `jurisdictions`; with a signed roster they come from the roster
+(v2), so **re-sign the roster after upgrading** (a v1 roster lists nobody as licensed, and nothing is assigned).
+
+- *Single-host demo (default):* the matcher runs inside the app server with a **simulated** attestation. Set
+  `MATRA_MATCHER_KEY` and `MATRA_ATTESTATION_PLATFORM_KEY` (random, outside the DB volume) and `MATRA_DEMO_MODE=1`;
+  production refuses it otherwise. No separation from the operator.
+- *Separate process:* run `npm run -w @matra/matcher start` with `MATRA_MATCHER_KEY`, `MATRA_MATCHER_TOKEN`,
+  `MATRA_ATTESTATION_PLATFORM_KEY` (simulated platform), `MATRA_MATCHER_DB_PATH` (its own DB), `MATRA_MATCH_RELEASE_DELAY_HOURS`
+  (same as the app server), `MATRA_COUNSELOR_ROSTER_PUBKEY` (then it accepts only the signed roster) and `PORT` (default
+  4320). Production refuses the simulated attester unless `MATRA_DEMO_MODE=1`; `MATRA_ATTESTATION=nitro` or
+  `confidential-space` are placeholders that refuse to start until a real verifier exists. Give the app server
+  `MATRA_MATCHER_URL` and the same `MATRA_MATCHER_TOKEN`.
+- *Pins:* publish the measurement (`npm run -w @matra/matcher measure` on the released source) and the platform's
+  public key, and set `MATRA_ATTESTATION_PLATFORM_PUBKEY` + `MATRA_MATCHER_MEASUREMENT` on the app server and as web
+  build args. Any change to `apps/matcher/src` or its `package.json` changes the measurement: rebuild the web app with the
+  new value in the same release, or every survivor's client refuses to seal ("This matcher isn't running the code this
+  app trusts"). In a real enclave the measurement would be the platform's (Nitro PCR0, Confidential Space image digest)
+  over a reproducible build, not this file hash.
+- If the matcher is unreachable or its attestation fails, entries are still saved and wait (`matcher_synced = 0`); the
+  app server retries every minute and before counselors load their groups. Groups already released stay visible.
+
+Upgrading an existing instance: schema v8 (matcher) adds the routing column, the assignment cache and a queue of
+withdrawals for the matcher, and bumps the key epoch so survivors' apps re-seal their entries on next sign-in, this time
+with routing data (until then their groups route as "no state" and are not released). Database schema v5 **drops all sealed-matching data** (entries, seals, groups, counselor notes, OPRF quotas), because the matching format changed and old entries can't be converted. Matching only ever held demo data; survivors can seal again. Schema v6 (threshold OPRF) drops the OPRF quota counters, and the first start with threshold shares is a **key change**: start once with `MATRA_OPRF_ROTATE=1` (new key epoch; survivors' apps re-seal their entries on next sign-in). Schema v7 (phone verification) adds `phone_tokens` and `users.matching_verified`; accounts that already have sealed entries are marked verified so their apps can still re-seal, and every other survivor confirms a phone the next time she turns on a sealed match. Set `MATRA_PHONE_HASH_KEY` and the SMS provider (or `MATRA_DEMO_MODE=1` + `MATRA_SMS_PROVIDER=mock` for a demo) before upgrading, or the server refuses to start. Remove `MATRA_OPRF_KEY_A/B` from the environment, or the server refuses to start. Since the holder-quota fix (quotas keyed by index and share public key, plus an account-level budget), existing per-holder counters are no longer read, so every survivor's per-holder count starts again once; and holder tokens now carry `bh`, so upgrade the holders together with the app server (an upgraded holder refuses tokens without it).
 
 ## Option A: Render (Blueprint)
 

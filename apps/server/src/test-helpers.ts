@@ -13,7 +13,7 @@ import {
   newKdfSalt,
   wrapKeyWithMaster,
 } from '@matra/crypto';
-import type { AttorneyProfile, AuthResponse, Envelope, IdentifierKind, RegisterRequest, Role } from '@matra/shared';
+import type { AttorneyProfile, AuthResponse, Envelope, IdentifierKind, MatchStates, RegisterRequest, Role } from '@matra/shared';
 import { createApp, getDb, type CreateAppOptions } from './app.js';
 
 export const TEST_ITERATIONS = 1000;
@@ -124,6 +124,7 @@ export function matchTransport(app: express.Express, u: TestUser): MatchTranspor
     config: async () => ok(await request(app).get('/api/matching/config').set(u.auth)),
     evaluate: async (i, req) => ok(await request(app).post(`/api/matching/oprf/${i}`).set(u.auth).send(req)),
     createEntry: async (req) => ok(await request(app).post('/api/matching/entries').set(u.auth).send(req)),
+    attestation: async (nonce) => ok(await request(app).get(`/api/matching/attestation?nonce=${nonce}`)),
     listEntries: async () => ok(await request(app).get('/api/matching/entries').set(u.auth)),
     addSeals: async (id, req) => ok(await request(app).post(`/api/matching/entries/${id}/seals`).set(u.auth).send(req)),
   };
@@ -138,6 +139,8 @@ export async function sealMatch(
   platform?: string,
   contactName = u.user.username,
   pins?: MatchPins,
+  /** default: incident in NJ, where test-helpers' counselors are licensed (so the matcher assigns the group) */
+  states: MatchStates = { incident: 'NJ' },
 ) {
   const n = normalizeMatchIdentifier(kind, value, platform);
   if (!n.ok) throw new Error(`not matchable: ${n.reason}`);
@@ -148,7 +151,13 @@ export async function sealMatch(
     consentStatement: 'If someone else names the same person, a counselor may contact me.',
     label: `${kind}`,
     ...(pins && { pins }),
+    states,
   });
+}
+
+/** Wait for the app server to forward everything to the matcher (it normally does so after each response). */
+export async function syncMatcher(app: express.Express): Promise<void> {
+  await (app.locals.syncMatcher as () => Promise<void>)();
 }
 
 /** The real phone-verification flow with the mock SMS provider's demo code. Returns the check response. */

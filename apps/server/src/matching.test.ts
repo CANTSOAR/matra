@@ -13,7 +13,9 @@ import {
   decryptJSON,
   encryptJSON,
   generateContentKey,
+  matcherKeysFromSeed,
   reconstructMatchGroup,
+  sealRouting,
   toBase64,
 } from '@matra/crypto';
 import type { CounselorMatchGroup } from '@matra/shared';
@@ -143,43 +145,44 @@ describe('sealed matching: threshold release to counselors', () => {
 
     const eb = await sealMatch(app, b, 'social_handle', '@bad_guy', 'Instagram', 'Blair');
     expect(eb.tag).toBe(ea.tag); // different forms, same person
-    const groups = await groupsOf(app, loc);
+    // the matcher gives the group to ONE of the two NJ-licensed counselors
+    const [mine, other] = (await groupsOf(app, loc)).length ? [loc, loc2] : [loc2, loc];
+    const groups = await groupsOf(app, mine);
     expect(groups).toHaveLength(1);
+    expect(groups[0]!.assignment?.reason).toBe('incident_state:NJ');
+    expect(await groupsOf(app, other)).toEqual([]);
     const g = groups[0]!;
     expect(g.tag).toBe(ea.tag);
     expect(g.entries).toHaveLength(2);
-    expect(g.entries.every((e) => e.seal.counselorId === loc.user.id)).toBe(true);
+    expect(g.entries.every((e) => e.seal.counselorId === mine.user.id)).toBe(true);
     const text = JSON.stringify(groups);
     for (const u of [a, b, c]) {
       expect(text).not.toContain(u.user.id);
       expect(text).not.toContain(u.user.username);
     }
 
-    const r = await reconstructMatchGroup(g.tag, g.entries, loc.privateKey, loc.user.id);
+    const r = await reconstructMatchGroup(g.tag, g.entries, mine.privateKey, mine.user.id);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.failed).toEqual([]);
       expect(r.bundles.map((x) => x.bundle.contact.name).sort()).toEqual(['Alex', 'Blair']);
       expect(r.bundles[0]!.bundle.identifier).toEqual({ kind: 'social', canonical: 'instagram:bad_guy' });
     }
-    // the second counselor gets only the seals addressed to them, and can reconstruct independently
-    const g2 = (await groupsOf(app, loc2))[0]!;
-    expect(g2.entries.every((e) => e.seal.counselorId === loc2.user.id)).toBe(true);
-    expect((await reconstructMatchGroup(g2.tag, g2.entries, loc2.privateKey, loc2.user.id)).ok).toBe(true);
-    // ...and cannot use the first counselor's seals
-    expect((await reconstructMatchGroup(g.tag, g.entries, loc2.privateKey, loc2.user.id)).ok).toBe(false);
+    // the other counselor could not use the assigned counselor's seals even if she had them
+    expect((await reconstructMatchGroup(g.tag, g.entries, other.privateKey, other.user.id)).ok).toBe(false);
 
     // C's unrelated entry was never released
     expect(text).not.toContain('Casey');
 
     // counselor notes: encrypted to the counselor, stored per group
-    const env = await encryptJSON({ status: 'reached_out', text: 'Left a text at 6pm.' }, loc.masterKey);
-    const n = await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(loc.auth).send({ entryId: g.entries[0]!.entryId, envelope: env });
+    const env = await encryptJSON({ status: 'reached_out', text: 'Left a text at 6pm.' }, mine.masterKey);
+    const n = await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(mine.auth).send({ entryId: g.entries[0]!.entryId, envelope: env });
     expect(n.status).toBe(201);
-    const again = (await groupsOf(app, loc))[0]!;
+    const again = (await groupsOf(app, mine))[0]!;
     expect(again.notes).toHaveLength(1);
-    expect(await decryptJSON(again.notes[0]!.envelope, loc.masterKey)).toEqual({ status: 'reached_out', text: 'Left a text at 6pm.' });
-    expect((await groupsOf(app, loc2))[0]!.notes).toEqual([]);
+    expect(await decryptJSON(again.notes[0]!.envelope, mine.masterKey)).toEqual({ status: 'reached_out', text: 'Left a text at 6pm.' });
+    // a counselor the group was not assigned to cannot add notes to it
+    expect((await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(other.auth).send({ envelope: env })).body.code).toBe('group_not_found');
     expect((await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(a.auth).send({ envelope: env })).status).toBe(403);
   });
 
@@ -194,7 +197,13 @@ describe('sealed matching: threshold release to counselors', () => {
     const forged = await request(app)
       .post('/api/matching/entries')
       .set(a.auth)
-      .send({ tag: first.tag, bundle: env, labelEnvelope: env, seals: [{ counselorId: loc.user.id, wrappedKey: { v: 1, alg: 'RSA-OAEP-256', data: 'AAAA' }, envelope: env }] });
+      .send({
+        tag: first.tag,
+        bundle: env,
+        labelEnvelope: env,
+        seals: [{ counselorId: loc.user.id, wrappedKey: { v: 1, alg: 'RSA-OAEP-256', data: 'AAAA' }, envelope: env }],
+        routing: await sealRouting({ v: 1, tag: first.tag }, matcherKeysFromSeed(new Uint8Array(32)).encPublicJwk),
+      });
     expect(forged.status).toBe(409);
     expect(await groupsOf(app, loc)).toEqual([]);
     expect(db.prepare('SELECT COUNT(*) n FROM match_entries').get()).toEqual({ n: 1 });
@@ -280,15 +289,18 @@ describe('review fixes: release delay and Sybil signals (M2)', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM match_groups').get()).toEqual({ n: 1 }); // it matched…
     expect(await groupsOf(app, loc)).toEqual([]); // …but nothing is released yet
     const old = new Date(Date.now() - 73 * 3_600_000).toISOString();
-    db.prepare('UPDATE match_entries SET created_at = ? WHERE user_id = ?').run(old, a.user.id);
+    // (time travel: the matcher keeps its own copy of the times, so the entries are re-sent to it)
+    const age = (userId: string) => db.prepare('UPDATE match_entries SET created_at = ?, matcher_synced = 0 WHERE user_id = ?').run(old, userId);
+    age(a.user.id);
     expect(await groupsOf(app, loc)).toEqual([]); // only one entry is old enough
-    db.prepare('UPDATE match_entries SET created_at = ? WHERE user_id = ?').run(old, b.user.id);
+    age(b.user.id);
     const g = await groupsOf(app, loc);
     expect(g).toHaveLength(1);
     // both accounts were created seconds apart and sealed within 7 days of creation
     expect(g[0]!.signals).toEqual({ accountsCreatedClose: true, newAccountEntries: 2 });
     // an older account, created weeks earlier, is not flagged
     db.prepare('UPDATE users SET created_at = ? WHERE id = ?').run(new Date(Date.now() - 60 * 86_400_000).toISOString(), a.user.id);
+    db.prepare('UPDATE match_entries SET matcher_synced = 0').run();
     expect((await groupsOf(app, loc))[0]!.signals).toEqual({ accountsCreatedClose: false, newAccountEntries: 1 });
   });
 });
@@ -331,17 +343,21 @@ describe('review fixes: counselor roster changes (M6) and signed roster (M4)', (
     expect(await refreshMatchEntries(matchTransport(app, a), { masterKey: a.masterKey })).toEqual({ resealed: 0, sealsAdded: 1, skipped: 0 });
     expect(await groupsOf(app, loc2)).toEqual([]);
     await refreshMatchEntries(matchTransport(app, b), { masterKey: b.masterKey });
-    const g2 = (await groupsOf(app, loc2))[0]!;
-    expect((await reconstructMatchGroup(g2.tag, g2.entries, loc2.privateKey, loc2.user.id)).ok).toBe(true);
+    // the group stays with loc1 (sticky) while loc1 is on the roster
+    expect(await groupsOf(app, loc2)).toEqual([]);
+    expect(await groupsOf(app, loc1)).toHaveLength(1);
     // idempotent
     expect(await refreshMatchEntries(matchTransport(app, b), { masterKey: b.masterKey })).toEqual({ resealed: 0, sealsAdded: 0, skipped: 0 });
-    // the seals endpoint is owner-only
-    const seal = g2.entries[0]!.seal;
-    expect((await request(app).post(`/api/matching/entries/${ea.entry.id}/seals`).set(b.auth).send({ seals: [seal] })).status).toBe(404);
-    // loc1 is removed: its seals are deleted server-side
+    // loc1 is removed: its seals are deleted server-side, and the matcher reassigns the group to loc2
     db.prepare('UPDATE counselor_profiles SET verified = 0 WHERE user_id = ?').run(loc1.user.id);
     await request(app).get('/api/matching/config').set(a.auth);
     expect(db.prepare('SELECT COUNT(*) n FROM match_seals WHERE counselor_id = ?').get(loc1.user.id)).toEqual({ n: 0 });
+    const g2 = (await groupsOf(app, loc2))[0]!;
+    expect(g2.assignment?.reason).toBe('reassigned:incident_state:NJ');
+    expect((await reconstructMatchGroup(g2.tag, g2.entries, loc2.privateKey, loc2.user.id)).ok).toBe(true);
+    // the seals endpoint is owner-only
+    const seal = g2.entries[0]!.seal;
+    expect((await request(app).post(`/api/matching/entries/${ea.entry.id}/seals`).set(b.auth).send({ seals: [seal] })).status).toBe(404);
     // 20-counselor cap raised to 200
     const many = Array.from({ length: 21 }, (_, i) => ({ ...seal, counselorId: i.toString(16).padStart(32, '0') }));
     const r = await request(app).post(`/api/matching/entries/${ea.entry.id}/seals`).set(a.auth).send({ seals: many });

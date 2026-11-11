@@ -16,6 +16,7 @@ import {
   refreshMatchEntries,
   submitMatchEntry,
   ThresholdOprfError,
+  AttestationError,
   generateContentKey,
   randomId,
   sha256Hex,
@@ -359,15 +360,18 @@ export async function lodgeEscrow(
         identifier: t.id,
         contact,
         consentStatement: opts.consentStatement ?? MATCHING_CONSENT_STATEMENT,
-        state: record.incident.jurisdiction?.state ?? record.survivor.residenceState,
+        // routing: a counselor licensed where it happened, else where she lives (sealed to the matcher only)
+        states: { incident: record.incident.jurisdiction?.state, survivor: record.survivor.residenceState },
         label: t.label,
         config,
         pins: MATCH_PINS,
       });
     } catch (e) {
       // Fewer than t key holders answered (or one answered with a key other than its published one): nothing sealed.
-      if (e instanceof ThresholdOprfError || (e as { code?: string }).code === 'holders_unavailable')
+      if (e instanceof ThresholdOprfError || (e as { code?: string }).code === 'holders_unavailable' || (e as { code?: string }).code === 'matcher_unavailable')
         throw new MatchingError('Sealed matching isn’t available right now. Nothing was sealed.');
+      // The matcher's attestation did not verify (not the published code, not the trusted platform): nothing was sent.
+      if (e instanceof AttestationError) throw new MatchingError(MATCHER_NOT_TRUSTED);
       if ((e as { code?: string }).code !== 'already_sealed') throw e;
     }
     done.add(t.key);
@@ -375,9 +379,13 @@ export async function lodgeEscrow(
   return Array.from(done);
 }
 
+/** Shown when the matcher's attestation fails: it is not running the code (or on the platform) this app trusts. */
+export const MATCHER_NOT_TRUSTED = 'This matcher isn’t running the code this app trusts, so nothing was sealed. Your story is saved.';
+
 function matchTransport(api: ApiClient) {
   return {
     config: () => api.matchingConfig(),
+    attestation: (nonce: string) => api.matcherAttestation(nonce),
     evaluate: (i: number, req: { blinded: string }) => api.oprfEvaluate(i, req),
     // Sealing still went ahead with t valid holders. Indices only (no identifier); there is no operator report channel yet.
     onBadHolders: (indices: number[]) =>

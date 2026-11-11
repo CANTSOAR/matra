@@ -7,6 +7,7 @@
  */
 import { sha256Hex, toBase64 } from '@matra/crypto';
 import type {
+  AttestationDocument,
   AddMatchSealsRequest,
   AttorneyProfile,
   AuditEvent,
@@ -218,6 +219,10 @@ export class ApiClient {
   }
   matchingConfig() {
     return this.json<MatchingConfig>('GET', '/api/matching/config');
+  }
+  /** The matcher's attestation document for this nonce (proxied by the app server; verified by the caller). */
+  matcherAttestation(nonce: string) {
+    return this.json<AttestationDocument>('GET', `/api/matching/attestation?nonce=${encodeURIComponent(nonce)}`);
   }
   /** OPRF key holder `index` (1..m) of the threshold OPRF; the app server relays to it. */
   oprfEvaluate(index: number, req: OprfEvaluateRequest) {
