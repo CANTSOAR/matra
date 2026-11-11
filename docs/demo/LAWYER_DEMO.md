@@ -87,8 +87,10 @@ in the browser before it is saved.
 **Share.** Still as Jane, choose **`attorney.nj1`** from the verified list.
 
 - Show the scope choices (the sealed account, evidence files, the summary), the expiry (90 days by default; she can
-  choose 30 days to a year and renew), and the attorney's key fingerprint, which she confirms with the attorney by
-  phone or in person.
+  choose 30 days to a year and renew), and *"Verified by Matra: this key belongs to Demo — Alex Rivera, Esq."* *"Her app
+  checked the attorney's key against a list Matra signs offline when it verifies an attorney. She doesn't have to call
+  you to compare codes, which also means she doesn't have to tell an attorney she hasn't chosen yet that she's involved
+  in anything."* The fingerprint is still there under *Check it yourself (optional)*, and it's in the consent text.
 - Read the consent text aloud, under **"Your consent, word for word"**. *"That exact text is stored with the share,
   and its hash goes into the ledger. Only verified attorneys appear in the list."*
 
@@ -165,7 +167,7 @@ demo-only."*
 - For Jane and Morgan, tick *"I've spoken with this person and they expect this request"*, then **Ask for their full
   report**. *"The request never comes out of the blue. The counselor talks to her first."*
 - Profile A as `jane.demo`: Home shows *"A legal options counselor has asked to see your report"*. Show who is asking
-  (name, organization, key fingerprint), what would be shared (evidence unticked by default), and the plain-language
+  (name, organization, key fingerprint checked against the signed counselor roster), what would be shared (evidence unticked by default), and the plain-language
   lines. Tap **Yes, share my report**.
 - Sign in as `morgan.demo` and tap **No, don't share**. *"A no is final in Matra for this sealed match. She never has to
   give a reason."*

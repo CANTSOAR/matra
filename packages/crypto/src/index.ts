@@ -313,3 +313,4 @@ export async function publicKeyFingerprint(jwk: JsonWebKey): Promise<string> {
 export * from './matching';
 export * from './recovery';
 export * from './ledger';
+export * from './directory';

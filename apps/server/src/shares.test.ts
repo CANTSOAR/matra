@@ -6,8 +6,10 @@ import {
   unwrapKeyWithPrivate,
   wrapKeyForRecipient,
 } from '@matra/crypto';
-import { publicKeyFingerprint } from '@matra/crypto';
-import { createRecord, makeApp, registerUser, uploadBlob } from './test-helpers.js';
+import { checkAttorneyKey, generateRosterKey, publicKeyFingerprint, toBase64 } from '@matra/crypto';
+import type { AttorneysResponse } from '@matra/shared';
+import { createRecord, defaultProfile, makeApp, registerUser, uploadBlob } from './test-helpers.js';
+import { signOrgLists, storeOrgLists } from './org-signing.js';
 
 const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {
   const chunks: Buffer[] = [];
@@ -196,5 +198,42 @@ describe('shares', () => {
     await request(app).post(`/api/shares/${share.id}/revoke`).set(jane.auth);
     expect((await request(app).post(`/api/shares/${share.id}/renew`).set(jane.auth)).status).toBe(409);
     expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
+  });
+});
+
+describe('attorney directory signed by the organization (W3)', () => {
+  it('serves the signed directory with the attorney list; it names only verified attorneys, with their key fingerprints', async () => {
+    const { app, db } = makeApp();
+    const jane = await registerUser(app, 'jane.dir');
+    const atty = await registerUser(app, 'atty.dir', 'attorney', { profile: { ...defaultProfile, displayName: 'Dir Counsel' } });
+    await registerUser(app, 'atty.pending', 'attorney', { verify: false });
+    await registerUser(app, 'loc.dir', 'counselor');
+
+    // nothing signed yet: no directory, and a pinned client can't confirm anyone
+    const before = (await request(app).get('/api/attorneys').set(jane.auth)).body as AttorneysResponse;
+    expect(before.directory).toBeUndefined();
+    const org = generateRosterKey();
+    const pin = toBase64(org.publicKey);
+    expect(checkAttorneyKey(before.directory, before.attorneys[0]!, pin).status).toBe('unsigned');
+
+    const lists = signOrgLists(db, org.secretKey);
+    storeOrgLists(db, lists);
+    expect(lists.attorneys.map((a) => a.displayName)).toEqual(['Dir Counsel']); // the unverified one is not signed
+    expect(lists.counselors).toHaveLength(1);
+
+    const res = (await request(app).get('/api/attorneys').set(jane.auth)).body as AttorneysResponse;
+    const listed = res.attorneys.find((a) => a.userId === atty.user.id)!;
+    expect(checkAttorneyKey(res.directory, listed, pin)).toMatchObject({
+      status: 'verified',
+      displayName: 'Dir Counsel',
+      fingerprint: await publicKeyFingerprint(listed.publicKey),
+    });
+    // the server swaps the attorney's key in its own table: the signed directory catches it
+    const evil = await registerUser(app, 'evil.dir', 'attorney', { verify: false });
+    db.prepare('UPDATE users SET public_key = ? WHERE id = ?').run(JSON.stringify(evil.user.publicKey), atty.user.id);
+    const swapped = (await request(app).get('/api/attorneys').set(jane.auth)).body as AttorneysResponse;
+    expect(checkAttorneyKey(swapped.directory, swapped.attorneys.find((a) => a.userId === atty.user.id)!, pin).status).toBe('key_mismatch');
+    // the counselor roster is still served from the same signing run
+    expect((await request(app).get('/api/matching/config').set(jane.auth)).body.roster).toEqual(lists.roster);
   });
 });

@@ -363,7 +363,12 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
   await expect(page.locator('.consent-text')).toContainText(`I, "${ALIAS_A}", choose to share`);
   await expect(page.locator('.consent-text')).toContainText('The attorney can read and save what I share.');
   await expect(page.getByTestId('notice-sharing')).toContainText('it can’t erase what they already saved');
-  await page.getByLabel('This matches what the attorney told me.').check();
+  // No manual fingerprint step: this dev build pins no org key, and says so; the fingerprint is an optional, closed detail
+  await expect(page.getByTestId('attorney-key-check')).toHaveAttribute('data-status', 'unpinned');
+  await expect(page.getByTestId('attorney-key-check')).toContainText('Development version');
+  await expect(page.getByText('This matches what the attorney told me.')).toHaveCount(0);
+  await expect(page.getByTestId('attorney-key-check').getByTestId('attorney-fingerprint')).not.toHaveAttribute('open', '');
+  await expect(page.getByTestId('attorney-key-check')).not.toContainText(/by phone|in person/);
   await page.getByLabel('I agree to the statement above.').check();
   await shot(page, '11-share-consent');
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
@@ -449,7 +454,6 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
   await nav(page, 'Sharing');
   await page.locator('li.card', { hasText: ATTORNEY_NAME }).getByRole('button', { name: 'Review and decide' }).click();
-  await page.getByLabel('This matches what the attorney told me.').check();
   await page.getByLabel('I agree to the statement above.').check();
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
   await expect(page.getByRole('heading', { name: `Shared with ${ATTORNEY_NAME}` })).toBeVisible({ timeout: 60_000 });
@@ -533,7 +537,6 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await expect(escrowA).not.toContainText(/matched|counselor has/i);
   await nav(page, 'Sharing');
   await page.locator('li.card', { hasText: ATTORNEY_NAME }).getByRole('button', { name: 'Review and decide' }).click();
-  await page.getByLabel('This matches what the attorney told me.').check();
   await page.getByLabel('I agree to the statement above.').check();
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
   await expect(page.getByRole('heading', { name: `Shared with ${ATTORNEY_NAME}` })).toBeVisible({ timeout: 60_000 });

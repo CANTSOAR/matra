@@ -7,8 +7,9 @@
  * derived from each passphrase, records are encrypted before upload, phone numbers are verified with the mock
  * provider's code, sealed-match entries are blinded, evaluated by t of the m holders, and their routing states sealed to
  * the attested matcher. Only two things are set directly in the database, as an operator would: attorneys' and
- * counselors' "verified" flags. The counselor roster is signed with the demo organization key
- * (MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE, given only to this script), as `sign-roster` does.
+ * counselors' "verified" flags. The counselor roster and the attorney directory are signed with the demo organization
+ * key (MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE, given only to this script), as `sign-roster` does; the demo web build
+ * pins its public key (MATRA_COUNSELOR_ROSTER_PUBKEY), so the share screen checks attorneys' keys automatically.
  *
  *   Attorneys   attorney.nj1 (NJ), attorney.ny1 (NY), attorney.nj2 (NJ, NY)
  *   Counselors  counselor.nj (licensed NJ), counselor.ny (licensed NY), counselor.pa (licensed PA)
@@ -42,7 +43,6 @@ import {
   publicKeyFingerprint,
   rosterPublicKey,
   sha256Hex,
-  signCounselorRoster,
   submitMatchEntry,
   toBase64,
   wrapKeyForRecipient,
@@ -52,6 +52,7 @@ import {
 } from '@matra/crypto';
 import type { AttorneyProfile, AuthResponse, EvidenceItem, EvidenceKind, IntakeRecord, MatchContactPreferences, MatchStates, RegisterRequest } from '@matra/shared';
 import { createApp, flushPhoneTokens, getDb } from './app.js';
+import { signOrgLists, storeOrgLists } from './org-signing.js';
 import {
   loadDemoMode,
   loadMatcherConfig,
@@ -372,22 +373,17 @@ async function main() {
       db.prepare('UPDATE counselor_profiles SET verified = 1 WHERE user_id = ?').run(user.id);
     }
 
-    // The organization signs the roster (sign-roster.ts): who the counselors are, their keys and licensed states.
+    // The organization signs the counselor roster and the attorney directory (sign-roster.ts, org-signing.ts): who
+    // the counselors and attorneys are and their keys. The demo web build pins this key, so Jane's app checks both.
     const orgKey = Uint8Array.from(fs.readFileSync(signingKeyFile, 'utf8').trim().match(/../g)!.map((b) => parseInt(b, 16)));
     if (process.env.MATRA_COUNSELOR_ROSTER_PUBKEY && toBase64(rosterPublicKey(orgKey)) !== process.env.MATRA_COUNSELOR_ROSTER_PUBKEY)
       throw new Error('the demo organization key does not match MATRA_COUNSELOR_ROSTER_PUBKEY');
-    const counselorRows = db
-      .prepare('SELECT c.user_id, c.jurisdictions, u.public_key FROM counselor_profiles c JOIN users u ON u.id = c.user_id WHERE c.verified = 1')
-      .all() as Array<{ user_id: string; jurisdictions: string; public_key: string }>;
-    const roster = signCounselorRoster(
-      counselorRows.map((r) => ({ userId: r.user_id, publicKey: JSON.parse(r.public_key) as JsonWebKey, licensedStates: JSON.parse(r.jurisdictions) as string[] })),
-      orgKey,
-    );
+    const lists = signOrgLists(db, orgKey);
     orgKey.fill(0);
-    db.prepare(`INSERT INTO matching_meta (key, value) VALUES ('counselor_roster', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run(
-      JSON.stringify(roster),
+    storeOrgLists(db, lists);
+    console.log(
+      `[demo-seed] signed the counselor roster (${lists.counselors.length} counselors) and the attorney directory (${lists.attorneys.length} attorneys) with the demo organization key`,
     );
-    console.log(`[demo-seed] signed the counselor roster (${counselorRows.length} counselors) with the demo organization key`);
 
     await register('jane.demo', 'survivor');
 

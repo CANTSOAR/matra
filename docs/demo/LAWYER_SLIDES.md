@@ -98,7 +98,7 @@ don't overcome hearsay or confrontation objections, and they don't show the cont
 
 **Message:** She picks the attorney, the scope and the expiry, and she sees every time you open it.
 
-- She chooses from verified attorneys only, and confirms your key fingerprint with you
+- She chooses from verified attorneys only; her app checks your key against Matra's signed attorney directory, so she never has to call you to compare codes
 - The consent text is stored word for word, and its hash goes on the ledger
 - Shares expire after 90 days by default. Revoking stops future access but can't recall what you downloaded
 

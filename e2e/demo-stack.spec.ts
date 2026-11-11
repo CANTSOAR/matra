@@ -69,6 +69,7 @@ test('1. Server view: every process of the seeded stack, and nothing anyone wrot
 
 test('2. the attorney opens the story Riley shared with them (seeded), decrypted on the attorney’s device, and the browser verifies it; the PDF and files check out on /verify', async ({ page }) => {
   await signIn(page, 'attorney.nj1', ATTORNEY_PASS, 'attorney');
+  await expect(page.getByTestId('attorney-directory-status')).toContainText('Matra’s signed attorney directory lists this key as yours');
   await page.getByRole('link', { name: 'Open' }).first().click();
   await expect(page.getByRole('heading', { name: 'Client: riley.demo' })).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('main')).toContainText('He was my landlord.');
@@ -100,6 +101,27 @@ test('2. the attorney opens the story Riley shared with them (seeded), decrypted
   await expect(result).toContainText(/Ledger chain intact through entry \d+\./);
   await page.getByTestId('lock-signout').click();
   await expect(page.getByRole('heading', { name: 'For attorneys' })).toBeVisible();
+});
+
+test('2b. sharing checks the attorney’s key against Matra’s signed directory automatically: no phone call, no tick box', async ({ page }) => {
+  await signIn(page, 'riley.demo', SURVIVOR_PASS);
+  await nav(page, 'Sharing');
+  const card = page.locator('li.card', { hasText: 'Demo — Jordan Okafor, Esq.' });
+  await expect(card).toHaveAttribute('data-key-check', 'verified', { timeout: 60_000 });
+  await expect(card.getByText('Verified by Matra')).toBeVisible();
+  await card.getByRole('button', { name: 'Review and decide' }).click();
+  const key = page.getByTestId('attorney-key-check');
+  await expect(key).toHaveAttribute('data-status', 'verified');
+  await expect(key).toContainText('Verified by Matra: this key belongs to Demo — Jordan Okafor, Esq.');
+  await expect(key).not.toContainText(/by phone|in person/);
+  await expect(page.getByText('This matches what the attorney told me.')).toHaveCount(0);
+  // the fingerprint is there for anyone who wants it, folded away
+  await key.getByText('Check it yourself (optional)').click();
+  await expect(key.getByTestId('attorney-fingerprint').locator('.fingerprint')).toHaveText(/^[0-9A-F]{4}(-[0-9A-F]{4}){7}$/);
+  await page.getByLabel('I agree to the statement above.').check();
+  await expect(page.getByRole('button', { name: 'Yes, share with Demo — Jordan Okafor, Esq.' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Not now' }).click(); // nothing shared
+  await signOut(page);
 });
 
 test('3. Jane, live: confirms a phone, tells her story naming the same profile, seals; the Server view shows what she typed on her device only', async ({ page, context }) => {

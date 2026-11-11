@@ -462,6 +462,7 @@ reach them. Survivors' own APIs never reveal a match (W1).
 
 **Construction:** Jane's browser takes her record's AES-256-GCM content key (and each evidence key) and wraps it to the
 counselor's RSA-OAEP-3072 public key ([ReportRequest.tsx:103–108](../../apps/web/src/counselor/ReportRequest.tsx#L103)).
+(The attorney share screen does the same check against the org-signed **attorney directory**: the same pinned org key, domain `matra/attorney-directory/v1|`, signed by `sign-roster` / `verify-attorney` via [org-signing.ts](../../apps/server/src/org-signing.ts) and checked by `checkAttorneyKey` in [directory.ts](../../packages/crypto/src/directory.ts); no manual fingerprint step. Show it as `riley.demo` → Sharing: *"Verified by Matra"* on every card. W3.)
 The server checks that the consent statement contains the confirmed key fingerprint and that it matches the key on file
 (`409 counselor_key_mismatch`, [app.ts:2140](../../apps/server/src/app.ts#L2140)), that the counselor is still verified,
 on the signed roster and assigned the group, then writes `report_releases` and a `report.released` ledger row whose

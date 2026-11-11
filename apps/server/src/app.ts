@@ -39,6 +39,7 @@ import {
 } from '@matra/crypto';
 import type {
   AttorneyProfile,
+  AttorneysResponse,
   AuditEvent,
   BlobMeta,
   CounselorMatchGroup,
@@ -57,6 +58,7 @@ import type {
   Role,
   Share,
   ShareBundle,
+  SignedAttorneyDirectory,
   SignedCounselorRoster,
   SurvivorReportRelease,
   SurvivorReportRequest,
@@ -1005,7 +1007,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const { state } = parse(S.attorneysQuery, req.query);
     let list = (q.verifiedProfiles.all() as ProfileRow[]).map(toProfile);
     if (state) list = list.filter((a) => a.jurisdictions.includes(state));
-    res.json({ attorneys: list });
+    // The org-signed directory (sign-roster / verify-attorney). The server cannot change it without breaking the
+    // signature; her client checks each attorney's key against it before sharing (W3).
+    const directory = meta('attorney_directory');
+    res.json({ attorneys: list, ...(directory && { directory: JSON.parse(directory) as SignedAttorneyDirectory }) } satisfies AttorneysResponse);
   });
 
   // ════════════ shares ════════════

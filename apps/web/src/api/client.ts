@@ -10,6 +10,7 @@ import type {
   AttestationDocument,
   AddMatchSealsRequest,
   AttorneyProfile,
+  AttorneysResponse,
   AuditEvent,
   AuthResponse,
   BlobMeta,
@@ -215,7 +216,7 @@ export class ApiClient {
   // ── attorneys & shares ──
   listAttorneys(state?: string) {
     const q = state ? `?state=${encodeURIComponent(state)}` : '';
-    return this.json<{ attorneys: AttorneyProfile[] }>('GET', `/api/attorneys${q}`);
+    return this.json<AttorneysResponse>('GET', `/api/attorneys${q}`);
   }
   createShare(req: CreateShareRequest) {
     return this.json<{ share: Share; ledgerEntry: LedgerEntry }>('POST', '/api/shares', req);

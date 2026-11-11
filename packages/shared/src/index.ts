@@ -627,6 +627,28 @@ export interface CounselorRosterPayload {
   counselors: Array<{ userId: string; publicKey: { kty: 'RSA'; n: string; e: string }; licensedStates?: string[] }>;
 }
 
+/**
+ * The attorney directory signed offline by the organization (threat model W3), with the same org key as the counselor
+ * roster (MATRA_COUNSELOR_ROSTER_PUBKEY). `payload` is canonical JSON of AttorneyDirectoryPayload; `signature` is
+ * base64 Ed25519 over "matra/attorney-directory/v1|" + payload (packages/crypto directory.ts).
+ */
+export interface SignedAttorneyDirectory {
+  payload: string;
+  signature: string;
+}
+export interface AttorneyDirectoryPayload {
+  v: 1;
+  issuedAt: string;
+  /** verified attorneys, sorted by userId; fingerprint = publicKeyFingerprint of the attorney's RSA key */
+  attorneys: Array<{ userId: string; displayName: string; organization?: string; status: 'verified'; fingerprint: string }>;
+}
+/** GET /api/attorneys */
+export interface AttorneysResponse {
+  attorneys: AttorneyProfile[];
+  /** the org-signed directory, once one has been signed (sign-roster / verify-attorney with the org key) */
+  directory?: SignedAttorneyDirectory;
+}
+
 // ── matcher service ──
 /**
  * Routing data for one entry, sealed by her client to the matcher's attested key (packages/crypto attestation.ts).
@@ -891,7 +913,7 @@ export interface ApiError { error: string; code?: string }
                                                          and evidence only; rate-limited per client, keyed by a daily-salted
                                                          HMAC of the IP held in memory, and globally; 429 rate_limited)
 
- GET    /api/attorneys?state=NJ                       -> { attorneys: AttorneyProfile[] }  (verified only)
+ GET    /api/attorneys?state=NJ                       -> AttorneysResponse  (verified only, plus the org-signed directory)
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }
  GET    /api/shares                                   -> { shares: Share[] }  (survivor: outgoing, attorney: incoming)
  GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares)

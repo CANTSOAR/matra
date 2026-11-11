@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { publicKeyFingerprint, wrapKeyForRecipient } from '@matra/crypto';
+import { checkAttorneyKey, wrapKeyForRecipient, type AttorneyKeyCheck } from '@matra/crypto';
 import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
@@ -8,6 +8,7 @@ import { NOTICES } from '../lib/disclosures';
 import { shareLengthSentence } from '../lib/shareTerms';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { blobKeyFor, finals, loadVault, type OpenedRecord } from '../lib/vault';
+import { MATCH_PINS } from '../matchPins';
 
 type Scope = ShareT['scope'][number];
 const SCOPE_LABEL: Record<Scope, string> = {
@@ -39,16 +40,32 @@ export function buildConsentStatement(p: {
   ].join('\n');
 }
 
-function useFingerprint(jwk?: JsonWebKey) {
-  const [fp, setFp] = useState<string>('');
-  useEffect(() => {
-    let alive = true;
-    if (jwk) void publicKeyFingerprint(jwk).then((f) => alive && setFp(f));
-    return () => {
-      alive = false;
-    };
-  }, [jwk]);
-  return fp;
+/** May she share with this attorney's key? Verified by the org-signed directory, or (development builds) unpinned. */
+const canShare = (c: AttorneyKeyCheck) => c.status === 'verified' || c.status === 'unpinned';
+
+/** The attorney as the signed directory names them (the server's copy of the name can't override it). */
+function signedAttorney(a: AttorneyProfile, c: AttorneyKeyCheck): AttorneyProfile {
+  return c.status === 'verified' ? { ...a, displayName: c.displayName, organization: c.organization } : a;
+}
+
+/**
+ * Optional, collapsed: the key's fingerprint, for anyone who wants to look. Never required, and it never asks her to
+ * contact the attorney: the organization's signature is what vouches for the key.
+ */
+function CheckItYourself({ check }: { check: AttorneyKeyCheck }) {
+  return (
+    <details className="disclosure small" data-testid="attorney-fingerprint">
+      <summary>Check it yourself (optional)</summary>
+      <p className="fingerprint" style={{ margin: '8px 0 4px' }}>{check.fingerprint}</p>
+      <p className="small muted" style={{ margin: 0 }}>
+        This short code stands for the attorney’s personal encryption key. Your file will be locked so only that key can
+        open it, and the code is written into your consent. It’s the same code the attorney sees in their own portal.
+        {check.status === 'verified'
+          ? ' Matra’s signed list says this code belongs to them, and this app checked that signature on your device. You don’t need to compare it with anyone.'
+          : ''}
+      </p>
+    </details>
+  );
 }
 
 function initials(name: string): string {
@@ -56,20 +73,22 @@ function initials(name: string): string {
   return ((words[0]?.[0] ?? '') + (words.length > 1 ? words[words.length - 1][0] : '')).toUpperCase() || '·';
 }
 
-function AttorneyCard({ a, onChoose }: { a: AttorneyProfile; onChoose(): void }) {
-  const fp = useFingerprint(a.publicKey);
+function AttorneyCard({ a, check, onChoose }: { a: AttorneyProfile; check: AttorneyKeyCheck; onChoose(): void }) {
+  const shown = signedAttorney(a, check);
   return (
-    <li className="card stack attorney-card">
+    <li className="card stack attorney-card" data-key-check={check.status}>
       <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'nowrap', gap: 16 }}>
         <span className="avatar" aria-hidden="true">
-          {initials(a.displayName)}
+          {initials(shown.displayName)}
         </span>
         <div style={{ minWidth: 0, flex: 1 }} className="stack">
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <h3 style={{ margin: 0 }}>{a.displayName}</h3>
-            <span className="badge ok">Verified attorney</span>
+            <h3 style={{ margin: 0 }}>{shown.displayName}</h3>
+            {check.status === 'verified' && <span className="badge ok">Verified by Matra</span>}
+            {check.status === 'unpinned' && <span className="badge ok">Verified attorney</span>}
+            {!canShare(check) && <span className="badge warn">Can’t confirm right now</span>}
           </div>
-          {a.organization && <p style={{ margin: 0 }}>{a.organization}</p>}
+          {shown.organization && <p style={{ margin: 0 }}>{shown.organization}</p>}
           <p className="small muted" style={{ margin: 0 }}>
             Licensed in {a.jurisdictions.join(', ') || '—'}
             {a.practiceAreas.length > 0 && <> · {a.practiceAreas.join(', ')}</>}
@@ -77,20 +96,21 @@ function AttorneyCard({ a, onChoose }: { a: AttorneyProfile; onChoose(): void })
           </p>
         </div>
       </div>
-      <details className="disclosure small">
-        <summary>Their key fingerprint</summary>
-        <p className="fingerprint" style={{ margin: '8px 0 4px' }}>{fp || '…'}</p>
-        <p className="small muted" style={{ margin: 0 }}>
-          This short code stands for the attorney’s personal encryption key. Your file will be locked so only that key can
-          open it. To be extra sure, ask the attorney (by phone or in person) to read their fingerprint to you — it should
-          match exactly.
+      {canShare(check) ? (
+        <>
+          <CheckItYourself check={check} />
+          <div>
+            <button className="btn btn-primary" onClick={onChoose}>
+              Review and decide
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="small" style={{ margin: 0 }}>
+          We couldn’t confirm this attorney with Matra’s signed list, so sharing with them is turned off for now. Nothing
+          has been shared. You can choose someone else, or come back later.
         </p>
-      </details>
-      <div>
-        <button className="btn btn-primary" onClick={onChoose}>
-          Review and decide
-        </button>
-      </div>
+      )}
     </li>
   );
 }
@@ -102,8 +122,16 @@ export function Share() {
   const defaultState = current?.payload.record?.survivor.residenceState || current?.payload.record?.incident.jurisdiction.state || '';
   const [stateFilter, setStateFilter] = useState<string | null>(null);
   const effectiveState = stateFilter ?? defaultState;
-  const attorneys = useAsync(() => api.listAttorneys(effectiveState || undefined).then((r) => r.attorneys.filter((a) => a.verified)), [api, effectiveState]);
-  const [chosen, setChosen] = useState<AttorneyProfile | null>(null);
+  // Each attorney's key is checked on this device against the directory the organization signed (W3; MATCH_PINS.rosterKey
+  // is the same pinned org key that signs the counselor roster).
+  const attorneys = useAsync(
+    () =>
+      api
+        .listAttorneys(effectiveState || undefined)
+        .then((r) => r.attorneys.filter((a) => a.verified).map((a) => ({ a, check: checkAttorneyKey(r.directory, a, MATCH_PINS.rosterKey) }))),
+    [api, effectiveState],
+  );
+  const [chosen, setChosen] = useState<{ a: AttorneyProfile; check: AttorneyKeyCheck } | null>(null);
   const [done, setDone] = useState<{ attorney: AttorneyProfile; at: string } | null>(null);
 
   if (done) {
@@ -127,7 +155,8 @@ export function Share() {
   }
 
   if (chosen && current) {
-    return <Consent record={current} attorney={chosen} onCancel={() => setChosen(null)} onDone={(at) => setDone({ attorney: chosen, at })} />;
+    const attorney = signedAttorney(chosen.a, chosen.check);
+    return <Consent record={current} attorney={attorney} check={chosen.check} onCancel={() => setChosen(null)} onDone={(at) => setDone({ attorney, at })} />;
   }
 
   return (
@@ -175,7 +204,7 @@ export function Share() {
             </p>
           )}
           <ul className="list cards">
-            {attorneys.data?.map((a) => <AttorneyCard key={a.userId} a={a} onChoose={() => setChosen(a)} />)}
+            {attorneys.data?.map((x) => <AttorneyCard key={x.a.userId} a={x.a} check={x.check} onChoose={() => setChosen(x)} />)}
           </ul>
         </>
       )}
@@ -186,20 +215,22 @@ export function Share() {
 function Consent({
   record,
   attorney,
+  check,
   onCancel,
   onDone,
 }: {
   record: OpenedRecord;
   attorney: AttorneyProfile;
+  check: AttorneyKeyCheck;
   onCancel(): void;
   onDone(at: string): void;
 }) {
   const { api, session } = useRequiredSession();
-  const fp = useFingerprint(attorney.publicKey);
+  const fp = check.fingerprint;
+  const keyOk = canShare(check);
   const evidence = (record.payload.record?.evidence ?? []).filter((e) => e.blobId);
   const [scope, setScope] = useState<Record<Scope, boolean>>({ record: true, evidence: evidence.length > 0, brief: true });
   const [agreed, setAgreed] = useState(false);
-  const [fpConfirmed, setFpConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expiresInDays, setExpiresInDays] = useState(90);
@@ -219,7 +250,7 @@ function Consent({
     : '';
 
   async function share() {
-    if (!agreed || !fpConfirmed || !fp || !statement) return;
+    if (!agreed || !keyOk || !fp || !statement) return;
     setBusy(true);
     setError(null);
     try {
@@ -265,17 +296,27 @@ function Consent({
         </p>
       </div>
       <KeyNotice notice={NOTICES.sharing} />
-      <section className="card stack" aria-labelledby="fp-h">
-        <h2 id="fp-h">Check the attorney’s key</h2>
-        <p>
-          Your file will be locked so only the key with this fingerprint can open it. Ask {attorney.displayName} (by phone
-          or in person, not through this app) to read their fingerprint to you.
-        </p>
-        <p className="fingerprint fingerprint-big card warm">{fp || '…'}</p>
-        <label className="check">
-          <input type="checkbox" checked={fpConfirmed} disabled={!fp} onChange={(e) => setFpConfirmed(e.target.checked)} />
-          <span>This matches what the attorney told me.</span>
-        </label>
+      <section className="card stack" aria-labelledby="fp-h" data-testid="attorney-key-check" data-status={check.status}>
+        <h2 id="fp-h">Their key</h2>
+        {check.status === 'verified' && (
+          <p className="card sage" style={{ margin: 0 }}>
+            <strong>Verified by Matra:</strong> this key belongs to {check.displayName}
+            {check.organization ? `, ${check.organization}` : ''}. Your file will be locked so only this key can open it.
+          </p>
+        )}
+        {check.status === 'unpinned' && (
+          <p className="card warn small" style={{ margin: 0 }}>
+            <strong>Development version:</strong> this copy of the app has no Matra signing key to check the attorney’s
+            key against, so it uses the key the server sent. Real versions check it for you.
+          </p>
+        )}
+        {!keyOk && (
+          <ErrorNote>
+            We couldn’t confirm this attorney’s key with Matra’s signed list, so sharing is turned off. Nothing was shared.
+            You can choose another attorney, or come back later.
+          </ErrorNote>
+        )}
+        <CheckItYourself check={check} />
       </section>
       <fieldset className="card stack">
         <legend>
@@ -324,7 +365,7 @@ function Consent({
         {busy && <Loading label="Locking your file for this attorney, on your device…" />}
         {error && <ErrorNote>{error}</ErrorNote>}
         <div className="row">
-          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !fpConfirmed || !statement || busy}>
+          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !keyOk || !statement || busy}>
             Yes, share with {attorney.displayName}
           </button>
           <button className="btn" onClick={onCancel} disabled={busy}>

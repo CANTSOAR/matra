@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@matra/crypto';
+import { checkAttorneyKey, decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@matra/crypto';
 import type { EvidenceItem, IntakeRecord, LedgerEntry, LedgerProofResponse, ShareBundle } from '@matra/shared';
 import { envelopeHash } from '../api/client';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { BriefPreview, downloadPdf, generateIncidentSummary } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { formatBytes, type VaultPayload } from '../lib/vault';
+import { MATCH_PINS } from '../matchPins';
 import { CheckLines } from '../verify/CheckLines';
 import { accountCheck, chainCheck, evidenceCheck, overallTone, proofHashes, sealedEntry, type CheckLine } from '../verify/checks';
 
@@ -17,6 +18,11 @@ export function AttorneyCases() {
   const { api, session, refreshProfile } = useRequiredSession();
   const shares = useAsync(() => api.listShares().then((r) => r.shares), [api]);
   const fp = useAsync(() => publicKeyFingerprint(session.user.publicKey), [session.user.publicKey]);
+  // Is this key in the org-signed directory survivors' apps check against (W3)? Unpinned (development) builds say nothing.
+  const listing = useAsync(
+    () => api.listAttorneys().then((r) => checkAttorneyKey(r.directory, { userId: session.user.id, publicKey: session.user.publicKey }, MATCH_PINS.rosterKey)),
+    [api, session.user.id, session.user.publicKey],
+  );
   const profile = session.attorneyProfile;
   const [checking, setChecking] = useState(false);
   const active = (shares.data ?? []).filter((s) => s.status === 'active');
@@ -59,9 +65,23 @@ export function AttorneyCases() {
         <p style={{ margin: 0 }}>
           <strong>Your key fingerprint:</strong> <span className="fingerprint">{fp.data ?? '…'}</span>
         </p>
-        <p style={{ margin: 0 }}>
-          A client may ask you to read this to them, by phone or in person, to confirm they’re sharing with you.
-        </p>
+        {listing.data?.status === 'verified' && (
+          <p style={{ margin: 0 }} data-testid="attorney-directory-status">
+            Matra’s signed attorney directory lists this key as yours, so clients’ apps confirm it automatically. Nobody
+            needs to call you to compare it.
+          </p>
+        )}
+        {listing.data && (listing.data.status === 'not_listed' || listing.data.status === 'unsigned') && profile?.verified && (
+          <p style={{ margin: 0 }} data-testid="attorney-directory-status">
+            Your key isn’t in Matra’s signed attorney directory yet. Until Matra signs it, clients can’t share with you.
+          </p>
+        )}
+        {listing.data?.status === 'key_mismatch' && (
+          <p style={{ margin: 0 }} data-testid="attorney-directory-status">
+            <strong>Matra’s signed directory lists a different key for you.</strong> Clients can’t share with you until this
+            is fixed. Please contact Matra.
+          </p>
+        )}
         <p style={{ margin: 0 }}>
           Received a summary PDF or evidence files by email or on a drive? <Link to="/verify">Check a file</Link> in your
           browser; nothing is uploaded.

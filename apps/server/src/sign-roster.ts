@@ -1,40 +1,47 @@
 /**
- * Admin CLI: sign the current list of verified Legal Options Counselors (with their RSA public keys and licensed states) with the
- * ORGANIZATION's Ed25519 key, and store the signed roster where /api/matching/config serves it (review M4).
+ * Admin CLI: sign the current lists of verified people with the ORGANIZATION's Ed25519 key, and store them where the
+ * app serves them (org-signing.ts):
+ *   - the Legal Options Counselor roster (RSA public keys and licensed states; review M4) → /api/matching/config
+ *   - the attorney directory (names and key fingerprints; threat model W3)                 → /api/attorneys
  *
  *   npm run -w @matra/server sign-roster -- --generate        print a NEW org key pair (do this once, offline)
- *   npm run -w @matra/server sign-roster                       sign the verified counselors and store the roster
- *   npm run -w @matra/server sign-roster -- --dry-run          print the roster without storing it
+ *   npm run -w @matra/server sign-roster                       sign the verified counselors and attorneys and store both
+ *   npm run -w @matra/server sign-roster -- --dry-run          print both lists without storing them
  *
  * The org secret key comes from MATRA_COUNSELOR_ROSTER_SIGNING_KEY (64 hex chars) or
  * MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE, provided ONLY for this invocation, by the person responsible for verifying
- * counselors. It must never be stored on the server or in its environment: the point is that the app server (and
- * whoever controls it) cannot add a counselor or swap a counselor's key without this signature. The matching public key
- * is pinned into the web build (MATRA_COUNSELOR_ROSTER_PUBKEY, base64); survivors' clients then seal only to listed
- * counselors. Re-run after verifying or removing a counselor (or a counselor changing keys). Honors MATRA_DB_PATH.
+ * counselors and attorneys. It must never be stored on the server or in its environment: the point is that the app
+ * server (and whoever controls it) cannot add a counselor or attorney, or swap a key, without this signature. The
+ * matching public key is pinned into the web build (MATRA_COUNSELOR_ROSTER_PUBKEY, base64); survivors' clients then
+ * seal only to listed counselors and share only with listed attorneys, with the listed keys. Re-run after verifying or
+ * removing anyone (or anyone changing keys); verify-attorney does it for you when given the key. Honors MATRA_DB_PATH.
  */
 import fs from 'node:fs';
-import { generateRosterKey, rosterPublicKey, signCounselorRoster, toBase64, toHex } from '@matra/crypto';
+import { generateRosterKey, rosterPublicKey, toBase64, toHex } from '@matra/crypto';
 import { openDb } from './db.js';
 import { resolveDbPath } from './config.js';
+import { orgSigningKeyFromEnv, signOrgLists, storeOrgLists } from './org-signing.js';
 
 const args = process.argv.slice(2);
 if (args.includes('--generate')) {
   const k = generateRosterKey();
-  console.log('Organization counselor-roster key pair. Keep the SECRET offline; never put it on the server.');
+  console.log('Organization signing key pair (counselor roster and attorney directory). Keep the SECRET offline; never put it on the server.');
   console.log(`  secret (MATRA_COUNSELOR_ROSTER_SIGNING_KEY): ${toHex(k.secretKey)}`);
   console.log(`  public (MATRA_COUNSELOR_ROSTER_PUBKEY, web build): ${toBase64(k.publicKey)}`);
   process.exit(0);
 }
 
-const hex =
-  process.env.MATRA_COUNSELOR_ROSTER_SIGNING_KEY ??
-  (process.env.MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE ? fs.readFileSync(process.env.MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE, 'utf8') : undefined);
-if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex.trim())) {
+let secretKey: Uint8Array | undefined;
+try {
+  secretKey = orgSigningKeyFromEnv(process.env, (p) => fs.readFileSync(p, 'utf8'));
+} catch (e) {
+  console.error((e as Error).message);
+  process.exit(1);
+}
+if (!secretKey) {
   console.error('Set MATRA_COUNSELOR_ROSTER_SIGNING_KEY (64 hex chars) or MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE. Generate one with --generate.');
   process.exit(1);
 }
-const secretKey = Uint8Array.from(hex.trim().toLowerCase().match(/../g)!.map((b) => parseInt(b, 16)));
 const publicKey = toBase64(rosterPublicKey(secretKey));
 const pinned = process.env.MATRA_COUNSELOR_ROSTER_PUBKEY;
 if (pinned && pinned !== publicKey) {
@@ -43,27 +50,17 @@ if (pinned && pinned !== publicKey) {
 }
 
 const db = openDb(resolveDbPath());
-const rows = db
-  .prepare(
-    `SELECT c.user_id, c.display_name, c.organization, c.jurisdictions, u.public_key FROM counselor_profiles c JOIN users u ON u.id = c.user_id
-      WHERE c.verified = 1 ORDER BY c.display_name`,
-  )
-  .all() as Array<{ user_id: string; display_name: string; organization: string | null; jurisdictions: string; public_key: string }>;
-// Roster v2: each counselor's licensed states (counselor_profiles.jurisdictions), which the matcher routes groups by.
-// Check them against her license before signing: the signature is what makes them authoritative.
-const roster = signCounselorRoster(
-  rows.map((r) => ({ userId: r.user_id, publicKey: JSON.parse(r.public_key) as JsonWebKey, licensedStates: JSON.parse(r.jurisdictions) as string[] })),
-  secretKey,
-);
-console.log(`Counselors in the roster (${rows.length}):`);
-for (const r of rows)
-  console.log(`  ${r.display_name}${r.organization ? ` · ${r.organization}` : ''}  licensed: ${(JSON.parse(r.jurisdictions) as string[]).join(', ') || 'none'}  (${r.user_id})`);
+const lists = signOrgLists(db, secretKey);
+secretKey.fill(0);
+console.log(`Counselors in the roster (${lists.counselors.length}):`);
+for (const c of lists.counselors)
+  console.log(`  ${c.displayName}${c.organization ? ` · ${c.organization}` : ''}  licensed: ${c.licensedStates.join(', ') || 'none'}  (${c.userId})`);
+console.log(`Attorneys in the directory (${lists.attorneys.length}):`);
+for (const a of lists.attorneys) console.log(`  ${a.displayName}${a.organization ? ` · ${a.organization}` : ''}  key ${a.fingerprint}  (${a.userId})`);
 if (args.includes('--dry-run')) {
-  console.log(JSON.stringify(roster, null, 2));
+  console.log(JSON.stringify({ roster: lists.roster, directory: lists.directory }, null, 2));
 } else {
-  db.prepare(
-    `INSERT INTO matching_meta (key, value) VALUES ('counselor_roster', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-  ).run(JSON.stringify(roster));
-  console.log(`Stored the signed roster (org public key ${publicKey}). Seals for counselors not listed are deleted on next use.`);
+  storeOrgLists(db, lists);
+  console.log(`Stored the signed roster and attorney directory (org public key ${publicKey}). Seals for counselors not listed are deleted on next use.`);
 }
 db.close();
