@@ -79,6 +79,9 @@ const matchPins = {
  *   MATRA_MATCHER_MEASUREMENT          hex measurement of the published matcher build (npm run -w @matra/matcher measure)
  * Pinned builds refuse a matcher that is not that build, and refuse a SIMULATED attestation unless MATRA_DEMO_MODE=1 at
  * build time (__MATRA_DEMO__, a fictional-data demo build). Unset (development): any attestation, with a warning.
+ * A production `vite build` without them fails unless MATRA_DEMO_MODE=1: the attestation reaches the client through
+ * the app server's proxy, so an unpinned client would seal every survivor's states to whatever key the app server
+ * hands it (matchPins.ts applies the same rule at run time).
  */
 const attestationPins = {
   platformKey: (process.env.MATRA_ATTESTATION_PLATFORM_PUBKEY || '').trim(),
@@ -90,7 +93,16 @@ if (attestationPins.measurement && !/^[0-9a-f]{64}$/.test(attestationPins.measur
   throw new Error('MATRA_MATCHER_MEASUREMENT must be 64 hex characters (npm run -w @matra/matcher measure)');
 const demoBuild = process.env.MATRA_DEMO_MODE === '1';
 
-export default defineConfig({
+/** Throws for a production build of the app (not the voice-only test page) with no matcher pins, unless a demo build. */
+export function assertMatcherPinned(o: { command: string; mode: string; pinned: boolean; demo: boolean; harnessOnly: boolean }) {
+  if (o.command === 'build' && o.mode === 'production' && !o.harnessOnly && !o.pinned && !o.demo)
+    throw new Error(
+      'A production build needs the matcher pins MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT (see docs/DEPLOY.md). ' +
+        'Set MATRA_DEMO_MODE=1 only for a fictional-data demo build.',
+    );
+}
+
+const config = {
   plugins: [react()],
   define: {
     __MATRA_MATCH_PINS__: JSON.stringify(matchPins),
@@ -118,4 +130,15 @@ export default defineConfig({
     ...(process.env.MATRA_WEB_NO_HMR && { hmr: false, watch: null }),
   },
   test: { environment: 'jsdom', setupFiles: ['./src/test-setup.ts'], testTimeout: 30_000 },
-} as any);
+} as any;
+
+export default defineConfig(({ command, mode }) => {
+  assertMatcherPinned({
+    command,
+    mode,
+    pinned: !!attestationPins.measurement,
+    demo: demoBuild,
+    harnessOnly: process.env.MATRA_VOICE_HARNESS === 'only',
+  });
+  return config;
+});

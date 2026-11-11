@@ -1,5 +1,6 @@
 # Matra demo / production image.
-#   docker build -t matra .
+#   docker build --build-arg MATRA_DEMO_MODE=1 -t matra .      (a fictional-data demo; a non-demo build must pin the
+#                                                              matcher: MATRA_ATTESTATION_PLATFORM_PUBKEY + _MEASUREMENT)
 #   docker run -p 8080:8080 -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 \
 #     -e MATRA_OPRF_SHARE_1=… -e MATRA_OPRF_SHARE_2=… -e MATRA_OPRF_SHARE_3=… \
 #     -e MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) -e MATRA_DEMO_MODE=1 -e MATRA_SMS_PROVIDER=mock \
@@ -65,7 +66,8 @@ COPY --from=build /app/apps/server apps/server
 COPY --from=build /app/apps/matcher apps/matcher
 COPY --from=build /app/apps/web/package.json apps/web/package.json
 COPY --from=build /app/apps/web/dist apps/web/dist
-RUN rm -rf apps/server/data && mkdir -p apps/server/data && chown -R node:node apps/server/data
+# (.dockerignore already keeps both data directories out; this is a second guard against a developer's dev keys)
+RUN rm -rf apps/server/data apps/matcher/data && mkdir -p apps/server/data && chown -R node:node apps/server/data
 USER node
 VOLUME ["/app/apps/server/data"]
 EXPOSE 8080

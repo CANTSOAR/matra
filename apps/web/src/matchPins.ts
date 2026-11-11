@@ -17,4 +17,7 @@ export const MATCH_PINS: MatchPins = {
   ...(att.platformKey && att.measurement && { attestation: { platformKey: att.platformKey, measurement: att.measurement } }),
   // a pinned production build refuses a simulated attestation unless it is a demo build
   ...(DEMO_BUILD && { allowSimulatedAttestation: true }),
+  // and a production build that is not a demo refuses to seal without a pinned matcher (vite.config.ts already refuses
+  // to build one; this is the same rule at run time)
+  ...(import.meta.env.PROD && !DEMO_BUILD && { requireAttestationPin: true }),
 };

@@ -88,6 +88,47 @@ describe('matcher service: one counselor per group, routed by state', () => {
     expect(g).toHaveLength(1);
     expect(g[0]!.assignment?.reason).toBe('survivor_state:NJ');
   });
+
+  it('a group where nobody gave a state is still released to one counselor (fallback:no_state)', async () => {
+    const { app } = makeApp();
+    const nj = await registerUser(app, 'loc.nj', 'counselor');
+    for (const n of ['a', 'b']) await sealMatch(app, await registerUser(app, `survivor.${n}`), 'email', 'x@example.com', undefined, n, undefined, {});
+    const g = await groupsOf(app, nj);
+    expect(g).toHaveLength(1);
+    expect(g[0]!.assignment?.reason).toBe('fallback:no_state');
+  });
+
+  it('the assigned counselor declines: the group goes to another counselor and never comes back to her', async () => {
+    const { app, db } = makeApp();
+    const c1 = await registerUser(app, 'loc.one', 'counselor');
+    const c2 = await registerUser(app, 'loc.two', 'counselor');
+    const a = await registerUser(app, 'survivor.a');
+    await sealMatch(app, a, 'email', 'x@example.com');
+    await sealMatch(app, await registerUser(app, 'survivor.b'), 'email', 'x@example.com');
+    const [g1, g2] = [await groupsOf(app, c1), await groupsOf(app, c2)];
+    expect(g1.length + g2.length).toBe(1);
+    const [mine, other] = g1.length ? [c1, c2] : [c2, c1];
+    const group = (g1[0] ?? g2[0])!;
+    // the counselor it was not assigned to cannot decline it (and learns nothing: same 404 as no group)
+    expect((await request(app).post(`/api/counselor/groups/${group.id}/decline`).set(other.auth)).status).toBe(404);
+    expect((await request(app).post(`/api/counselor/groups/${group.id}/decline`).set(a.auth)).status).toBe(403);
+    expect((await request(app).post(`/api/counselor/groups/${group.id}/decline`).set(mine.auth)).body).toEqual({ ok: true });
+    expect(await groupsOf(app, mine)).toEqual([]);
+    const moved = await groupsOf(app, other);
+    expect(moved).toHaveLength(1);
+    expect(moved[0]!.assignment?.reason).toBe('reassigned:incident_state:NJ');
+    expect((await request(app).post(`/api/counselor/groups/${group.id}/decline`).set(mine.auth)).status).toBe(404);
+    // the group dissolves (a withdraws) and forms again (she seals again): it does not go back to the decliner
+    const entryA = db.prepare('SELECT id FROM match_entries WHERE user_id = ?').get(a.user.id) as { id: string };
+    expect((await request(app).delete(`/api/matching/entries/${entryA.id}`).set(a.auth)).status).toBe(200);
+    expect(await groupsOf(app, other)).toEqual([]);
+    await sealMatch(app, a, 'email', 'x@example.com');
+    expect(await groupsOf(app, mine)).toEqual([]);
+    expect(await groupsOf(app, other)).toHaveLength(1);
+    // logged to her own trail only
+    const events = (await request(app).get('/api/audit').set(mine.auth)).body.events as Array<{ action: string }>;
+    expect(events.some((e) => e.action === 'counselor.declined_group')).toBe(true);
+  });
 });
 
 describe('matcher service: availability and attestation', () => {
@@ -174,6 +215,9 @@ describe('matcher service: availability and attestation', () => {
     // a different platform key → bad signature
     const other = { attestation: { platformKey: platformPublicKey(new Uint8Array(32).fill(1)), measurement: mp.client.attester.measurement }, allowSimulatedAttestation: true };
     expect((await sealMatch(app, a, 'email', 'x@example.com', undefined, 'A', other).catch((e) => e)).code).toBe('bad_signature');
+    // a non-demo production build with NO pins refuses to seal at all (the app server proxies the attestation, so an
+    // unpinned client could be handed the app server's own key)
+    expect((await sealMatch(app, a, 'email', 'x@example.com', undefined, 'A', { requireAttestationPin: true }).catch((e) => e)).code).toBe('not_pinned');
     expect(db.prepare('SELECT COUNT(*) n FROM match_entries').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT COUNT(*) n FROM oprf_quota').get()).toEqual({ n: 0 }); // nothing was charged
     // the demo build accepts it
@@ -216,21 +260,32 @@ describe('matcher service: what the app server keeps (privacy)', () => {
     await expect(openRouting(env, keys.encPrivateJwk, rows[1]!.tag)).rejects.toThrow();
   });
 
-  it('the matcher gets a pseudonymous survivor reference and the account hour, never the user id', async () => {
+  it('the matcher gets a pseudonymous survivor reference (per tag: unlinkable across tags) and the account hour, never the user id', async () => {
     const mp = inProcess();
     const seen: unknown[] = [];
     const spy: MatcherClient = { ...mp.client, kind: 'in-process', attestation: (n) => mp.client.attestation(n), upsertEntry: async (e) => void seen.push(e), removeEntry: async () => {}, putRoster: async (r) => void seen.push(r), assignments: async () => [], decline: async () => {} };
     const { app } = makeApp({ matching: { matcher: { client: spy, pins: { allowSimulated: true } } } });
     await registerUser(app, 'loc.nj', 'counselor');
     const a = await registerUser(app, 'survivor.a');
+    const b = await registerUser(app, 'survivor.b');
     await sealMatch(app, a, 'email', 'one@example.com');
+    await sealMatch(app, a, 'email', 'two@example.com');
+    await sealMatch(app, b, 'email', 'one@example.com');
     await syncMatcher(app);
     const text = JSON.stringify(seen);
     expect(text).not.toContain(a.user.id);
     expect(text).not.toContain(a.user.username);
-    const entry = seen.find((x) => (x as { entryId?: string }).entryId) as { survivorRef: string; accountCreatedAt: string };
-    expect(entry.survivorRef).toMatch(/^[0-9a-f]{64}$/);
-    expect(entry.accountCreatedAt).toMatch(/T\d\d:00:00\.000Z$/);
+    type Sent = { tag: string; survivorRef: string; accountCreatedAt: string };
+    const entries = seen.filter((x) => (x as { entryId?: string }).entryId) as Sent[];
+    expect(entries).toHaveLength(3);
+    const [a1, a2, b1] = entries as [Sent, Sent, Sent];
+    expect(a1.survivorRef).toMatch(/^[0-9a-f]{64}$/);
+    expect(a1.accountCreatedAt).toMatch(/T\d\d:00:00\.000Z$/);
+    // her two entries (two tags) carry different references; two survivors under one tag differ too
+    expect(a2.tag).not.toBe(a1.tag);
+    expect(a2.survivorRef).not.toBe(a1.survivorRef);
+    expect(b1.tag).toBe(a1.tag);
+    expect(b1.survivorRef).not.toBe(a1.survivorRef);
   });
 });
 

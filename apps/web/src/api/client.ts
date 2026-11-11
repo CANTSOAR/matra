@@ -249,6 +249,10 @@ export class ApiClient {
   addCounselorNote(groupId: string, req: { entryId?: string; envelope: Envelope }) {
     return this.json<{ note: CounselorNote }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/notes`, req);
   }
+  /** decline an assigned group (conflict of interest): the matcher passes it to another counselor */
+  declineCounselorGroup(groupId: string) {
+    return this.json<{ ok: true }>('POST', `/api/counselor/groups/${encodeURIComponent(groupId)}/decline`);
+  }
 
   // ── audit / account ──
   listAudit() {

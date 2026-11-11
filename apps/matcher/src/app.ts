@@ -1,10 +1,12 @@
 /**
  * The matcher's HTTP API (src/server.ts runs it; tests import createMatcherApp). Only the app server talks to it,
  * with a bearer token (MATRA_MATCHER_TOKEN, compared in constant time); the attestation and health endpoints are
- * public, so a survivor's client can fetch the attestation through the app server's proxy.
+ * public, so a survivor's client can fetch the attestation through the app server's proxy. Nothing public depends on
+ * the matcher's state: a count of groups would tell anyone who can reach it when a match forms.
  *
  *   GET    /v1/attestation?nonce=<64 hex>   → AttestationDocument
- *   GET    /v1/health                        → { ok, measurement, platform, unassigned }
+ *   GET    /v1/health                        → { ok, measurement, platform }
+ *   GET    /v1/stats                         → { unassigned } (token: groups no licensed counselor can take, for ops)
  *   PUT    /v1/roster   { roster?, verifiedIds, counselors? }                         → { ok, counselors }
  *   POST   /v1/entries  { entryId, tag, survivorRef, createdAt, accountCreatedAt, routing } → { ok: true }
  *                       (idempotent; the same answer whether or not the entry completes a group)
@@ -59,7 +61,10 @@ export function createMatcherApp(o: MatcherAppOptions): express.Express {
     res.json(await o.attester.attest(nonce));
   });
   app.get('/v1/health', (_req, res) => {
-    res.json({ ok: true, measurement: o.attester.measurement, platform: o.attester.platform, unassigned: o.matcher.unassignedCount() });
+    res.json({ ok: true, measurement: o.attester.measurement, platform: o.attester.platform });
+  });
+  app.get('/v1/stats', requireToken, (_req, res) => {
+    res.json({ unassigned: o.matcher.unassignedCount() });
   });
   app.put('/v1/roster', requireToken, (req, res) => {
     res.json(o.matcher.putRoster(req.body ?? {}));

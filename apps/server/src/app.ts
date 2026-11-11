@@ -1005,12 +1005,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   pruneGroups();
 
   // ── matcher service (src/matcher-client.ts; W15, W18). Every sealed entry is forwarded to the matcher with: its tag, a
-  // pseudonymous survivor reference (HMAC of the account id under the pepper: the matcher counts distinct survivors
-  // without user ids), its time, the HOUR her account was created (Sybil signals), and her routing tag, which only the
+  // pseudonymous survivor reference (HMAC of the tag and the account id under the pepper: the matcher counts distinct
+  // survivors per tag without user ids, and cannot link one survivor's entries across tags), its time, the HOUR her account was created (Sybil signals), and her routing tag, which only the
   // matcher can open. Forwarding happens after the response, on one serialized sync loop (also at startup, every
   // minute, and before counselors read their groups); entries stay matcher_synced = 0 until the matcher has them, and
   // withdrawals wait in matcher_pending_deletes. Nothing is forwarded while the matcher's attestation fails.
-  const survivorRef = (userId: string) => createHmac('sha256', pepper).update(`matcher-ref|${userId}`).digest('hex');
+  const survivorRef = (tag: string, userId: string) => createHmac('sha256', pepper).update(`matcher-ref|${tag}|${userId}`).digest('hex');
   const toHour = (iso: string) => new Date(Math.floor(Date.parse(iso) / 3_600_000) * 3_600_000).toISOString();
   const unsyncedEntries = db.prepare(
     `SELECT e.id, e.user_id, e.tag, e.created_at, e.routing_envelope, u.created_at AS account_created_at
@@ -1055,7 +1055,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         matcher.upsertEntry({
           entryId: e.id,
           tag: e.tag,
-          survivorRef: survivorRef(e.user_id),
+          survivorRef: survivorRef(e.tag, e.user_id),
           createdAt: e.created_at,
           accountCreatedAt: toHour(e.account_created_at),
           routing: e.routing_envelope ? JSON.parse(e.routing_envelope) : null,
@@ -1525,6 +1525,28 @@ export function createApp(opts: CreateAppOptions): express.Express {
     );
     audit(me.id, 'counselor.note_added', 'Added an encrypted outreach note');
     res.status(201).json({ note });
+  });
+
+  // The assigned counselor declines a group (a conflict of interest found by her conflict check, before she contacts
+  // anyone). The matcher reassigns it with her excluded, for as long as the tag has entries (apps/matcher). Logged to
+  // her own trail only.
+  app.post('/api/counselor/groups/:id/decline', auth, counselorOnly, verifiedCounselor, async (req, res) => {
+    const me = req.user!;
+    const g = groupById.get(parse(S.id, req.params.id)) as GroupRow | undefined;
+    if (!g || !groupFor(g, me.id)) throw new HttpError(404, 'group_not_found', 'Group not found.');
+    if (!(await matcherGate.ok())) throw new HttpError(503, 'matcher_unavailable', 'Declining isn’t available right now. Please try again later.');
+    try {
+      await matcher.decline(g.tag, me.id);
+    } catch (e) {
+      if ((e as { status?: number }).status === 404) throw new HttpError(404, 'group_not_found', 'Group not found.');
+      console.warn(`[matra] matcher decline failed: ${(e as Error).message}`);
+      throw new HttpError(503, 'matcher_unavailable', 'Declining isn’t available right now. Please try again later.');
+    }
+    // never shown to her again, even if the refresh below can't reach the matcher
+    db.prepare('DELETE FROM match_assignments WHERE tag = ? AND counselor_id = ?').run(g.tag, me.id);
+    await refreshAssignments();
+    audit(me.id, 'counselor.declined_group', 'Declined a matched group (conflict of interest); the matcher passes it to another counselor');
+    res.json({ ok: true });
   });
 
   // ════════════ audit ════════════

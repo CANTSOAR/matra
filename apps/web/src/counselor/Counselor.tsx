@@ -19,8 +19,8 @@ export { CounselorGate, CounselorSignIn, RequireCounselor } from './guards';
 const stateName = (code: string) => US_STATES.find((s) => s.value === code)?.label ?? code;
 
 /**
- * The matcher's reason, in plain words: `incident_state:NJ`, `survivor_state:NY`, either prefixed `reassigned:` (the
- * counselor first assigned declined or left the roster).
+ * The matcher's reason, in plain words: `incident_state:NJ`, `survivor_state:NY`, `fallback:no_state` (nobody in the
+ * group gave a state), each possibly prefixed `reassigned:` (the counselor first assigned declined or left the roster).
  */
 export function assignmentWords(reason: string): string {
   const reassigned = reason.startsWith('reassigned:');
@@ -30,7 +30,9 @@ export function assignmentWords(reason: string): string {
       ? `this happened in ${stateName(code ?? '')}, where you’re licensed`
       : kind === 'survivor_state'
         ? `someone in this group lives in ${stateName(code ?? '')}, where you’re licensed (no counselor licensed where it happened was available)`
-        : 'of how the matcher routed it';
+        : kind === 'fallback' && code === 'no_state'
+          ? 'nobody in this group said where it happened or where they live, so it went to the counselor with the fewest open groups. Check that you can advise them before you reach out'
+          : 'of how the matcher routed it';
   return `${reassigned ? 'Reassigned' : 'Assigned'} to you because ${where}.${reassigned ? ' The counselor it went to first could not take it.' : ''}`;
 }
 
@@ -85,6 +87,7 @@ export function CounselorPortal() {
   const fp = useAsync(() => publicKeyFingerprint(session.user.publicKey), [session.user.publicKey]);
   const groups = useAsync(() => api.counselorGroups().then((r) => r.groups), [api]);
   const profile = me.data?.counselorProfile;
+  const [declined, setDeclined] = useState(false);
 
   return (
     <div className="stack-lg">
@@ -107,14 +110,40 @@ export function CounselorPortal() {
       {groups.loading && <Loading />}
       {groups.error && <ErrorNote>{groups.error}</ErrorNote>}
       {groups.data && groups.data.length === 0 && <p className="muted">No matches right now.</p>}
-      {groups.data?.map((g, i) => <MatchGroup key={g.id} group={g} index={i + 1} onNote={() => void groups.reload()} />)}
+      {declined && (
+        <p className="card sage small" role="status" data-testid="counselor-declined">
+          You declined a group. It will be offered to another counselor; you won’t be given it again.
+        </p>
+      )}
+      {groups.data?.map((g, i) => (
+        <MatchGroup
+          key={g.id}
+          group={g}
+          index={i + 1}
+          onNote={() => void groups.reload()}
+          onDeclined={() => {
+            setDeclined(true);
+            void groups.reload();
+          }}
+        />
+      ))}
     </div>
   );
 }
 
-function MatchGroup({ group, index, onNote }: { group: CounselorMatchGroup; index: number; onNote(): void }) {
-  const { session } = useRequiredSession();
+function MatchGroup({ group, index, onNote, onDeclined }: { group: CounselorMatchGroup; index: number; onNote(): void; onDeclined(): void }) {
+  const { api, session } = useRequiredSession();
   const [state, setState] = useState<{ busy?: boolean; result?: ReconstructResult; error?: string }>({});
+  const [decline, setDecline] = useState<{ asking?: boolean; busy?: boolean; error?: string }>({});
+  async function confirmDecline() {
+    setDecline({ asking: true, busy: true });
+    try {
+      await api.declineCounselorGroup(group.id);
+      onDeclined();
+    } catch (e) {
+      setDecline({ asking: true, error: friendlyError(e) });
+    }
+  }
   async function open() {
     setState({ busy: true });
     try {
@@ -140,9 +169,34 @@ function MatchGroup({ group, index, onNote }: { group: CounselorMatchGroup; inde
       </p>
       {group.assignment && (
         <p className="small" style={{ margin: 0 }} data-testid="counselor-assignment">
-          {assignmentWords(group.assignment.reason)} Only you were given this group.
+          {assignmentWords(group.assignment.reason)} The matcher assigned this group to you.
         </p>
       )}
+      <div className="small stack" data-testid="counselor-decline">
+        {!decline.asking ? (
+          <div>
+            <button className="btn btn-quiet btn-small" onClick={() => setDecline({ asking: true })}>
+              I can’t take this group (conflict of interest)
+            </button>
+          </div>
+        ) : (
+          <div className="card warn stack">
+            <p style={{ margin: 0 }}>
+              Decline this group? It will be passed to another counselor, and you won’t be given it again. Do this before
+              you contact anyone in it.
+            </p>
+            {decline.error && <ErrorNote>{decline.error}</ErrorNote>}
+            <div className="row">
+              <button className="btn btn-primary btn-small" onClick={() => void confirmDecline()} disabled={decline.busy}>
+                {decline.busy ? 'Declining…' : 'Yes, decline this group'}
+              </button>
+              <button className="btn btn-quiet btn-small" onClick={() => setDecline({})} disabled={decline.busy}>
+                Keep it
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
       {sig && (sig.accountsCreatedClose || sig.newAccountEntries > 0) && (
         <div className="card warn small" data-testid="counselor-sybil-signals">
           <strong>Check carefully:</strong>{' '}

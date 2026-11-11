@@ -84,7 +84,7 @@ import {
   wrapKeyForRecipient,
 } from './index';
 import type { NormalizedIdentifier } from './normalize';
-import { newAttestationNonce, sealRouting, verifyAttestation, type VerifiedAttestation } from './attestation';
+import { AttestationError, newAttestationNonce, sealRouting, verifyAttestation, type VerifiedAttestation } from './attestation';
 import { checkThresholdKeys, finalizeThresholdOprfReport, ThresholdOprfError, type HolderEvaluation, type ThresholdKeyConfig } from './threshold';
 
 const enc = new TextEncoder();
@@ -619,6 +619,11 @@ export interface MatchPins {
   attestation?: { platformKey: string; measurement: string };
   /** accept a SIMULATED attestation even though `attestation` is pinned (demo builds only, MATRA_DEMO_MODE=1) */
   allowSimulatedAttestation?: boolean;
+  /**
+   * Refuse to seal routing data without a pinned `attestation` (non-demo production builds). Without a pin, whoever
+   * serves the attestation (the app server proxies it) could present its own key and read every survivor's states.
+   */
+  requireAttestationPin?: boolean;
 }
 
 /**
@@ -632,6 +637,8 @@ export async function verifiedMatcher(t: MatchTransport, pins?: MatchPins): Prom
   const doc = await t.attestation(nonce);
   const pinned = pins?.attestation;
   if (!pinned) {
+    if (pins?.requireAttestationPin)
+      throw new AttestationError('not_pinned', 'this build has no pinned matcher attestation, so it cannot tell the real matcher from an impostor');
     if (!warnedUnpinnedMatcher)
       console.warn('[matra] sealed matching: no pinned matcher attestation in this build; accepting the matcher’s simulated attestation (development only).');
     warnedUnpinnedMatcher = true;

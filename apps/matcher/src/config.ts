@@ -9,8 +9,11 @@
  *   MATRA_ATTESTATION_PLATFORM_KEY / _FILE    simulated platform only: the dev Ed25519 "platform" key (32 bytes hex)
  *   MATRA_MATCHER_DB_PATH                     its own SQLite file (default apps/matcher/data/matcher.db)
  *   MATRA_MATCH_RELEASE_DELAY_HOURS           default 72 (as on the app server)
- *   MATRA_COUNSELOR_ROSTER_PUBKEY             base64 org roster key: when set, only a signed roster is accepted
- *   MATRA_DEMO_MODE=1                         lets production run with the simulated attester (fictional data only)
+ *   MATRA_COUNSELOR_ROSTER_PUBKEY             base64 org roster key: only a roster it signed is accepted. Required in
+ *                                             production (unset, the matcher would take the app server's word for who
+ *                                             the counselors are and where they're licensed: W18)
+ *   MATRA_DEMO_MODE=1                         lets production run with the simulated attester and without a roster key
+ *                                             (fictional data only)
  *   PORT (default 4320), HOST (default 127.0.0.1; production 0.0.0.0)
  */
 import fs from 'node:fs';
@@ -82,6 +85,11 @@ export function loadMatcherSettings(env: Env = process.env) {
   const delay = raw === undefined || raw === '' ? 72 : Number(raw);
   if (!Number.isFinite(delay) || delay < 0) throw new Error('MATRA_MATCH_RELEASE_DELAY_HOURS must be a number ≥ 0');
   const rosterKey = env.MATRA_COUNSELOR_ROSTER_PUBKEY ? fromBase64(env.MATRA_COUNSELOR_ROSTER_PUBKEY.trim()) : undefined;
+  if (rosterKey && rosterKey.length !== 32) throw new Error('MATRA_COUNSELOR_ROSTER_PUBKEY must be a base64 Ed25519 public key (32 bytes)');
+  if (!rosterKey && isProduction(env) && env.MATRA_DEMO_MODE !== '1')
+    throw new Error(
+      'MATRA_COUNSELOR_ROSTER_PUBKEY must be set in production: without it the matcher would use the app server’s own counselor list and licensed states. Set MATRA_DEMO_MODE=1 only for a fictional-data demo.',
+    );
   return {
     dbPath,
     keys,

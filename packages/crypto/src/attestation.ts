@@ -55,7 +55,8 @@ export type AttestationErrorCode =
   | 'stale'
   | 'measurement_mismatch'
   | 'simulated_not_allowed'
-  | 'unsupported_platform';
+  | 'unsupported_platform'
+  | 'not_pinned';
 
 /** The matcher's attestation did not verify. Nothing may be sealed to its key. */
 export class AttestationError extends Error {

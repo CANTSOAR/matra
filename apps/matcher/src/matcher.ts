@@ -17,10 +17,15 @@
  *   4. For the first candidate state with at least one roster counselor licensed there (minus those excluded for this
  *      group), pick the one with the fewest open assignments; ties by lowest sha256(tag | counselorId).
  *   5. Reason `incident_state:NJ` / `survivor_state:NY`. Nobody licensed in any of the group's states → no counselor,
- *      `unassigned:no_licensed_counselor` (the group is not released); no states at all → `unassigned:no_state`.
- *   6. Sticky: an assignment stays while its counselor is on the roster, still licensed in one of the group's states,
- *      and has not declined. Otherwise it is reassigned with that counselor excluded and the reason prefixed
- *      `reassigned:`.
+ *      `unassigned:no_licensed_counselor` (the group is not released; ops sees a count behind the token).
+ *   6. No states at all (she gave neither, an entry sealed before routing existed, or routing that did not open): the
+ *      group is not dropped. It goes to the least-loaded counselor on the whole roster (same tie-break), reason
+ *      `fallback:no_state`, so a survivor who left both states blank is still matched (as before routing existed).
+ *   7. Sticky: an assignment stays while its counselor is on the roster, still licensed in one of the group's states
+ *      (any roster counselor, for a no-state group), and has not declined. Otherwise it is reassigned with that
+ *      counselor excluded and the reason prefixed `reassigned:`.
+ *   8. A decline is kept per tag (matcher_exclusions), so it survives the group dissolving and forming again; it is
+ *      erased once no entry with that tag remains.
  *
  * Nothing this class returns from upsertEntry depends on whether the entry matched.
  */
@@ -211,7 +216,7 @@ export class Matcher {
     });
   }
 
-  /** Groups with no licensed counselor right now (ops sees the count only). */
+  /** Groups with no licensed counselor right now (ops sees the count only, behind the token: GET /v1/stats). */
   unassignedCount(): number {
     return this.store.assignments().filter((a) => !a.counselor_id).length;
   }
@@ -224,6 +229,7 @@ export class Matcher {
       if (!a || a.counselor_id !== counselorId) throw new MatcherError(404, 'assignment_not_found', 'No such assignment for this counselor.');
       const excluded = new Set(JSON.parse(a.excluded) as string[]);
       excluded.add(counselorId);
+      this.store.addExclusion(tag, counselorId);
       this.store.putAssignment({ ...a, counselor_id: null, excluded: JSON.stringify([...excluded].sort()) });
       this.assignGroups();
     });
@@ -244,12 +250,15 @@ export class Matcher {
     const groups = [...byTag.entries()].filter(([, es]) => new Set(es.map((e) => e.survivor_ref)).size >= 2);
     const live = new Set(groups.map(([tag]) => tag));
     const existing = new Map(this.store.assignments().map((a) => [a.tag, a]));
-    // groups that dissolved (a withdrawal, a deleted account) lose their assignment
+    // groups that dissolved (a withdrawal, a deleted account) lose their assignment; declines stay while the tag has an
+    // entry left (matcher_exclusions), so a group that forms again does not go back to a counselor who declined it
     for (const tag of existing.keys())
       if (!live.has(tag)) {
         this.store.deleteAssignment(tag);
         existing.delete(tag);
       }
+    this.store.pruneExclusions();
+    const declined = (tag: string) => this.store.exclusionsFor(tag);
     const roster = new Map(this.store.roster().map((c) => [c.userId, c.licensedStates]));
     const plans = groups.map(([tag, entries]) => {
       const candidates: Array<{ kind: 'incident' | 'survivor'; state: string }> = [
@@ -262,7 +271,8 @@ export class Matcher {
       const keep =
         !!prev?.counselor_id &&
         !(JSON.parse(prev.excluded) as string[]).includes(prev.counselor_id) &&
-        candidates.some((c) => roster.get(prev.counselor_id!)?.includes(c.state));
+        !declined(tag).includes(prev.counselor_id) &&
+        (candidates.length ? candidates.some((c) => roster.get(prev.counselor_id!)?.includes(c.state)) : roster.has(prev.counselor_id));
       return { tag, entries, candidates, prev, keep };
     });
     const load = new Map<string, number>();
@@ -277,23 +287,29 @@ export class Matcher {
         if (prev!.signals !== signals) this.store.putAssignment({ ...prev!, signals });
         continue;
       }
-      const excluded = new Set(prev ? (JSON.parse(prev.excluded) as string[]) : []);
+      const excluded = new Set([...(prev ? (JSON.parse(prev.excluded) as string[]) : []), ...declined(tag)]);
       if (prev?.counselor_id) excluded.add(prev.counselor_id); // left the roster, or no longer licensed there
       const wasAssigned = excluded.size > 0;
+      const leastLoaded = (ids: string[]) =>
+        ids.sort((x, y) => (load.get(x) ?? 0) - (load.get(y) ?? 0) || (tieBreak(tag, x) < tieBreak(tag, y) ? -1 : 1))[0];
       let pick: { counselorId: string; reason: string } | null = null;
       for (const c of candidates) {
         const licensed = [...roster.entries()].filter(([id, states]) => !excluded.has(id) && states.includes(c.state)).map(([id]) => id);
         if (!licensed.length) continue;
-        licensed.sort((x, y) => (load.get(x) ?? 0) - (load.get(y) ?? 0) || (tieBreak(tag, x) < tieBreak(tag, y) ? -1 : 1));
-        pick = { counselorId: licensed[0]!, reason: `${wasAssigned ? 'reassigned:' : ''}${c.kind}_state:${c.state}` };
+        pick = { counselorId: leastLoaded(licensed)!, reason: `${wasAssigned ? 'reassigned:' : ''}${c.kind}_state:${c.state}` };
         break;
+      }
+      if (!candidates.length) {
+        // no states at all: any counselor on the roster (step 6)
+        const anyone = leastLoaded([...roster.keys()].filter((id) => !excluded.has(id)));
+        if (anyone) pick = { counselorId: anyone, reason: `${wasAssigned ? 'reassigned:' : ''}fallback:no_state` };
       }
       const assignedAt = new Date(now).toISOString();
       if (pick) load.set(pick.counselorId, (load.get(pick.counselorId) ?? 0) + 1);
       this.store.putAssignment({
         tag,
         counselor_id: pick?.counselorId ?? null,
-        reason: pick?.reason ?? (candidates.length ? 'unassigned:no_licensed_counselor' : 'unassigned:no_state'),
+        reason: pick?.reason ?? (candidates.length ? 'unassigned:no_licensed_counselor' : 'unassigned:no_counselor'),
         assigned_at: assignedAt,
         excluded: JSON.stringify([...excluded].sort()),
         signals,

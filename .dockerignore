@@ -4,6 +4,7 @@
 **/*.db
 **/*.db-*
 apps/server/data
+apps/matcher/data
 e2e
 test-results
 playwright-report

@@ -547,6 +547,15 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await a.getByRole('button', { name: 'Save note' }).click();
   await expect(a.getByRole('listitem').filter({ hasText: 'Texted after 6pm as asked.' })).toContainText('Reached out', { timeout: 30_000 });
   await shot(page, '15-counselor-match');
+  // A conflict check turns something up: she declines the group, and the matcher passes it on; it is gone from her list.
+  await groups.getByRole('button', { name: 'I can’t take this group (conflict of interest)' }).click();
+  await groups.getByRole('button', { name: 'Keep it' }).click();
+  await expect(groups).toHaveCount(1);
+  await groups.getByRole('button', { name: 'I can’t take this group (conflict of interest)' }).click();
+  await groups.getByRole('button', { name: 'Yes, decline this group' }).click();
+  await expect(page.getByTestId('counselor-declined')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('counselor-group')).toHaveCount(0);
+  await expect(page.getByText('No matches right now.')).toBeVisible();
 });
 
 test('5b. one phone turns on sealed matching for at most two accounts: a third gets a kind message and stays unconfirmed', async ({ page }) => {

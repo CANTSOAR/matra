@@ -8,6 +8,9 @@
  *   matcher_assignments  one row per matched group (tag): the ONE counselor it went to, why, when, counselors excluded
  *                        for it (declines, roster removals) and the Sybil signals. counselor_id is null while nobody
  *                        licensed in the group's states is on the roster (reason "unassigned:…").
+ *   matcher_exclusions   (tag, counselor) pairs a counselor declined (conflict check). Kept apart from the assignment
+ *                        row, so a decline survives the group dissolving and forming again; erased once no entry with
+ *                        that tag remains.
  *   matcher_roster       the latest roster: the signed payload as received, and the resolved list (userId +
  *                        licensed states) the assignment algorithm uses.
  */
@@ -67,6 +70,11 @@ export function openMatcherDb(dbPath: string): MatcherDB {
       signals      TEXT NOT NULL,
       signature    TEXT
     );
+    CREATE TABLE IF NOT EXISTS matcher_exclusions (
+      tag          TEXT NOT NULL,
+      counselor_id TEXT NOT NULL,
+      PRIMARY KEY (tag, counselor_id)
+    );
     CREATE TABLE IF NOT EXISTS matcher_roster (
       id          INTEGER PRIMARY KEY CHECK (id = 1),
       payload     TEXT,
@@ -99,6 +107,9 @@ export class MatcherStore {
            excluded = excluded.excluded, signals = excluded.signals, signature = excluded.signature`,
       ),
       deleteAssignment: db.prepare('DELETE FROM matcher_assignments WHERE tag = ?'),
+      exclusionsFor: db.prepare('SELECT counselor_id FROM matcher_exclusions WHERE tag = ? ORDER BY counselor_id'),
+      addExclusion: db.prepare('INSERT OR IGNORE INTO matcher_exclusions (tag, counselor_id) VALUES (?, ?)'),
+      pruneExclusions: db.prepare('DELETE FROM matcher_exclusions WHERE tag NOT IN (SELECT tag FROM matcher_entries)'),
       roster: db.prepare('SELECT counselors FROM matcher_roster WHERE id = 1'),
       putRoster: db.prepare(
         `INSERT INTO matcher_roster (id, payload, signature, counselors) VALUES (1, ?, ?, ?)
@@ -128,6 +139,17 @@ export class MatcherStore {
   }
   deleteAssignment(tag: string): void {
     this.q.deleteAssignment.run(tag);
+  }
+  /** Counselors who declined this tag. */
+  exclusionsFor(tag: string): string[] {
+    return (this.q.exclusionsFor.all(tag) as Array<{ counselor_id: string }>).map((r) => r.counselor_id);
+  }
+  addExclusion(tag: string, counselorId: string): void {
+    this.q.addExclusion.run(tag, counselorId);
+  }
+  /** Erase declines for tags with no entry left. */
+  pruneExclusions(): void {
+    this.q.pruneExclusions.run();
   }
   roster(): RosterCounselor[] {
     const r = this.q.roster.get() as { counselors: string } | undefined;

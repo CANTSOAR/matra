@@ -49,7 +49,7 @@ To prove transcription works end to end under the production CSP, with zero requ
 
 ```sh
 npm run fetch-models
-MATRA_VOICE_HARNESS=1 npm run build          # adds a standalone test page; never part of a normal build
+MATRA_VOICE_HARNESS=1 MATRA_DEMO_MODE=1 npm run build   # adds a standalone test page; never part of a normal build
 npx playwright test -c playwright.prod.config.ts --grep @voice
 # If Chromium's fake microphone hangs (seen on macOS without mic permission for the terminal), add MATRA_VOICE_MIC=inject
 ```
@@ -57,7 +57,7 @@ npx playwright test -c playwright.prod.config.ts --grep @voice
 To check the production build locally, including the full browser suite under the CSP with the banner on:
 
 ```sh
-npm run build
+MATRA_DEMO_MODE=1 npm run build      # a production build without matcher pins is refused unless it is a demo build
 npm run -s -w @matra/server oprf-ceremony -- --threshold 2 --holders 3 --out /tmp/matra-keys --force   # prints the pins
 NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) \
   MATRA_PEPPER=$(openssl rand -hex 32) MATRA_OPRF_SHARE_1_FILE=/tmp/matra-keys/oprf-share-1.key \
@@ -125,14 +125,22 @@ W18). A counselor's licensed states are her profile's `jurisdictions`; with a si
   production refuses it otherwise. No separation from the operator.
 - *Separate process:* run `npm run -w @matra/matcher start` with `MATRA_MATCHER_KEY`, `MATRA_MATCHER_TOKEN`,
   `MATRA_ATTESTATION_PLATFORM_KEY` (simulated platform), `MATRA_MATCHER_DB_PATH` (its own DB), `MATRA_MATCH_RELEASE_DELAY_HOURS`
-  (same as the app server), `MATRA_COUNSELOR_ROSTER_PUBKEY` (then it accepts only the signed roster) and `PORT` (default
-  4320). Production refuses the simulated attester unless `MATRA_DEMO_MODE=1`; `MATRA_ATTESTATION=nitro` or
+  (same as the app server), `MATRA_COUNSELOR_ROSTER_PUBKEY` (then it accepts only the signed roster; **required in
+  production** unless `MATRA_DEMO_MODE=1`, since without it the matcher would take the app server's word for who the
+  counselors are and where they're licensed) and `PORT` (default 4320). Production refuses the simulated attester unless
+  `MATRA_DEMO_MODE=1`; `MATRA_ATTESTATION=nitro` or
   `confidential-space` are placeholders that refuse to start until a real verifier exists. Give the app server
-  `MATRA_MATCHER_URL` and the same `MATRA_MATCHER_TOKEN`.
+  `MATRA_MATCHER_URL` and the same `MATRA_MATCHER_TOKEN`. Its public endpoints are `/v1/attestation` and `/v1/health`
+  (`{ ok, measurement, platform }`, no counts: a count would show anyone who can reach it when a match forms); the
+  number of groups no licensed counselor can take is at `GET /v1/stats`, behind the token.
 - *Pins:* publish the measurement (`npm run -w @matra/matcher measure` on the released source) and the platform's
   public key, and set `MATRA_ATTESTATION_PLATFORM_PUBKEY` + `MATRA_MATCHER_MEASUREMENT` on the app server and as web
-  build args. Any change to `apps/matcher/src` or its `package.json` changes the measurement: rebuild the web app with the
-  new value in the same release, or every survivor's client refuses to seal ("This matcher isn't running the code this
+  build args. **A production web build without them fails** unless it is a demo build (`MATRA_DEMO_MODE=1`), because the
+  attestation reaches survivors through the app server's proxy and an unpinned client would seal her states to whatever
+  key it is handed. The measurement covers `apps/matcher/src`, `packages/crypto/src` and `packages/shared/src` (tests
+  excluded), the three `package.json` files and the root `package-lock.json` (which pins every third-party dependency's
+  version and integrity hash). Installed `node_modules`, Node.js and the OS image are not hashed. Any change to a
+  measured file changes the measurement: rebuild the web app with the new value in the same release, or every survivor's client refuses to seal ("This matcher isn't running the code this
   app trusts"). In a real enclave the measurement would be the platform's (Nitro PCR0, Confidential Space image digest)
   over a reproducible build, not this file hash.
 - If the matcher is unreachable or its attestation fails, entries are still saved and wait (`matcher_synced = 0`); the

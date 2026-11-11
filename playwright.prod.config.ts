@@ -7,7 +7,7 @@ import base from './playwright.config';
  * NODE_ENV=production — strict CSP, same origin, DEMO banner on. Any CSP violation is a console error, which
  * fails the suite (see e2e/helpers.ts).
  *
- *   npm run build && npm run e2e:prod
+ *   MATRA_DEMO_MODE=1 npm run build && npm run e2e:prod   (a production build must pin the matcher unless it is a demo)
  *   MATRA_E2E_DB=/some/scratch.db npm run e2e:prod
  */
 const PORT = Number(process.env.MATRA_E2E_PROD_PORT) || 4300;

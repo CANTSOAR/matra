@@ -6,7 +6,7 @@
  * made ZERO requests to any origin but ours — no model hub, no CDN.
  *
  *   npm run fetch-models
- *   MATRA_VOICE_HARNESS=1 npm run build
+ *   MATRA_VOICE_HARNESS=1 MATRA_DEMO_MODE=1 npm run build
  *   npx playwright test -c playwright.prod.config.ts --grep @voice
  *
  * Skipped automatically when the model files or the harness page are absent (normal builds), or when no WAV can
@@ -95,7 +95,7 @@ test.use({
 
 test.describe('@voice on-device transcription (production build)', () => {
   test.skip(!haveModels, 'models absent — run `npm run fetch-models`');
-  test.skip(!haveHarness, 'voice harness not built — run `MATRA_VOICE_HARNESS=1 npm run build`');
+  test.skip(!haveHarness, 'voice harness not built — run `MATRA_VOICE_HARNESS=1 MATRA_DEMO_MODE=1 npm run build`');
   test.skip(!WAV, 'no speech clip — needs macOS `say`, or set MATRA_VOICE_WAV');
 
   test('records, transcribes on-device, and never contacts another origin', async ({ page, context, baseURL }) => {

@@ -303,8 +303,9 @@ Q-038.
 
 **Matcher (W15, W18; `apps/matcher`, `apps/server/src/matcher-client.ts`, `packages/crypto/src/attestation.ts`).** A
 separate service, not the app server, decides which matched groups exist, when each is released, and which **one**
-counselor gets it. It holds only entry ids, tags, a pseudonymous survivor reference (HMAC of the account id under the
-app server's pepper, so it can count distinct survivors without user ids), when each entry was sealed, the **hour**
+counselor gets it. It holds only entry ids, tags, a pseudonymous survivor reference (HMAC of the tag and the account id
+under the app server's pepper, so it can count distinct survivors per tag without user ids, and cannot link one
+survivor's entries across tags), when each entry was sealed, the **hour**
 the account was created (Sybil signals), and the two states from each survivor's **routing tag**: the incident state
 and her home state, taken from her record on her device. Her client seals the routing tag to the matcher's static
 P-256 key with ECIES (ephemeral ECDH P-256, HKDF-SHA256 with salt = both public keys and info
@@ -315,8 +316,12 @@ by frequency (ties alphabetical), then its survivors' states; the first state wi
 roster's `licensedStates`, now part of the org-signed roster v2) wins, the least-loaded such counselor is chosen (ties:
 lowest SHA-256(τ | counselor id)), and the reason (`incident_state:NJ`, `survivor_state:NY`, `reassigned:…`) is recorded
 and shown to the counselor in plain words. If nobody is licensed in any of the group's states, the group is **not
-released** (ops sees only a count). An assignment is sticky while its counselor stays on the roster, licensed there,
-and has not declined; otherwise it is reassigned with her excluded. The app server forwards entries after responding
+released** (ops sees only a count, behind the matcher's token). A group in which nobody gave any state (she left both
+blank, or an entry predates routing) is not dropped: it goes to the least-loaded counselor on the whole roster, reason
+`fallback:no_state`. An assignment is sticky while its counselor stays on the roster, licensed there, and has not
+declined; otherwise it is reassigned with her excluded. The counselor declines from her portal (a conflict of interest,
+before contacting anyone); the decline is kept per τ, so it survives the group dissolving and forming again, and is
+erased once no entry with that τ remains. The app server forwards entries after responding
 (the same way for a match or a miss), retries every minute, queues withdrawals until the matcher has them, and caches
 assignments so released groups survive a matcher outage while new groups wait for it (fail closed). It runs
 in-process (development, tests, single-host demo: the app server then holds the matcher key, so there is **no
@@ -324,8 +329,11 @@ separation**) or as its own process (`npm run -w @matra/matcher start`, bearer t
 
 *Attestation (SIMULATED).* The matcher serves `GET /v1/attestation?nonce=` (proxied by the app server at
 `/api/matching/attestation`): an Ed25519-signed document `{ platform, measurement, encKey, signKey, nonce, issuedAt }`.
-The measurement is SHA-256 over every file in `apps/matcher/src` (except tests) and its `package.json`
-(`npm run -w @matra/matcher measure` prints it for publication). The survivor's client fetches it with a fresh nonce
+The measurement is SHA-256 over every source file the matcher loads from this repository: `apps/matcher/src`,
+`packages/crypto/src` (which opens the routing tags and verifies the roster) and `packages/shared/src` (tests excluded),
+their `package.json` files, and the root `package-lock.json`, which pins every third-party dependency's version and
+integrity hash (`npm run -w @matra/matcher measure` prints it for publication). Installed `node_modules`, Node.js and
+the OS image are not hashed; a real platform measures the whole image. The survivor's client fetches it with a fresh nonce
 **before** anything else (so a failure costs no OPRF quota), checks the platform signature, nonce, freshness (5 min)
 and that the measurement equals the value pinned in the build (`MATRA_ATTESTATION_PLATFORM_PUBKEY`,
 `MATRA_MATCHER_MEASUREMENT`), and only then seals the routing tag to `encKey`; otherwise she sees "This matcher isn't
@@ -336,7 +344,9 @@ measurement is computed by the matcher process from its own files: anyone holdin
 and a modified process can report the published one. It exercises the protocol so that a real platform (AWS Nitro
 Enclaves: NSM document over PCR0; GCP Confidential Space: attestation token over the image digest, from a reproducible
 build) becomes a verifier plus configuration (`MATRA_ATTESTATION=nitro|confidential-space` exist as stubs that refuse
-to start). Pinned production builds refuse a `simulated` platform unless built with `MATRA_DEMO_MODE=1`; the matcher
+to start). A production web build with no matcher pins fails to build unless `MATRA_DEMO_MODE=1` (and such a client
+refuses to seal at run time): the app server proxies the attestation, so an unpinned client would seal to whatever key
+it is handed. Pinned production builds refuse a `simulated` platform unless built with `MATRA_DEMO_MODE=1`; the matcher
 and the app server refuse to run the simulated attester in production unless `MATRA_DEMO_MODE=1`; unpinned
 development builds accept any attestation with a console warning.
 

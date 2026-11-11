@@ -554,9 +554,11 @@ Scripts: `dev`, `start`, `test`, `typecheck`, `measure`. Depends on `@matra/cryp
 
 **Data held by the matcher** (its own DB, `MATRA_MATCHER_DB_PATH`):
 - `matcher_entries(entry_id PK, tag, survivor_ref, created_at, account_created_hour, incident_state, survivor_state)`.
-  `survivor_ref = HMAC(pepper, "matcher-ref|" + userId)` computed by the app server: lets the matcher count distinct
-  survivors without user ids. States are USPS codes or null.
+  `survivor_ref = HMAC(pepper, "matcher-ref|" + tag + "|" + userId)` computed by the app server: lets the matcher count
+  distinct survivors per tag without user ids, and not link one survivor's entries across tags. States are USPS codes
+  or null.
 - `matcher_assignments(tag PK, counselor_id, reason, assigned_at, excluded JSON)`.
+- `matcher_exclusions(tag, counselor_id)`: declines, kept while the tag has any entry (survive a group re-forming).
 - `matcher_roster(payload, signature)` (latest signed roster).
 
 **Assignment algorithm** (`assignGroups(now)`, run on every `upsertEntry`, `removeEntry`, `putRoster` and
@@ -573,8 +575,10 @@ Scripts: `dev`, `start`, `test`, `typecheck`, `measure`. Depends on `@matra/cryp
    at least one counselor licensed there, pick the one with the fewest open assignments; tie-break by lowest
    `sha256(tag | counselorId)`.
 5. Reason: `incident_state:NJ`, `survivor_state:NY`, or, if nobody is licensed in any of the group's states,
-   **no assignment** with reason `unassigned:no_licensed_counselor` (the group isn't released; ops sees a count only).
-   An entry without states routes as `unassigned:no_state` unless another entry in the group carries one.
+   **no assignment** with reason `unassigned:no_licensed_counselor` (the group isn't released; ops sees a count only,
+   at the token-protected `GET /v1/stats`; `/v1/health` carries no counts). An entry without states takes the group's
+   other entries' states; a group with no states at all goes to the least-loaded counselor on the whole roster, reason
+   `fallback:no_state` (review fix: it was never released before).
 6. Sticky: an assignment stays while its counselor remains on the roster and hasn't declined. If the counselor leaves
    the roster or declines, reassign with that counselor excluded and reason prefixed `reassigned:`.
 
@@ -1087,7 +1091,7 @@ Built before metadata-min and staged-release (neither had landed), so:
 - `logging.ts` does not exist yet: the matcher logs `[matcher] METHOD <route pattern> status ms` with its own tiny
   middleware (no ids, tags, tokens, IPs or query strings). Swap it for `requestLogger()` when metadata-min lands.
 - `docs/PRIVACY_DATA_INVENTORY.md` does not exist yet. metadata-min should add: the matcher DB (`matcher_entries`: entry
-  id, tag, survivor_ref = HMAC(pepper, "matcher-ref|" + user id), sealed-at time, account-creation **hour**, incident and
+  id, tag, survivor_ref = HMAC(pepper, "matcher-ref|" + tag + "|" + user id), sealed-at time, account-creation **hour**, incident and
   survivor state in clear; `matcher_assignments`: tag, counselor id or null, reason, time, excluded counselors, Sybil
   signals, signature; `matcher_roster`), and on the app server `match_entries.routing_envelope` (ciphertext),
   `match_entries.matcher_synced`, `match_assignments` (the cached reason names a state per released group) and

@@ -3,7 +3,7 @@ import request from 'supertest';
 import { createHash } from 'node:crypto';
 import { generateRosterKey, matcherKeysFromSeed, newAttestationNonce, sealRouting, signCounselorRoster, toBase64, verifyAttestation } from '@matra/crypto';
 import { createMatcher, createMatcherApp, SimulatedAttester, verifyAssignmentSignature, type MatcherEntryInput } from './index.js';
-import { loadAttester } from './config.js';
+import { loadAttester, loadMatcherSettings } from './config.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -126,23 +126,40 @@ describe('matcher: routing by incident state, then survivor state', () => {
     expect(matcher.assignments()).toMatchObject([{ counselorId: 'c-ca', reason: 'incident_state:CA' }]);
   });
 
-  it('no states at all → unassigned:no_state; one entry with a state routes the whole group', async () => {
+  it('no states at all → still released: the least-loaded counselor on the whole roster, fallback:no_state', async () => {
     const { matcher, store } = setup();
-    matcher.putRoster(roster([['c-nj', ['NJ']]]));
+    // nobody on the roster yet: kept, not released
     await matcher.upsertEntry(await entry({ who: 'a' }));
     await matcher.upsertEntry(await entry({ who: 'b' }));
-    expect(store.assignments()[0]!.reason).toBe('unassigned:no_state');
-    await matcher.upsertEntry(await entry({ who: 'c', survivor: 'NJ' }));
+    expect(matcher.assignments()).toEqual([]);
+    expect(store.assignments()[0]!.reason).toBe('unassigned:no_counselor');
+    matcher.putRoster(roster([['c-nj', ['NJ']], ['c-ny', ['NY']]]));
+    const [a] = matcher.assignments();
+    expect(a).toMatchObject({ reason: 'fallback:no_state' });
+    // balanced: a second no-state group goes to the other counselor
+    await matcher.upsertEntry(await entry({ tag: TAG2, who: 'a', at: T0 - 1 }));
+    await matcher.upsertEntry(await entry({ tag: TAG2, who: 'b', at: T0 - 1 }));
+    const b = matcher.assignments().find((x) => x.tag === TAG2)!;
+    expect(b.reason).toBe('fallback:no_state');
+    expect(b.counselorId).not.toBe(a!.counselorId);
+    // sticky across calls
+    expect(matcher.assignments().find((x) => x.tag === TAG)).toEqual(a);
+  });
+
+  it('one entry with a state routes the whole group', async () => {
+    const { matcher } = setup();
+    matcher.putRoster(roster([['c-nj', ['NJ']], ['c-ny', ['NY']]]));
+    await matcher.upsertEntry(await entry({ who: 'a' }));
+    await matcher.upsertEntry(await entry({ who: 'b', survivor: 'NJ' }));
     expect(matcher.assignments()).toMatchObject([{ counselorId: 'c-nj', reason: 'survivor_state:NJ' }]);
   });
 
   it('routing data that does not open (moved from another entry, or no routing) counts as no state', async () => {
-    const { matcher, store } = setup();
+    const { matcher } = setup();
     matcher.putRoster(roster([['c-ny', ['NY']]]));
     await matcher.upsertEntry(await entry({ who: 'a', incident: 'NY', routingTag: TAG2 })); // sealed for another tag
     await matcher.upsertEntry({ ...(await entry({ who: 'b' })), routing: null });
-    expect(matcher.assignments()).toEqual([]);
-    expect(store.assignments()[0]!.reason).toBe('unassigned:no_state');
+    expect(matcher.assignments()).toMatchObject([{ counselorId: 'c-ny', reason: 'fallback:no_state' }]);
   });
 });
 
@@ -200,6 +217,27 @@ describe('matcher: load balancing, stickiness, declines, roster', () => {
     matcher.decline(TAG, second.counselorId);
     expect(matcher.assignments()).toEqual([]);
     expect(() => matcher.decline(TAG, 'c1')).toThrow(/No such assignment/);
+  });
+
+  it('a decline survives the group dissolving and forming again; erased once the tag has no entries', async () => {
+    const { matcher, store } = setup();
+    matcher.putRoster(roster([['c1', ['NJ']], ['c2', ['NJ']]]));
+    const a = await entry({ who: 'a', incident: 'NJ' });
+    await matcher.upsertEntry(a);
+    await matcher.upsertEntry(await entry({ who: 'b', incident: 'NJ' }));
+    const first = matcher.assignments()[0]!;
+    matcher.decline(TAG, first.counselorId);
+    const other = matcher.assignments()[0]!.counselorId;
+    expect(other).not.toBe(first.counselorId);
+    // a withdraws: the group dissolves; she seals again: it forms again, and does not go back to the decliner
+    matcher.removeEntry(a.entryId);
+    expect(matcher.assignments()).toEqual([]);
+    await matcher.upsertEntry(await entry({ who: 'a', incident: 'NJ' }));
+    expect(matcher.assignments()).toMatchObject([{ counselorId: other }]);
+    expect(store.exclusionsFor(TAG)).toEqual([first.counselorId]);
+    // every entry withdrawn: the decline is erased with them
+    for (const e of store.eligibleEntries(new Date(T0 + DAY).toISOString())) matcher.removeEntry(e.entry_id);
+    expect(store.exclusionsFor(TAG)).toEqual([]);
   });
 
   it('a counselor removed from the roster → reassigned', async () => {
@@ -260,7 +298,18 @@ describe('matcher HTTP API', () => {
     const v = verifyAttestation(r.body, { nonce, platformKey: platformPublicKey(platform), expectedMeasurement: 'ab'.repeat(32), allowSimulated: true });
     expect(v.encKey).toEqual(keys.encPublicJwk);
     expect((await request(app).get('/v1/attestation?nonce=xyz')).status).toBe(400);
-    expect((await request(app).get('/v1/health')).body).toMatchObject({ ok: true, measurement: 'ab'.repeat(32), platform: 'simulated' });
+    expect((await request(app).get('/v1/health')).body).toEqual({ ok: true, measurement: 'ab'.repeat(32), platform: 'simulated' });
+  });
+
+  it('/v1/health reveals no counts (a match forming must not be observable); /v1/stats needs the token', async () => {
+    const app = make();
+    await request(app).put('/v1/roster').set(auth).send(roster([['c-nj', ['NJ']]])).expect(200);
+    const before = (await request(app).get('/v1/health')).text;
+    await request(app).post('/v1/entries').set(auth).send(await entry({ who: 'a', incident: 'QQ' })).expect(200);
+    await request(app).post('/v1/entries').set(auth).send(await entry({ who: 'b', incident: 'QQ' })).expect(200);
+    expect((await request(app).get('/v1/health')).text).toBe(before);
+    expect((await request(app).get('/v1/stats')).status).toBe(401);
+    expect((await request(app).get('/v1/stats').set(auth)).body).toEqual({ unassigned: 1 });
   });
 
   it('everything else needs the token', async () => {
@@ -285,6 +334,21 @@ describe('matcher HTTP API', () => {
     const after = (await request(app).get('/v1/assignments').set(auth)).body.assignments;
     expect(after[0].counselorId).not.toBe(list[0].counselorId);
     expect((await request(app).post('/v1/entries').set(auth).send({ entryId: 'x', tag: 'nothex' })).status).toBe(400);
+  });
+
+  it('production refuses to start without a pinned counselor-roster key (unless MATRA_DEMO_MODE=1)', () => {
+    const env = {
+      NODE_ENV: 'production',
+      MATRA_ATTESTATION: 'nitro',
+      MATRA_MATCHER_KEY: '11'.repeat(32),
+      MATRA_MATCHER_TOKEN: 't'.repeat(40),
+      MATRA_MATCHER_DB_PATH: ':memory:',
+    };
+    expect(() => loadMatcherSettings(env)).toThrow(/MATRA_COUNSELOR_ROSTER_PUBKEY must be set in production/);
+    expect(loadMatcherSettings({ ...env, MATRA_DEMO_MODE: '1' }).rosterKey).toBeUndefined();
+    const org = generateRosterKey();
+    expect(loadMatcherSettings({ ...env, MATRA_COUNSELOR_ROSTER_PUBKEY: toBase64(org.publicKey) }).rosterKey).toEqual(org.publicKey);
+    expect(() => loadMatcherSettings({ ...env, MATRA_COUNSELOR_ROSTER_PUBKEY: toBase64(new Uint8Array(5)) })).toThrow(/32 bytes/);
   });
 
   it('production refuses the simulated attester without MATRA_DEMO_MODE=1', () => {
