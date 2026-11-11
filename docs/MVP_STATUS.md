@@ -34,13 +34,27 @@ commits). Threat-model rows: [threat-model.md](threat-model.md).
 | Metadata minimization (W11) | No IPs or user agents in the DB, WAL, ledger or logs; daily-salted in-memory rate-limit keys; route-only request logs; expired sessions swept; web build audited for third-party requests; [data inventory](PRIVACY_DATA_INVENTORY.md) | Size padding, encrypted alias and the host's edge logs are not done |
 | Recovery code (W20) | An optional code only she holds (shown once) can set a new passphrase; the server stores only a scrypt hash and wrapped keys and cannot reset anyone | Shamir recovery with trusted people is later. Doesn't fix W5 (passphrase still PBKDF2) |
 | Ops docs | [Deploy governance](ops/DEPLOY_GOVERNANCE.md) (n-of-m approvals, signed tags, published hashes, emergency path), [incident response](ops/INCIDENT_RESPONSE.md) (**draft pending counsel**, plans as if a ciphertext-only leak may need notice: Q-055), [hosting](ops/HOSTING.md) (Nitro vs Confidential Space vs Azure; recommends Confidential Space for the matcher), [export control](ops/EXPORT_CONTROL.md) (question only: Q-056) | Process proposed, nothing configured: no branch protection, no CI, no approver organizations yet |
-| Demo stack | `npm run demo` starts all five processes (3 key holders, matcher, app server) plus the web app, in production mode with `MATRA_DEMO_MODE=1`; `npm run demo:reset` makes fresh demo keys and seeds fictional accounts through the real API (a NY/NJ matched group, a survivor who said no to matching, a story already shared with an attorney, counselors licensed in NY, NJ and PA). The **Server view** (`/inspector`, dev and demo builds only) shows what every process holds and received next to what was typed; `e2e/demo-stack.spec.ts` runs the whole demo path on that stack | Everything on one laptop: all three key shares, the roster key and the "platform" key sit side by side, which no real deployment allows. The Server view is unauthenticated (refused in production unless demo mode). Tech/lawyer walkthroughs and slides are not written yet |
+| Demo stack | `npm run demo` starts all five processes (3 key holders, matcher, app server) plus the web app, in production mode with `MATRA_DEMO_MODE=1`; `npm run demo:reset` makes fresh demo keys and seeds fictional accounts through the real API (a NY/NJ matched group, a survivor who said no to matching, a story already shared with an attorney, counselors licensed in NY, NJ and PA). The **Server view** (`/inspector`, dev and demo builds only) shows what every process holds and received next to what was typed; `e2e/demo-stack.spec.ts` runs the whole demo path on that stack | Everything on one laptop: all three key shares, the roster key and the "platform" key sit side by side, which no real deployment allows. The Server view is unauthenticated (refused in production unless demo mode). Walkthroughs: [demo/TECH_DEMO.md](demo/TECH_DEMO.md), [demo/LAWYER_DEMO.md](demo/LAWYER_DEMO.md) and slide *content* in [demo/LAWYER_SLIDES.md](demo/LAWYER_SLIDES.md) (no built deck yet). The "break it" moments (a holder stopped, the matcher changed) are not e2e-tested: rehearse them |
 | Research note | [design/PER_SUBMISSION_OPRF.md](design/PER_SUBMISSION_OPRF.md): per-submission OPRF evaluation (would close part of W13), deferred | Not built |
 | Legal research bank | 14 tech-adjacent questions researched and citation-checked (memo-ready), some sources still [VERIFY] | Research, not advice; nothing reviewed by counsel |
 
-**Not built on this branch yet:** the written walkthroughs and slides of WEEKEND_MVP.md §4.5 (`docs/demo/TECH_RUNTHROUGH.md`,
-`docs/demo/LAWYER_WALKTHROUGH.md`, a deck). `docs/DEMO_SCRIPT.md` has the new setup, accounts, matching section and a
-Server view section.
+**Not built on this branch yet:** a built slide deck (the slide content is Markdown in
+[demo/LAWYER_SLIDES.md](demo/LAWYER_SLIDES.md)); a hosted demo URL; CI. `docs/DEMO_SCRIPT.md` has the new setup,
+accounts, matching section and a Server view section.
+
+### Verification run on 2026-11-11 (`weekend-mvp`, final check after the walkthrough docs)
+
+- `npm run typecheck`: clean across all workspaces.
+- `npm test`: **591 passing, 1 skipped** (crypto 191, matcher 30, server 146, web 224 + 1 skipped). On the first run one
+  web test (`DeleteAccount.test.tsx`, the redirect after deleting) failed under full-suite load and passed alone and on
+  two more full runs; its wait was raised from 1 s to 15 s.
+- `npm run e2e`: default suite **12 passed, 1 skipped** (voice), demo stack **5 passed**. The demo stack logs one
+  harmless `matcher sync (roster) failed: ... 400` at startup, before the seed has stored the signed roster; the next
+  sync succeeds.
+- `MATRA_DEMO_MODE=1 npm run build` (web audit ok) and `npm run e2e:prod`: **12 passed, 1 skipped**, on two runs.
+- `npm run demo:reset` then `npm run demo`: all five processes and the web app answer (`/api/health`, matcher
+  `/v1/health` with `platform: simulated`, holders 1 to 3, `/` and `/inspector`). Smoke only: the click path was not
+  walked by hand (the demo-stack e2e walks it).
 
 ### Verification run on 2026-11-11 (`weekend-mvp`, demo commit)
 

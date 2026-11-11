@@ -1146,8 +1146,8 @@ Code shape:
 
 ### staged-release
 
-Built before metadata-min (§3.2 had still not landed), so `docs/PRIVACY_DATA_INVENTORY.md` does not exist yet.
-metadata-min should add: `match_entries.contact_bundle` (ciphertext), `conflict_checks` (group, counselor, result,
+Built before metadata-min (§3.2 had still not landed). metadata-min later created `docs/PRIVACY_DATA_INVENTORY.md`
+and listed these (it was asked to add): `match_entries.contact_bundle` (ciphertext), `conflict_checks` (group, counselor, result,
 statement version, time, ledger id), `report_requests` (group, entry, counselor, status, times, ledger id),
 `report_releases` (survivor id, counselor id, record id, the record key wrapped to the counselor, consent text, status,
 created/expiry/first-opened/revoked times, ledger id) and `report_release_blobs` (evidence keys wrapped to the counselor).
@@ -1223,5 +1223,8 @@ Code shape and small deviations:
 - **e2e:** `e2e/demo-stack.spec.ts` with `playwright.demo.config.ts` (`npm run e2e:demo`, ports 4500/4510s/4520/5176,
   directory `e2e/.demo`, reset every run). `npm run e2e` now runs the default suite and then this one; the default
   config ignores the demo spec.
-- **Not done in this step:** §4.5 walkthroughs (`docs/demo/TECH_RUNTHROUGH.md`, `LAWYER_WALKTHROUGH.md`, slides).
-  `docs/DEMO_SCRIPT.md` has the new setup, the matching section and a short Server view section instead.
+- **Walkthroughs (§4.5), written in later commits under other names:** `docs/demo/TECH_DEMO.md` (technical),
+  `docs/demo/LAWYER_DEMO.md` (lawyer, about 12 minutes) and `docs/demo/LAWYER_SLIDES.md` (slide content as Markdown, not
+  a built deck). `docs/DEMO_SCRIPT.md` keeps the setup, the matching section and a short Server view section. The
+  technical walkthrough's "break it" moments (a key holder stopped, the matcher changed after the pin) are not covered
+  by e2e; rehearse them on the demo stack before presenting.

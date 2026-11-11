@@ -15,6 +15,8 @@ Matra is a survivor-controlled, zero-knowledge documentation tool with a consent
 | [PRD.md](PRD.md) | Team, partners | Personas, user stories, functional and non-functional requirements, out of scope, pilot metrics, open questions |
 | [ATTORNEY_PARTNER_MOU_TEMPLATE.md](ATTORNEY_PARTNER_MOU_TEMPLATE.md) | Partner orgs, counsel | Draft MOU covering verification, response times, conflicts, confidentiality, no fee sharing, data handling, termination (template; counsel review required) |
 | [DEMO_SCRIPT.md](DEMO_SCRIPT.md) | Presenter | 10-minute live demo with talking points and honest answers to hard questions |
+| [demo/TECH_DEMO.md](demo/TECH_DEMO.md) | Engineers, cryptographers | Technical live walkthrough on `npm run demo` with the Server view side by side, the "break it" moments, and what is simulated |
+| [demo/LAWYER_DEMO.md](demo/LAWYER_DEMO.md), [demo/LAWYER_SLIDES.md](demo/LAWYER_SLIDES.md) | Partner attorneys, clinics | About 12 minutes of plain-language demo and slide content; fictional data, open legal questions cited by ID, not legal advice |
 | [DEPLOY.md](DEPLOY.md) | Engineering | Deploying a demo instance (Docker, Render), the DEMO banner, production CSP |
 | [ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md) | Engineering, partner orgs | Proposed n-of-m approval for code changes and deploys (branch protection, CODEOWNERS, signed tags, published build hashes), emergency security-fix path |
 | [ops/INCIDENT_RESPONSE.md](ops/INCIDENT_RESPONSE.md) | Steward, counsel | **Draft pending counsel.** What a leak would reveal, severity, containment and key rotation, notice planned as if required (Q-055) |
