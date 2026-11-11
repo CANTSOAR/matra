@@ -66,6 +66,10 @@ NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_K
 npm run e2e:prod      # the demo-path scenarios against the production build on port 4300, with 3 separate holder processes
 ```
 
+For a live demo on one laptop, `npm run demo` starts the whole stack (3 key holders, the matcher, the app server, the web
+app) with fresh demo keys and seeded fictional accounts; see [DEMO_SCRIPT.md](DEMO_SCRIPT.md). It puts every secret on one
+machine on purpose, which a real deployment must never do.
+
 ## Environment variables
 
 | Variable | Demo value | Notes |
@@ -74,6 +78,7 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 | `MATRA_PEPPER` | random, ≥ 32 chars | HMAC key for escrow hashes and fake prelogin salts. **Secret.** Set it once and never change it: changing it breaks escrow matching for existing entries. Generate with `openssl rand -hex 32` |
 | `MATRA_DEMO_BANNER` | `1` | Shows "DEMO — do not enter real information" on every page |
 | `MATRA_DEMO_MODE` | `1` | Fictional-data demo: lets mock/simulated providers (the mock SMS provider) run in production, and turns the DEMO banner on. **Never on an instance with real data** |
+| `MATRA_INSPECTOR` | unset | `1` mounts the "Server view" endpoints (`/api/dev/inspector` on the app server, `/debug/state` on key holders, `/v1/debug/state` on the matcher): unauthenticated, they show every account's ciphertext and metadata and keep the last 200 request summaries in memory. Refused in production unless `MATRA_DEMO_MODE=1`. **Never set it on an instance anyone else can reach**, even a demo one, unless everyone with the URL may see all demo data |
 | `MATRA_SMS_PROVIDER` | `mock` | `twilio` (production default) or `mock` (development default; production only with `MATRA_DEMO_MODE=1`). Phone verification before sealed matching |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` | unset in a demo | With `MATRA_SMS_PROVIDER=twilio`: a Twilio Verify service. **Secret** (the token). The adapter is written to Twilio's published API but **has not been tested against the real service**: try it on a test number before relying on it. Twilio sees the phone number and when it was verified (a third party; legal question Q-013) |
 | `MATRA_SMS_REJECT_VOIP` | unset (on) | Twilio only: `0` turns off the Lookup line-type check. When on, only numbers Lookup reports as `mobile` get a code; VoIP, landline, toll-free, unknown and unchecked numbers are refused (fails closed). The check uses the paid Lookup "line type intelligence" add-on, which must be enabled on the Twilio account, or every number is refused |

@@ -31,6 +31,7 @@ import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
+import { mirror } from '../dev/mirror';
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
 
@@ -213,6 +214,11 @@ export function SessionProvider({
       const kdfSalt = newKdfSalt();
       onProgress?.('deriving');
       const { authKey, masterKey } = await deriveKeys(passphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);
+      mirror(
+        `Passphrase for "${username.trim()}"`,
+        `${'•'.repeat(Math.min(passphrase.length, 24))} (${passphrase.length} characters, hidden here too)`,
+        'Never sent. Her device derives keys from it (PBKDF2-SHA256, 600,000 rounds): one proves it to the server, which keeps only a salted hash of that; the other never leaves.',
+      );
       onProgress?.('generating');
       const identity = await generateIdentity(masterKey);
       onProgress?.('contacting');

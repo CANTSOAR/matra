@@ -11,6 +11,9 @@
  *   GET  /key       → { index, publicKey }                 (share public key pk_i; clients pin it)
  *   POST /evaluate  { blinded } + X-Matra-Holder-Token    → { evaluated, proof }  (RFC 9497 BlindEvaluate under k_i)
  *   GET  /health    → { ok: true }
+ *   GET  /debug/state → InspectorProcess  (only with `debug`: MATRA_INSPECTOR=1 outside production or with
+ *                       MATRA_DEMO_MODE=1. Its quota rows, daily totals, and the last 20 blinded elements it evaluated,
+ *                       which it otherwise never keeps. For the "what the server sees" demo page.)
  *
  * The token is signed by the app server (MATRA_HOLDER_TOKEN_PUBKEY pins its key); this holder checks the signature,
  * that `aud` is its own index, expiry, replay, and that the token is bound to this request's blinded element. It trusts
@@ -29,6 +32,8 @@
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { OprfKeyPair } from '@matra/crypto';
+import { inspectValue, type InspectorProcess } from '@matra/shared';
+import { tableSnapshot } from './inspector.js';
 import { openHolderDb, type DB } from './db.js';
 import { HOLDER_TOKEN_HEADER, HolderTokenVerifier, holderTokenPublicKey } from './holders.js';
 import { DEFAULT_OPRF_LIMITS, OprfKeyHolder, SqliteQuotaStore, type OprfLimits } from './oprf.js';
@@ -47,6 +52,8 @@ export interface HolderAppOptions {
   logRequests?: boolean;
   /** global evaluations per UTC day across all subjects (default DEFAULT_HOLDER_DAILY_BUDGET) */
   dailyBudget?: number;
+  /** dev/demo inspector: GET /debug/state, and keep the last 20 evaluations in memory for it (see the file comment) */
+  debug?: boolean;
 }
 
 export const DEFAULT_HOLDER_DAILY_BUDGET = 1000;
@@ -100,6 +107,8 @@ export function createHolderApp(opts: HolderAppOptions): express.Express {
   const holder = new OprfKeyHolder(opts.index, opts.share, new SqliteQuotaStore(db), { ...DEFAULT_OPRF_LIMITS, ...opts.limits });
   const tokens = new HolderTokenVerifier(holderTokenPublicKey(opts.tokenPublicKey), opts.index);
   const totals = new HolderDailyTotals(db, opts.dailyBudget ?? DEFAULT_HOLDER_DAILY_BUDGET, opts.index);
+  // dev/demo inspector only: the last 20 evaluations, in memory (a production holder keeps none)
+  const recent: Array<{ at: string; subject: string; blinded: string; evaluated: string; proof: string }> | undefined = opts.debug ? [] : undefined;
 
   const app = express();
   app.locals.db = db;
@@ -130,11 +139,36 @@ export function createHolderApp(opts: HolderAppOptions): express.Express {
     const r = holder.evaluate(tok.sub, parsed.data.blinded);
     if (r.ok) {
       totals.served();
+      if (recent) {
+        recent.unshift({ at: new Date().toISOString(), subject: tok.sub, blinded: parsed.data.blinded, evaluated: r.response.evaluated, proof: r.response.proof });
+        recent.length = Math.min(recent.length, 20);
+      }
       return void res.json(r.response);
     }
     if (r.code === 'invalid_element') return void res.status(400).json({ error: 'Not a valid group element', code: 'invalid_element' });
     res.status(429).json({ error: 'Rate limited', code: r.code });
   });
+  if (opts.debug) {
+    app.get('/debug/state', (_req, res) => {
+      const state: InspectorProcess = {
+        name: `Key holder ${opts.index}`,
+        role: 'holder',
+        note: `Holds ONE share of the matching key (public key ${holder.publicKey.slice(0, 12)}…). Sees blinded elements, never an identifier or an account id.`,
+        tables: [
+          {
+            name: 'evaluations (memory, demo only)',
+            caption:
+              'The blinded elements it evaluated: random-looking group elements. Without her blinding factor (on her device) they say nothing about the identifier. Kept only while the inspector is on.',
+            total: recent!.length,
+            rows: recent!.map((r) => inspectValue(r) as InspectorProcess['tables'][number]['rows'][number]),
+          },
+          tableSnapshot(db, 'oprf_quota', 'Its quota: per pseudonymous subject (from the app server’s token, not an account id), today’s count and a lifetime count.'),
+          tableSnapshot(db, 'daily_totals', 'Append-only daily totals: evaluations served and refused (its global budget).'),
+        ],
+      };
+      res.json(state);
+    });
+  }
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not found', code: 'not_found' });
   });

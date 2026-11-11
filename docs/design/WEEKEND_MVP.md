@@ -1185,3 +1185,43 @@ Code shape and small deviations:
 - Notes stay allowed before the conflict check server-side (the UI shows them only after it).
 - e2e: scenario 5 now runs the whole staged release (stage 1 without numbers, conflict check, numbers, requests to both,
   A says yes, B says no, the counselor reads A's story, A stops sharing, then the old decline).
+
+### demo
+
+- **Seed:** a separate `apps/server/src/demo-seed.ts` (`npm run -w @matra/server demo-seed`, run by `demo:reset`)
+  instead of a `--demo` flag on `seed.ts`, so the default seed (and the default e2e stack that uses it) is unchanged.
+  It builds the app with the same configuration as `index.ts` (remote holders, HTTP matcher, mock SMS) and needs the
+  holders and the matcher running; it refuses to run without `MATRA_DEMO_MODE=1` or outside a `.demo` directory. It
+  signs the roster itself with the demo organization key (`MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE`, given only to it),
+  exactly as `sign-roster` does.
+- **Accounts** differ from §4.2: counselors are `counselor.nj` / `counselor.ny` / `counselor.pa` (the default seed keeps
+  `counselor.demo` + `counselor.ny`). The task asked for "a matched group across NJ/NY with one non-consenting survivor",
+  so the seed makes the group already (Sam: happened NY, lives NJ, text; Morgan: happened NY, lives NY, email; Morgan
+  typed the URL form), and `taylor.demo` names the same profile in her story but did NOT opt in to matching. Jane's live
+  seal joins the existing group (3 people) instead of forming it. The "says no to her report request" moment is live
+  (demo e2e test 5: Morgan says no), not seeded, so the counselor still starts from stage 1.
+- **Processes:** `scripts/demo.mjs` / `demo-reset.mjs` / `demo-lib.mjs` (no `concurrently`), so the stack can be
+  started with other ports and another `.demo` directory for e2e. Holders, matcher and app server all run with
+  `NODE_ENV=production` + `MATRA_DEMO_MODE=1` + `MATRA_INSPECTOR=1` on 127.0.0.1; the app server does not serve the web
+  app (`MATRA_SERVE_WEB=0`): Vite does, on 5173, built with the demo pins (OPRF, roster, platform key, measurement) and
+  `MATRA_DEMO_MODE=1`. The measurement pinned is the one at `demo:reset`; `npm run demo` warns when the matcher code has
+  changed since (the tamper demo).
+- **Inspector:** the endpoint is `GET /api/dev/inspector` as planned; holders serve `GET /debug/state` and the matcher
+  `GET /v1/debug/state` (behind its app-server token). One rule for all three: `inspectorEnabled()` in
+  `@matra/shared` (`MATRA_INSPECTOR=1`, and not production unless `MATRA_DEMO_MODE=1`). Everything is an
+  `InspectorProcess` (tables + optional requests), so the page renders any process the same way. Additions: `?find=`
+  searches the FULL values of every column of every app-server table (the screen shows values cut to 48 characters,
+  which would make a client-side search dishonest); the rate-limit table lists the SMS limiters too; pending phone
+  challenges are shown as a count (each holds a raw number in memory for at most 10 minutes).
+- **Web:** the app uses a `MemoryRouter`, so the Server view is not a route: `main.tsx` renders it for the path
+  `/inspector` in dev and demo builds only (`import.meta.env.DEV || __MATRA_DEMO__`, a build-time constant: a production
+  build that is not a demo contains neither the page nor its chunk; checked by building both). The "next to what the
+  survivor typed" column (`dev/mirror.ts`) is fed over a same-origin `BroadcastChannel` from the app tab at the moment
+  something is encrypted, blinded or hashed (story versions, evidence, the sealed-match identifier and states, the phone
+  number, the passphrase length at registration); nothing is stored, and it is compiled out of non-demo builds. A demo
+  build (`MATRA_DEMO_MODE=1`) now always shows the DEMO banner.
+- **e2e:** `e2e/demo-stack.spec.ts` with `playwright.demo.config.ts` (`npm run e2e:demo`, ports 4500/4510s/4520/5176,
+  directory `e2e/.demo`, reset every run). `npm run e2e` now runs the default suite and then this one; the default
+  config ignores the demo spec.
+- **Not done in this step:** §4.5 walkthroughs (`docs/demo/TECH_RUNTHROUGH.md`, `LAWYER_WALKTHROUGH.md`, slides).
+  `docs/DEMO_SCRIPT.md` has the new setup, the matching section and a short Server view section instead.

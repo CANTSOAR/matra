@@ -77,6 +77,11 @@ export class ClientKeyer {
     return l;
   }
 
+  /** Every limiter made through this keyer (the dev/demo inspector lists what they hold). */
+  allLimiters(): readonly RateLimiter[] {
+    return this.limiters;
+  }
+
   /** A keyed hash of the client's address (as Express resolves it under `trust proxy`), valid for today only. */
   key(req: Request): string {
     return this.keyFor(req.ip ?? req.socket.remoteAddress ?? 'unknown');

@@ -16,6 +16,8 @@ const DB = process.env.MATRA_E2E_DB || path.resolve('e2e/.data/e2e.db');
 
 export default defineConfig({
   testDir: './e2e',
+  // the demo-stack scenario runs against its own stack (playwright.demo.config.ts, npm run e2e:demo)
+  testIgnore: ['**/demo-stack.spec.ts'],
   // Key derivation (600k PBKDF2 iterations) takes seconds per sign-in.
   timeout: 240_000,
   expect: { timeout: 30_000 },

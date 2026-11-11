@@ -18,11 +18,12 @@ import {
   newAttestationNonce,
   verifyAttestation,
 } from '@matra/crypto';
-import type { AttestationDocument } from '@matra/shared';
+import type { AttestationDocument, InspectorProcess } from '@matra/shared';
 import {
   SimulatedAttester,
   computeMeasurement,
   createMatcher,
+  matcherDebugState,
   type AttestationProvider,
   type Matcher,
   type MatcherAssignment,
@@ -41,11 +42,14 @@ export interface MatcherClient {
   assignments(): Promise<MatcherAssignment[]>;
   /** the assigned counselor declines the group (conflict check, staged-release): reassigned with her excluded */
   decline(tag: string, counselorId: string): Promise<void>;
+  /** dev/demo inspector only (apps/matcher src/debug.ts): what the matcher holds */
+  debugState?(): Promise<InspectorProcess>;
 }
 
 export class InProcessMatcher implements MatcherClient {
   readonly kind = 'in-process' as const;
   readonly matcher: Matcher;
+  private readonly store: ReturnType<typeof createMatcher>['store'];
   readonly attester: AttestationProvider;
   constructor(o: {
     /** the matcher's own DB (default ':memory:': the app server re-sends every entry at startup) */
@@ -60,7 +64,9 @@ export class InProcessMatcher implements MatcherClient {
     measurement?: string;
   }) {
     const keys = matcherKeysFromSeed(o.key);
-    this.matcher = createMatcher({ dbPath: o.dbPath ?? ':memory:', keys, releaseDelayMs: o.releaseDelayMs, rosterKey: o.rosterKey }).matcher;
+    const created = createMatcher({ dbPath: o.dbPath ?? ':memory:', keys, releaseDelayMs: o.releaseDelayMs, rosterKey: o.rosterKey });
+    this.matcher = created.matcher;
+    this.store = created.store;
     this.attester = new SimulatedAttester({ platformSecretKey: o.platformSecretKey, measurement: o.measurement ?? computeMeasurement(), keys });
   }
   attestation(nonce: string) {
@@ -80,6 +86,10 @@ export class InProcessMatcher implements MatcherClient {
   }
   async decline(tag: string, counselorId: string) {
     this.matcher.decline(tag, counselorId);
+  }
+  async debugState() {
+    const s = await matcherDebugState(this.store, this.attester);
+    return { ...s, name: 'Matcher (in-process)', note: `Runs INSIDE the app server (development): no separation. ${s.note}` };
   }
 }
 
@@ -113,6 +123,9 @@ export class HttpMatcher implements MatcherClient {
   }
   async decline(tag: string, counselorId: string) {
     await this.call('POST', `/v1/assignments/${encodeURIComponent(tag)}/decline`, { counselorId });
+  }
+  debugState() {
+    return this.call<InspectorProcess>('GET', '/v1/debug/state');
   }
 }
 

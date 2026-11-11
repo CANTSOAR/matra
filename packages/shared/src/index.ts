@@ -915,6 +915,10 @@ export interface ApiError { error: string; code?: string }
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
  POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)
+
+ GET    /api/dev/inspector                            -> InspectorSnapshot (dev / demo only: MATRA_INSPECTOR=1, and never in
+                                                         production unless MATRA_DEMO_MODE=1; unauthenticated; inspector.ts)
 */
 
 export * from './request-log.js';
+export * from './inspector.js';

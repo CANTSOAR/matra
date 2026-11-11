@@ -34,12 +34,21 @@ commits). Threat-model rows: [threat-model.md](threat-model.md).
 | Metadata minimization (W11) | No IPs or user agents in the DB, WAL, ledger or logs; daily-salted in-memory rate-limit keys; route-only request logs; expired sessions swept; web build audited for third-party requests; [data inventory](PRIVACY_DATA_INVENTORY.md) | Size padding, encrypted alias and the host's edge logs are not done |
 | Recovery code (W20) | An optional code only she holds (shown once) can set a new passphrase; the server stores only a scrypt hash and wrapped keys and cannot reset anyone | Shamir recovery with trusted people is later. Doesn't fix W5 (passphrase still PBKDF2) |
 | Ops docs | [Deploy governance](ops/DEPLOY_GOVERNANCE.md) (n-of-m approvals, signed tags, published hashes, emergency path), [incident response](ops/INCIDENT_RESPONSE.md) (**draft pending counsel**, plans as if a ciphertext-only leak may need notice: Q-055), [hosting](ops/HOSTING.md) (Nitro vs Confidential Space vs Azure; recommends Confidential Space for the matcher), [export control](ops/EXPORT_CONTROL.md) (question only: Q-056) | Process proposed, nothing configured: no branch protection, no CI, no approver organizations yet |
+| Demo stack | `npm run demo` starts all five processes (3 key holders, matcher, app server) plus the web app, in production mode with `MATRA_DEMO_MODE=1`; `npm run demo:reset` makes fresh demo keys and seeds fictional accounts through the real API (a NY/NJ matched group, a survivor who said no to matching, a story already shared with an attorney, counselors licensed in NY, NJ and PA). The **Server view** (`/inspector`, dev and demo builds only) shows what every process holds and received next to what was typed; `e2e/demo-stack.spec.ts` runs the whole demo path on that stack | Everything on one laptop: all three key shares, the roster key and the "platform" key sit side by side, which no real deployment allows. The Server view is unauthenticated (refused in production unless demo mode). Tech/lawyer walkthroughs and slides are not written yet |
 | Research note | [design/PER_SUBMISSION_OPRF.md](design/PER_SUBMISSION_OPRF.md): per-submission OPRF evaluation (would close part of W13), deferred | Not built |
 | Legal research bank | 14 tech-adjacent questions researched and citation-checked (memo-ready), some sources still [VERIFY] | Research, not advice; nothing reviewed by counsel |
 
-**Not built on this branch:** the demo plan (WEEKEND_MVP.md §4: `demo:reset` / `demo` scripts, seeded demo profile,
-the "What the server sees" inspector, tech and lawyer walkthroughs, slides). `docs/DEMO_SCRIPT.md` still describes the
-older setup.
+**Not built on this branch yet:** the written walkthroughs and slides of WEEKEND_MVP.md §4.5 (`docs/demo/TECH_RUNTHROUGH.md`,
+`docs/demo/LAWYER_WALKTHROUGH.md`, a deck). `docs/DEMO_SCRIPT.md` has the new setup, accounts, matching section and a
+Server view section.
+
+### Verification run on 2026-11-11 (`weekend-mvp`, demo commit)
+
+- `npm run typecheck`: clean across all workspaces.
+- `npm test`: **591 passing, 1 skipped** (crypto 191, matcher 30, server 146, web 224 + 1 skipped).
+- `npm run e2e`: default suite **12 passed, 1 skipped** (voice), then the demo stack (`e2e/demo-stack.spec.ts`) **5 passed**.
+- `MATRA_DEMO_MODE=1 npm run build && npm run e2e:prod`: **12 passed, 1 skipped**. Scenario 1 failed once on a heavily
+  loaded machine and passed on the next two runs with no change (noted as a possible flake).
 
 ### Verification run on 2026-11-11 (`weekend-mvp`, before the ops-docs commit)
 

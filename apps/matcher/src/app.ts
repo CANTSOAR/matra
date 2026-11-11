@@ -13,6 +13,8 @@
  *   DELETE /v1/entries/:entryId                                                       → { ok: true }
  *   GET    /v1/assignments                   → { assignments: MatcherAssignment[] }
  *   POST   /v1/assignments/:tag/decline { counselorId }                              → { ok: true } (reassigns)
+ *   GET    /v1/debug/state                   → InspectorProcess (token; only with `debugState`, i.e. MATRA_INSPECTOR=1
+ *                                               outside production or with MATRA_DEMO_MODE=1: src/debug.ts)
  *
  * Logs `METHOD <route pattern> status ms` only (shared requestLogLine; MATRA_LOG_REQUESTS=0 turns it off): never ids,
  * tags, bodies, tokens, IPs or query strings. Error logs carry the error message only.
@@ -20,7 +22,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { AttestationProvider } from './attestation.js';
-import { errorMessageForLog, logRequests } from '@matra/shared';
+import { errorMessageForLog, logRequests, type InspectorProcess } from '@matra/shared';
 import { MatcherError, type Matcher } from './matcher.js';
 
 export interface MatcherAppOptions {
@@ -29,6 +31,8 @@ export interface MatcherAppOptions {
   /** bearer token shared with the app server */
   token: string;
   logRequests?: boolean;
+  /** dev/demo inspector only (src/debug.ts): what this matcher holds */
+  debugState?: () => Promise<InspectorProcess>;
 }
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
@@ -90,6 +94,12 @@ export function createMatcherApp(o: MatcherAppOptions): express.Express {
     if (typeof counselorId !== 'string' || !counselorId) throw new MatcherError(400, 'invalid_request', 'counselorId');
     res.json(o.matcher.decline(String(req.params.tag), counselorId));
   });
+  if (o.debugState) {
+    const debugState = o.debugState;
+    app.get('/v1/debug/state', requireToken, async (_req, res) => {
+      res.json(await debugState());
+    });
+  }
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not found', code: 'not_found' });
   });

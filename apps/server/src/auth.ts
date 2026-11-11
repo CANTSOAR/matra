@@ -175,4 +175,9 @@ export class RateLimiter {
   keys(): string[] {
     return [...this.hits.keys()];
   }
+
+  /** Live entries with their counts and expiry (the dev/demo inspector shows exactly what is held in memory). */
+  entries(): Array<{ key: string; count: number; resetAt: number }> {
+    return [...this.hits].map(([key, v]) => ({ key, count: v.count, resetAt: v.resetAt }));
+  }
 }

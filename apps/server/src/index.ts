@@ -12,6 +12,7 @@ import {
   resolveDbPath,
 } from './config.js';
 import { RemoteHolderPool } from './holders.js';
+import { inspectorEnabled } from '@matra/shared';
 
 const production = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT) || 4000;
@@ -34,6 +35,10 @@ const demoMode = loadDemoMode();
 if (demoMode) console.warn('[matra] MATRA_DEMO_MODE=1 — fictional-data demo: mock/simulated providers allowed, DEMO banner on.');
 const demoBanner = process.env.MATRA_DEMO_BANNER === '1' || demoMode;
 const trustProxy = Number(process.env.MATRA_TRUST_PROXY) || 0;
+// The "what the server sees" inspector (src/inspector.ts): MATRA_INSPECTOR=1, never in production unless MATRA_DEMO_MODE=1.
+const inspector = inspectorEnabled(process.env);
+if (process.env.MATRA_INSPECTOR === '1' && !inspector) console.warn('[matra] MATRA_INSPECTOR=1 ignored: production without MATRA_DEMO_MODE=1.');
+if (inspector) console.warn('[matra] MATRA_INSPECTOR=1 — GET /api/dev/inspector shows every account’s ciphertext and metadata, unauthenticated (dev / demo only).');
 
 // Threshold OPRF key holders: all m shares in this process (dev / single-host demo), or m remote holder processes
 // (MATRA_OPRF_HOLDER_URLS). Production refuses to start without every share or the pinned remote config, and never
@@ -66,6 +71,7 @@ const app = createApp({
   webDir,
   demoBanner,
   trustProxy,
+  inspector,
   matching: {
     oprf,
     limits: loadOprfLimits(),

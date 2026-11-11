@@ -30,6 +30,7 @@ import { MATCHING_CONSENT_LINES } from './disclosures';
 import { stripMetadata } from './metadata';
 import type { WorkingData } from './session';
 import { MATCH_PINS } from '../matchPins';
+import { mirror, typedText } from '../dev/mirror';
 
 /** Her personal preferences, stored only inside an encrypted 'profile' vault record. */
 export interface VaultProfile {
@@ -64,6 +65,11 @@ export async function sealPayload(api: ApiClient, masterKey: CryptoKey, payload:
   const key = await generateContentKey();
   const envelope = await encryptJSON(payload, key);
   const ownerWrappedKey = await wrapKeyWithMaster(key, masterKey);
+  mirror(
+    payload.kind === 'final' ? 'Her story (sealed)' : payload.kind === 'profile' ? 'Her preferences' : 'Her story (draft, saved as she goes)',
+    typedText(payload.kind === 'final' ? payload.record : payload),
+    `Encrypted here (AES-256-GCM, a new key per version). The server gets the envelope (${envelope.ct.length} base64 characters), the key wrapped by her own key, and a hash.`,
+  );
   const res = await api.createRecord({ envelope, ownerWrappedKey, supersedes });
   return { ...res, key };
 }
@@ -179,6 +185,11 @@ export async function uploadEvidence(
   const key = await generateContentKey();
   const ct = await encryptBlob(bytes, key);
   const wrapped = await wrapKeyWithMaster(key, masterKey);
+  mirror(
+    'Evidence file',
+    `${file.name} (${formatBytes(bytes.byteLength)}${stripped ? ', location and camera data removed here' : ''})`,
+    `Encrypted here. The server gets ${formatBytes(ct.byteLength)} of ciphertext and its hash; not the file name.`,
+  );
   const res = await api.uploadBlob(ct, wrapped);
   const item: EvidenceItem = {
     id: randomId(),
@@ -354,6 +365,11 @@ export async function lodgeEscrow(
   for (const t of todo) {
     // Her (padded, encrypted) label keeps the canonical identifier, contact and share, so her client can re-seal after
     // a key rotation and add seals for new counselors without asking her again.
+    mirror(
+      'Sealed match: the person she named',
+      `${t.id.canonical} · happened in ${record.incident.jurisdiction?.state ?? '(no state)'} · she lives in ${record.survivor.residenceState ?? '(no state)'} · contact by ${contact.methods.join(', ')}`,
+      'Blinded here: each key holder gets a random-looking group element, the app server a tag it cannot reverse. The two states are sealed to the attested matcher only; her contact details to the counselors on the signed roster.',
+    );
     try {
       await submitMatchEntry(transport, {
         masterKey,

@@ -92,6 +92,7 @@ import * as S from './schemas.js';
 import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimits } from './oprf.js';
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
 import { InProcessMatcher, MatcherGate, type MatcherClient, type MatcherPins, type MatcherRosterInput } from './matcher-client.js';
+import { INSPECTOR_ROUTE, RequestRecorder, appProcess, fetchProcess, findInDb } from './inspector.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
@@ -150,6 +151,12 @@ export interface CreateAppOptions {
      */
     matcher?: { client: MatcherClient; pins: MatcherPins };
   };
+  /**
+   * DEV / DEMO ONLY: the "what the server sees" inspector, GET /api/dev/inspector (src/inspector.ts). Unauthenticated;
+   * keeps the last 200 request summaries in memory. index.ts sets it only when inspectorEnabled() (MATRA_INSPECTOR=1,
+   * and not production unless MATRA_DEMO_MODE=1).
+   */
+  inspector?: boolean;
 }
 
 /**
@@ -492,6 +499,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }),
   );
   app.use(express.json({ limit: '5mb' }));
+  // Dev/demo inspector only: a ring buffer of request summaries (src/inspector.ts). Never on in production.
+  const recorder = opts.inspector ? new RequestRecorder() : undefined;
+  if (recorder) app.use(recorder.middleware());
 
   const auth = requireAuth(db);
   const survivorOnly = requireRole('survivor');
@@ -2253,6 +2263,41 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   // ════════════ fallthrough & errors ════════════
+  // ════════════ dev / demo: what the server sees (src/inspector.ts) ════════════
+  if (recorder) {
+    const remoteHolders = oprfOpt.remote?.urls ?? [];
+    app.get(INSPECTOR_ROUTE, async (req, res) => {
+      const find = typeof req.query.find === 'string' ? req.query.find.trim().slice(0, 200) : '';
+      const limiters: Array<[string, RateLimiter]> = [
+        ...clients.allLimiters().map((l, i) => [`per-client #${i + 1}`, l] as [string, RateLimiter]),
+        ['sms per account', smsStartPerAccount],
+        ['sms per account+phone token', smsStartPerAccountPhone],
+        ['sms global hour', smsGlobalHour],
+        ['sms global day', smsGlobalDay],
+      ];
+      const app_ = appProcess({ db, recorder, limiters, pendingPhoneChallenges: challenges.size, holdersInProcess: !oprfOpt.remote });
+      const holderStates = await Promise.all(
+        remoteHolders.map((url, i) =>
+          fetchProcess(`${url.replace(/\/+$/, '')}/debug/state`, { name: `Key holder ${i + 1}`, role: 'holder', note: `Separate process at ${url}.` }),
+        ),
+      );
+      let matcherState;
+      try {
+        matcherState = matcher.debugState
+          ? await matcher.debugState()
+          : { name: 'Matcher', role: 'matcher' as const, note: 'This matcher client has no debug view.', tables: [] };
+      } catch (e) {
+        matcherState = { name: 'Matcher', role: 'matcher' as const, note: 'Separate matcher service.', error: `not reachable (${(e as Error).message})`, tables: [] };
+      }
+      res.json({
+        at: new Date().toISOString(),
+        demoMode: process.env.MATRA_DEMO_MODE === '1',
+        processes: [app_, ...holderStates, matcherState],
+        ...(find && { found: findInDb(db, find) }),
+      });
+    });
+  }
+
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found', code: 'not_found' });
   });

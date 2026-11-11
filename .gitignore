@@ -37,3 +37,6 @@ e2e/.keys/
 
 # Matcher service dev keys and database
 apps/matcher/data
+
+# Demo stack (npm run demo / demo:reset): throwaway demo keys and databases, fictional data
+.demo/

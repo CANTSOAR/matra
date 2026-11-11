@@ -15,6 +15,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ErrorNote, Loading, PageTitle, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { retrySealedMatches } from '../space/adapters';
+import { mirror } from '../dev/mirror';
 
 const RESEND_AFTER_MS = 30_000;
 
@@ -42,6 +43,7 @@ export function PhoneVerify() {
     setBusy('Sending a code…');
     setError(null);
     try {
+      mirror('Phone number (sealed-match check)', phone, 'Sent once for the SMS code. The server keeps only a keyed hash of it and a count, then forgets the number.');
       const r = await api.startPhoneVerification(phone);
       setChallenge({ id: r.challengeId, demoCode: r.demoCode, sentAt: Date.now() });
       setCode('');

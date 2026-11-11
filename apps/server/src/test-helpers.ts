@@ -19,7 +19,7 @@ import { createApp, getDb, type CreateAppOptions } from './app.js';
 export const TEST_ITERATIONS = 1000;
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
-export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string } = {}) {
+export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; inspector?: boolean } = {}) {
   // Tests release matched groups immediately unless they set a delay (production default: 72 h).
   const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra, matching: { releaseDelayHours: 0, ...extra.matching } });
   return { app, db: getDb(app) };

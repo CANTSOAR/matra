@@ -13,6 +13,7 @@ export { MatcherStore, openMatcherDb, type RosterCounselor } from './store.js';
 export { SimulatedAttester, UnimplementedAttester, type AttestationProvider } from './attestation.js';
 export { computeMeasurement, MATCHER_ROOT } from './measure.js';
 export { createMatcherApp, type MatcherAppOptions } from './app.js';
+export { matcherDebugState } from './debug.js';
 export { loadAttester } from './config.js';
 
 /** A matcher over its own database (a file, or ':memory:'). */
