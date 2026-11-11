@@ -47,7 +47,13 @@ export async function registerUser(
   app: express.Express,
   username: string,
   role: Role = 'survivor',
-  opts: { verify?: boolean; profile?: RegisterRequest['attorneyProfile']; ageConfirmed18?: boolean | null } = {},
+  opts: {
+    verify?: boolean;
+    profile?: RegisterRequest['attorneyProfile'];
+    ageConfirmed18?: boolean | null;
+    /** survivors: mark the account phone-verified for sealed matching directly (default true; see verifyPhone for the real flow) */
+    phoneVerified?: boolean;
+  } = {},
 ): Promise<TestUser> {
   const passphrase = `pass-${username}`;
   const kdfSalt = newKdfSalt();
@@ -69,6 +75,8 @@ export async function registerUser(
   if (res.status !== 201) throw new Error(`register failed ${res.status} ${JSON.stringify(res.body)}`);
   if (role === 'attorney' && opts.verify !== false)
     getDb(app).prepare('UPDATE attorney_profiles SET verified = 1 WHERE user_id = ?').run(res.body.user.id);
+  if (role === 'survivor' && opts.phoneVerified !== false)
+    getDb(app).prepare('UPDATE users SET matching_verified = 1 WHERE id = ?').run(res.body.user.id);
   if (role === 'counselor' && opts.verify !== false)
     getDb(app).prepare('UPDATE counselor_profiles SET verified = 1 WHERE user_id = ?').run(res.body.user.id);
   return {
@@ -141,4 +149,11 @@ export async function sealMatch(
     label: `${kind}`,
     ...(pins && { pins }),
   });
+}
+
+/** The real phone-verification flow with the mock SMS provider's demo code. Returns the check response. */
+export async function verifyPhone(app: express.Express, u: TestUser, phone = '(201) 555-0100') {
+  const start = await request(app).post('/api/matching/verification/start').set(u.auth).send({ phone });
+  if (start.status !== 200) return start;
+  return request(app).post('/api/matching/verification/check').set(u.auth).send({ challengeId: start.body.challengeId, code: start.body.demoCode });
 }

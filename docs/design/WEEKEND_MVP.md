@@ -1029,3 +1029,38 @@ Code shape:
   e2e:prod only). The ceremony helper `writeOprfCeremony` lives in `config.ts` so dev auto-setup and the CLI share it.
 - `/debug/state` on holders is left to the demo feature (§4).
 - e2e:prod runs the three holders as separate processes (the stretch item), with a fresh ceremony per run.
+
+### sms-verify
+
+Built before metadata-min (§3.2 had still not landed), so:
+- Code-request limits use the existing in-memory `RateLimiter` (auth.ts), keyed by account id (5 per day) and by phone
+  token (3 per hour), never by the raw number; swap for `HashedRateLimiter` when metadata-min lands.
+- `docs/PRIVACY_DATA_INVENTORY.md` does not exist yet. metadata-min should add: `phone_tokens` (keyed hash of a
+  verified number + account count; no user id, no timestamps, WITHOUT ROWID; never decremented), `users.matching_verified`
+  (0/1, no timestamp), the in-memory challenges (number, provider reference, attempts; ≤ 10 min, ≤ 5 wrong codes), the
+  audit line "You confirmed a phone number…", and the SMS provider (Twilio sees the number and the time; Q-013).
+
+Code shape:
+- `config.ts` has `loadPhoneVerification(env)` → `{ required, verifier, hashKey, maxAccountsPerPhone, exposeDemoCode }`
+  next to `loadDemoMode` / `assertMockAllowed` / `loadSmsVerifier`. `CreateAppOptions.matching` gained
+  `requirePhoneVerification` and `phone: { verifier?, hashKey?, maxAccountsPerPhone?, exposeDemoCode? }`; without them
+  (tests, seed) the app uses the mock with an ephemeral hash key, and returns demo codes only outside production.
+- Production's default provider is `twilio`; the mock needs **both** `MATRA_SMS_PROVIDER=mock` and `MATRA_DEMO_MODE=1`
+  (render.yaml, the Dockerfile example and e2e:prod set both, plus `MATRA_PHONE_HASH_KEY`).
+- The mock prints its dev outbox line only when constructed with `{ log: true }` (index.ts, outside production), so the
+  privacy test can assert the code is in no log line of the app itself.
+- An account that is already verified and verifies again does not use up another slot on the new phone.
+- `POST /api/matching/entries/:id/seals` keeps `verifiedAdultSurvivor` (it only adds seals to entries she already has);
+  OPRF and entry creation use `requireMatchingEligible`.
+- Web: the crypto client reports "every holder refused" as `holders_unavailable`, so `lodgeEscrow` asks
+  `GET /api/matching/verification` first and throws `MatchingError(…, 'phone_verification_required')`. The sealed screen
+  and Home show `components/PhoneStepCard.tsx`; the sealed-match page shows the phone status and a link.
+- Retry after verifying (`space/adapters.ts retrySealedMatches`): seals what her latest sealed record chose but couldn't
+  seal, then saves that record again as a **new sealed version** with the updated `escrowedHashes` (same story, one more
+  ledger entry). Not saving would let a later re-seal resubmit an identifier she had withdrawn. Home therefore lists the
+  first seal as an earlier version; e2e scenario 1 asserts both versions verify.
+- `friendlyError` mapped every 409 to "Someone already uses that alias"; it now does that only for `username_taken` (or a
+  bare 409), so `phone_limit_reached` shows its own message.
+- e2e: scenario 1 verifies after sealing (sealed-screen card), scenario 5's survivor B verifies first from the
+  sealed-match page with the same phone in another format, and a new scenario 5b shows the third account's limit
+  message. `e2e/helpers.ts` allows exactly the expected 409 from `/api/matching/verification/check`.

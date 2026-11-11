@@ -29,6 +29,8 @@ export const test = base.extend<{ consoleProblems: string[] }>({
       if (/Download the React DevTools/.test(text)) return;
       // Dev/e2e builds don't pin the counselor-roster key; the sealed-matching client says so once (expected).
       if (/no pinned counselor-roster key in this build/.test(text)) return;
+      // Scenario 5b: the phone-limit refusal (409 phone_limit_reached) is an expected response the page explains.
+      if (/status of 409/.test(text) && /\/api\/matching\/verification\/check$/.test(m.location().url)) return;
       consoleProblems.push(`[${m.type()}] ${text}`);
     });
     page.on('pageerror', (e) => consoleProblems.push(`[pageerror] ${e.message}`));
@@ -173,6 +175,27 @@ export async function sealFromReview(page: Page) {
   // the intake shows "Sealing…" until the server confirms; then the shell shows its confirmation with the ledger entry
   await expect(page.getByRole('heading', { name: 'Your account is sealed', exact: true })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/ledger entry #\d+/)).toBeVisible();
+}
+
+/**
+ * Phone verify-then-forget before a sealed match (W13), from wherever the "Confirm a phone number" link is. The e2e
+ * stack runs the mock SMS provider, which shows the code on screen ("Demo: your code is 123456").
+ */
+export async function startPhoneVerify(page: Page, phone: string) {
+  await page.getByRole('link', { name: 'Confirm a phone number' }).first().click();
+  await expect(page.getByRole('heading', { name: 'One quick step before your sealed match' })).toBeVisible();
+  await expect(page.getByText(/then forget the number/)).toBeVisible();
+  await page.getByLabel('Phone number that can get texts').fill(phone);
+  await page.getByRole('button', { name: 'Text me a code' }).click();
+  const demo = page.getByTestId('phone-demo-code');
+  await expect(demo).toHaveText(/^Demo: your code is \d{6}$/);
+  await page.getByLabel('Code from the text').fill((await demo.textContent())!.replace(/\D/g, ''));
+  await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+}
+
+export async function verifyPhone(page: Page, phone: string) {
+  await startPhoneVerify(page, phone);
+  await expect(page.getByTestId('phone-verified')).toContainText('Done. The number has been forgotten.', { timeout: 60_000 });
 }
 
 // ───────────── fixtures ─────────────

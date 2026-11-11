@@ -485,6 +485,25 @@ export interface CounselorRosterPayload {
   counselors: Array<{ userId: string; publicKey: { kty: 'RSA'; n: string; e: string } }>;
 }
 
+// ── phone verification ──
+/**
+ * GET /api/matching/verification. A survivor confirms a phone number by SMS before she can lodge a sealed-matching
+ * entry (W13). The server then keeps only a keyed hash of the number, not linked to her account, and this flag.
+ */
+export interface PhoneVerificationStatus {
+  /** false only when the server runs with verification turned off (development) */
+  required: boolean;
+  verified: boolean;
+}
+export interface PhoneVerificationStartRequest { phone: string }
+export interface PhoneVerificationStartResponse {
+  challengeId: string;
+  expiresAt: string;
+  /** Development / demo only (mock SMS provider): the code, so it can be shown on screen. Never from a real provider. */
+  demoCode?: string;
+}
+export interface PhoneVerificationCheckRequest { challengeId: string; code: string }
+
 /** POST /api/matching/entries/:id/seals — add seals for counselors that joined the roster after she sealed. */
 export interface AddMatchSealsRequest {
   seals: CounselorSeal[];
@@ -619,8 +638,14 @@ export interface ApiError { error: string; code?: string }
  GET    /api/matching/config                          -> MatchingConfig   (survivor)
  GET    /api/matching/oprf/:index/key                 -> OprfHolderInfo   (key holder i's share public key)
  POST   /api/matching/oprf/:index OprfEvaluateRequest -> OprfEvaluateResponse (verified-adult survivor; account quota charged once per distinct blinded element, plus a per-holder quota;
-                                                         503 holder_unavailable when holder i is down)
- POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed')
+                                                         503 holder_unavailable when holder i is down;
+                                                         403 phone_not_verified until she has confirmed a phone)
+ GET    /api/matching/verification                    -> PhoneVerificationStatus (survivor)
+ POST   /api/matching/verification/start PhoneVerificationStartRequest -> PhoneVerificationStartResponse (adult survivor;
+                                                         400 phone_invalid | phone_not_supported · 429 rate_limited · 503 sms_unavailable)
+ POST   /api/matching/verification/check PhoneVerificationCheckRequest -> { verified: true }
+                                                         (400 code_invalid | code_expired · 409 phone_limit_reached)
+ POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed'; 403 phone_not_verified)
  POST   /api/matching/entries/:id/seals AddMatchSealsRequest -> { entry: EscrowEntry } (owner only; adds seals for new counselors)
  GET    /api/matching/entries                         -> { entries: EscrowEntry[] }
  DELETE /api/matching/entries/:id                     -> { ok: true }  (withdraw: deletes her entry)

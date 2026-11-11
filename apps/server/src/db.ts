@@ -297,6 +297,19 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (user_id, holder)
   );
   `,
+  // ── v7: phone verify-then-forget before sealed matching (W13, W19; src/sms.ts). phone_tokens holds only a keyed hash
+  // of a verified number and how many accounts it has enabled: no user id, no timestamps, and WITHOUT ROWID so not even
+  // insertion order is kept that could be lined up with users. The count is never decremented (nothing links a row to
+  // an account). Accounts that already have sealed entries (demo data only) are grandfathered as verified, so their
+  // clients can still re-seal after a key rotation.
+  `
+  CREATE TABLE phone_tokens (
+    token_hash TEXT PRIMARY KEY,               -- hex HMAC(MATRA_PHONE_HASH_KEY, "matra/phone-token/v1|" + E.164)
+    accounts   INTEGER NOT NULL
+  ) WITHOUT ROWID;
+  ALTER TABLE users ADD COLUMN matching_verified INTEGER NOT NULL DEFAULT 0;
+  UPDATE users SET matching_verified = 1 WHERE id IN (SELECT user_id FROM match_entries);
+  `,
 ];
 
 /**

@@ -17,6 +17,11 @@ When `NODE_ENV=production`:
 - Hashed files under `/assets/` are cached as immutable. `index.html` and all API responses are `no-store`.
 - `MATRA_PEPPER` is required. The server refuses to start without it.
 - The sealed-matching **threshold OPRF** key set is required: every share `MATRA_OPRF_SHARE_<i>` (in-process mode), or the remote holders' URLs, pinned share public keys and the holder-token key (remote mode). Shares are **never generated automatically in production** and `…_FILE` paths must be outside the database directory: whoever holds t shares and the database can recover every sealed phone number by brute force in seconds. The old additive `MATRA_OPRF_KEY_A/B` are a fatal startup error.
+- Sealed matching asks each survivor to confirm a phone by SMS first (W13). The SMS provider defaults to **Twilio
+  Verify** (`MATRA_SMS_PROVIDER=twilio` + `TWILIO_*`); the **mock** provider (no texts are sent, the code is shown on
+  screen, nothing about the phone is verified) is refused unless `MATRA_DEMO_MODE=1`. `MATRA_PHONE_HASH_KEY` (or
+  `_FILE`, outside the database directory) is required and never generated. `MATRA_REQUIRE_PHONE_VERIFICATION=0` is
+  refused.
 - The server records t, the group key and the share public keys in the database on first start and **refuses to start if they change**, unless you restart once with `MATRA_OPRF_ROTATE=1` (a deliberate rotation: a new key epoch begins, and each survivor's app re-seals her entries the next time she signs in).
 
 ### On-device voice transcription: the model files
@@ -49,7 +54,8 @@ To check the production build locally, including the full browser suite under th
 ```sh
 npm run build
 npm run -s -w @matra/server oprf-ceremony -- --threshold 2 --holders 3 --out /tmp/matra-keys --force   # prints the pins
-NODE_ENV=production MATRA_PEPPER=$(openssl rand -hex 32) MATRA_OPRF_SHARE_1_FILE=/tmp/matra-keys/oprf-share-1.key \
+NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) \
+  MATRA_PEPPER=$(openssl rand -hex 32) MATRA_OPRF_SHARE_1_FILE=/tmp/matra-keys/oprf-share-1.key \
   MATRA_OPRF_SHARE_2_FILE=/tmp/matra-keys/oprf-share-2.key MATRA_OPRF_SHARE_3_FILE=/tmp/matra-keys/oprf-share-3.key \
   MATRA_DB_PATH=/tmp/matra-demo/matra.db npm start   # http://localhost:4000 (in-process holders)
 npm run e2e:prod      # the demo-path scenarios against the production build on port 4300, with 3 separate holder processes
@@ -62,6 +68,13 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 | `NODE_ENV` | `production` | Serves the web app and enforces the production checks |
 | `MATRA_PEPPER` | random, ≥ 32 chars | HMAC key for escrow hashes and fake prelogin salts. **Secret.** Set it once and never change it: changing it breaks escrow matching for existing entries. Generate with `openssl rand -hex 32` |
 | `MATRA_DEMO_BANNER` | `1` | Shows "DEMO — do not enter real information" on every page |
+| `MATRA_DEMO_MODE` | `1` | Fictional-data demo: lets mock/simulated providers (the mock SMS provider) run in production, and turns the DEMO banner on. **Never on an instance with real data** |
+| `MATRA_SMS_PROVIDER` | `mock` | `twilio` (production default) or `mock` (development default; production only with `MATRA_DEMO_MODE=1`). Phone verification before sealed matching |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` | unset in a demo | With `MATRA_SMS_PROVIDER=twilio`: a Twilio Verify service. **Secret** (the token). The adapter is written to Twilio's published API but **has not been tested against the real service**: try it on a test number before relying on it. Twilio sees the phone number and when it was verified (a third party; legal question Q-013) |
+| `MATRA_SMS_REJECT_VOIP` | unset (on) | Twilio only: `0` turns off the Lookup line-type check that refuses VoIP numbers. The check uses the paid Lookup "line type intelligence" add-on, which must be enabled on the Twilio account |
+| `MATRA_PHONE_HASH_KEY` (or `_FILE`) | random, ≥ 32 chars | HMAC key for phone tokens (verify-then-forget, W19). **Secret**, outside the database directory; required in production. Whoever holds it and the database can test whether a guessed number was used. Changing it resets the per-phone counts |
+| `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` | `2` | How many accounts one phone can enable for sealed matching. Counts are never decremented |
+| `MATRA_REQUIRE_PHONE_VERIFICATION` | unset | `0` turns the phone step off in development only; refused in production |
 | `MATRA_DB_PATH` | `/app/apps/server/data/matra.db` | Must be on the persistent disk |
 | `MATRA_TRUST_PROXY` | `1` | Number of proxy hops in front of the app (Render: 1). Needed for per-IP rate limiting |
 | `PORT` | set by the host | Default 4000 locally, 8080 in the Docker image. The server binds `0.0.0.0` in production |
@@ -88,7 +101,7 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 5. **Sign the roster** after every counselor verification or removal: `MATRA_COUNSELOR_ROSTER_SIGNING_KEY=<secret> npm run -w @matra/server sign-roster` against the production database (for example from the host's maintenance shell, typing the key only for that command; `--dry-run` prints without storing). The server serves the signed roster; seals for counselors who are no longer listed are deleted, and survivors' apps add seals for new counselors on their next sign-in.
 6. Without pins (development, the e2e suite) everything works, and the app logs one warning that the counselor list is not pinned.
 
-Upgrading an existing instance: database schema v5 **drops all sealed-matching data** (entries, seals, groups, counselor notes, OPRF quotas), because the matching format changed and old entries can't be converted. Matching only ever held demo data; survivors can seal again. Schema v6 (threshold OPRF) drops the OPRF quota counters, and the first start with threshold shares is a **key change**: start once with `MATRA_OPRF_ROTATE=1` (new key epoch; survivors' apps re-seal their entries on next sign-in). Remove `MATRA_OPRF_KEY_A/B` from the environment, or the server refuses to start. Since the holder-quota fix (quotas keyed by index and share public key, plus an account-level budget), existing per-holder counters are no longer read, so every survivor's per-holder count starts again once; and holder tokens now carry `bh`, so upgrade the holders together with the app server (an upgraded holder refuses tokens without it).
+Upgrading an existing instance: database schema v5 **drops all sealed-matching data** (entries, seals, groups, counselor notes, OPRF quotas), because the matching format changed and old entries can't be converted. Matching only ever held demo data; survivors can seal again. Schema v6 (threshold OPRF) drops the OPRF quota counters, and the first start with threshold shares is a **key change**: start once with `MATRA_OPRF_ROTATE=1` (new key epoch; survivors' apps re-seal their entries on next sign-in). Schema v7 (phone verification) adds `phone_tokens` and `users.matching_verified`; accounts that already have sealed entries are marked verified so their apps can still re-seal, and every other survivor confirms a phone the next time she turns on a sealed match. Set `MATRA_PHONE_HASH_KEY` and the SMS provider (or `MATRA_DEMO_MODE=1` + `MATRA_SMS_PROVIDER=mock` for a demo) before upgrading, or the server refuses to start. Remove `MATRA_OPRF_KEY_A/B` from the environment, or the server refuses to start. Since the holder-quota fix (quotas keyed by index and share public key, plus an account-level budget), existing per-holder counters are no longer read, so every survivor's per-holder count starts again once; and holder tokens now carry `bh`, so upgrade the holders together with the app server (an upgraded holder refuses tokens without it).
 
 ## Option A: Render (Blueprint)
 
@@ -99,6 +112,7 @@ The repository includes [`render.yaml`](../render.yaml). It defines one Docker w
 - `MATRA_PEPPER` generated by Render on first deploy (`generateValue`),
 - `MATRA_OPRF_SHARE_1..3` declared but **not** generated (`sync: false`): Render cannot generate consistent Shamir shares. Run the ceremony (step 1 above) and paste each share's hex into the dashboard before the first deploy. All three shares then sit with one operator (in-process): demo only,
 - `MATRA_DEMO_BANNER=1` and `MATRA_TRUST_PROXY=1`,
+- `MATRA_DEMO_MODE=1` with `MATRA_SMS_PROVIDER=mock` (phone verification shows its code on screen; no texts are sent and nothing about the phone is verified), and `MATRA_PHONE_HASH_KEY` generated by Render. For anything beyond fictional data, switch to `twilio` and remove `MATRA_DEMO_MODE`,
 - auto-deploy off, so nothing ships without a deliberate click.
 
 Steps:

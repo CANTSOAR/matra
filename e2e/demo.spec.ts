@@ -27,7 +27,9 @@ import {
   shot,
   signIn,
   signOut,
+  startPhoneVerify,
   test,
+  verifyPhone,
   tinyPdf,
 } from './helpers';
 
@@ -209,20 +211,33 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
 
   await sealFromReview(page);
   await expect(page.getByText(/ledger entry #\d+/)).toBeVisible();
+  // Her sealed match waits for one quick phone confirmation (W13): a calm next step, not an error.
+  await expect(page.getByTestId('phone-step-card')).toContainText('To turn on your sealed match, confirm a phone number first.');
+  await expect(page.getByText(/sealed match could not be set up/)).toHaveCount(0);
   await shot(page, '06-sealed', { mobile: false });
+  await startPhoneVerify(page, '(201) 555-0142');
+  await expect(page.getByTestId('phone-verified')).toContainText('Done. The number has been forgotten.', { timeout: 60_000 });
+  await expect(page.getByTestId('phone-verified')).toContainText('Your sealed match is on.');
+  await shot(page, '06b-phone-verified');
+  await page.getByRole('button', { name: 'Back to Home' }).click();
+  await expect(page.getByTestId('home-title')).toBeVisible();
+  await expect(page.getByTestId('phone-step-card')).toHaveCount(0);
 
   await nav(page, 'Home');
   const acct = page.getByTestId('home-story');
   await expect(acct.getByText('Current sealed version')).toBeVisible({ timeout: 60_000 });
-  await expect(acct.getByText('Verified ✓')).toBeVisible();
-  await expect(acct.getByText(/ledger entry #\d+/)).toBeVisible();
+  // Turning the sealed match on saved her record again as a new sealed version (only the list of sealed fingerprints
+  // changed), so the first seal is now listed as an earlier version; both verify.
+  await expect(acct.getByTestId('sealed-current').getByText('Verified ✓')).toBeVisible();
+  await expect(acct.getByTestId('sealed-earlier').getByText('Verified ✓')).toBeVisible();
+  await expect(acct.getByTestId('sealed-current').getByText(/ledger entry #\d+/)).toBeVisible();
   const escrow = page.getByTestId('home-escrow');
   // phone + handle; a bare initial ("R.") is too weak to seal
   await expect(escrow.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
   await expect(escrow.getByText('R. · social media handle (instagram)')).toBeVisible();
   // the client labels the seal (it can decrypt its own records); the server only knows "saved"
   const activity = page.getByTestId('home-activity');
-  await expect(activity.getByText('You sealed your account')).toBeVisible();
+  await expect(activity.getByText('You sealed your account').first()).toBeVisible();
   await shot(page, '07-dashboard');
 });
 
@@ -423,6 +438,11 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
 test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the counselor sees one matched group with two separate contact bundles', async ({ page }) => {
   // Survivor B names the same Instagram profile as a URL (A typed "@demo_handle_123"), and a different phone number.
   await registerSurvivor(page, ALIAS_B);
+  // She confirms a phone first, from the sealed-match page: the same phone as A, written differently (2 accounts allowed).
+  await page.getByTestId('home-matching-link').click();
+  await expect(page.getByTestId('matching-phone')).toContainText('confirm a phone number once');
+  await verifyPhone(page, '+1 201-555-0142');
+  await page.getByRole('button', { name: 'Back to Home' }).click();
   await openStory(page);
   await storySafety(page, 'Yes');
   await openTopic(page, 'person');
@@ -444,6 +464,7 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await storyMap(page).getByRole('button', { name: /^Review/ }).click();
   await sealFromReview(page);
   await expect(page.getByText(/sealed match could not be set up/)).toHaveCount(0);
+  await expect(page.getByTestId('phone-step-card')).toHaveCount(0);
   await nav(page, 'Home');
   const escrowB = page.getByTestId('home-escrow');
   await expect(escrowB.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
@@ -503,6 +524,17 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await a.getByRole('button', { name: 'Save note' }).click();
   await expect(a.getByRole('listitem').filter({ hasText: 'Texted after 6pm as asked.' })).toContainText('Reached out', { timeout: 30_000 });
   await shot(page, '15-counselor-match');
+});
+
+test('5b. one phone turns on sealed matching for at most two accounts: a third gets a kind message and stays unconfirmed', async ({ page }) => {
+  await registerSurvivor(page, `finch-${RUN}`);
+  await page.getByTestId('home-matching-link').click();
+  await startPhoneVerify(page, '201.555.0142');
+  await expect(page.getByRole('alert')).toContainText('already been used to turn on sealed matching for as many accounts as we allow', { timeout: 30_000 });
+  await expect(page.getByTestId('phone-verified')).toHaveCount(0);
+  await page.getByRole('link', { name: 'Not now' }).click();
+  await page.getByTestId('home-matching-link').click();
+  await expect(page.getByTestId('matching-phone')).toContainText('confirm a phone number once');
 });
 
 test('6. quick exit: button and triple-Esc leave to a neutral site; coming back shows welcome, no session', async ({ page }) => {

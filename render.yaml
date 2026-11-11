@@ -33,6 +33,17 @@ services:
       # "DEMO — do not enter real information" banner on every page. Leave on for any demo instance.
       - key: MATRA_DEMO_BANNER
         value: "1"
+      # Fictional-data demo: lets the mock SMS provider run in production (it sends nothing and shows the code on
+      # screen; it verifies nothing about the phone) and forces the DEMO banner. A real deployment sets
+      # MATRA_SMS_PROVIDER=twilio + TWILIO_* instead and removes both of these.
+      - key: MATRA_DEMO_MODE
+        value: "1"
+      - key: MATRA_SMS_PROVIDER
+        value: mock
+      # HMAC key for phone tokens (phone verify-then-forget, W19). Kept outside the database; generated once by Render.
+      # Changing it later only means a phone already used can enable accounts again.
+      - key: MATRA_PHONE_HASH_KEY
+        generateValue: true
       # Render terminates TLS in one proxy hop; needed for per-IP rate limiting.
       - key: MATRA_TRUST_PROXY
         value: "1"

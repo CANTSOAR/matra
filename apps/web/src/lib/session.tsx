@@ -347,7 +347,8 @@ export function useRequiredSession(): SessionCtx & { session: Session } {
 export function friendlyError(e: unknown): string {
   if (e instanceof SessionError) return e.message;
   if (e instanceof ApiError) {
-    if (e.status === 409) return 'Someone already uses that alias. Please try another one.';
+    // 409 from register is the alias; other conflicts (e.g. phone_limit_reached) carry their own message
+    if (e.status === 409 && (!e.code || e.code === 'username_taken')) return 'Someone already uses that alias. Please try another one.';
     return e.message;
   }
   return 'Something didn’t work. Nothing was shared. Please try again.';

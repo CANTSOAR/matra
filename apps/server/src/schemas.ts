@@ -162,6 +162,13 @@ export const createMatchEntryRequest = z.object({
 
 export const addMatchSealsRequest = z.object({ seals: sealList });
 
+// phone verification (src/sms.ts): the number is canonicalised by the handler; only shape is checked here
+export const phoneVerificationStart = z.object({ phone: z.string().min(1).max(64) });
+export const phoneVerificationCheck = z.object({
+  challengeId: z.string().regex(/^[a-f0-9]{32}$/, 'invalid challenge'),
+  code: z.string().trim().regex(/^\d{4,10}$/, 'the code is 4-10 digits'),
+});
+
 export const counselorNoteRequest = z.object({
   entryId: id.optional(),
   envelope: smallEnvelope,

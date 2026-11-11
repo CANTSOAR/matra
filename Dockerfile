@@ -2,7 +2,10 @@
 #   docker build -t matra .
 #   docker run -p 8080:8080 -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 \
 #     -e MATRA_OPRF_SHARE_1=… -e MATRA_OPRF_SHARE_2=… -e MATRA_OPRF_SHARE_3=… \
+#     -e MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) -e MATRA_DEMO_MODE=1 -e MATRA_SMS_PROVIDER=mock \
 #     -v matra-data:/app/apps/server/data matra
+# MATRA_DEMO_MODE=1 + the mock SMS provider are for fictional-data demos only; a real deployment sets
+# MATRA_SMS_PROVIDER=twilio and TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_VERIFY_SERVICE_SID (docs/DEPLOY.md).
 # The shares come from `npm run -w @matra/server oprf-ceremony` (threshold OPRF, default 2-of-3). The server refuses to
 # start in production without every share (env, or *_FILE paths OUTSIDE the data volume) or the remote-holder config.
 # Build-time pins for the web client (recommended for any non-demo build; values printed by the ceremony):

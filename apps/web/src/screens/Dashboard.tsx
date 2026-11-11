@@ -3,7 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { escrowLabel, finals, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { escrowLabel, finals, hasUnsealedMatches, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { PhoneStepCard } from '../components/PhoneStepCard';
 import { ExportCard } from '../components/ExportCard';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
 import { shareLengthDays, shareLengthLabel } from '../lib/shareTerms';
@@ -125,6 +126,13 @@ export function Dashboard() {
     return shares.map((s) => ({ share: s, attorney: byId.get(s.attorneyId) }));
   }, [api]);
   const audit = useAsync(() => api.listAudit().then((r) => r.events), [api]);
+  // Her sealed record chose a sealed match that is waiting for a phone confirmation (W13; counselor/PhoneVerify.tsx).
+  const phoneStep = useAsync(async () => {
+    const final = vault.data && latestOf(vault.data, 'final');
+    if (!final?.payload.record || !(await hasUnsealedMatches(final.payload.record, final.payload.escrowedHashes))) return false;
+    const st = await api.phoneVerificationStatus();
+    return st.required && !st.verified;
+  }, [api, vault.data]);
   const [showAllActivity, setShowAllActivity] = useState(false);
 
   const records = vault.data ?? [];
@@ -343,6 +351,7 @@ export function Dashboard() {
           before it was sent. Only a Legal Options Counselor ever sees a match. This list will always say “Sealed” —
           that’s on purpose, so no one can use this page to find out whether they’ve been named.
         </p>
+        {phoneStep.data && <PhoneStepCard />}
         {escrow.loading && <Loading />}
         {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
         {escrow.data && escrow.data.length === 0 && <p className="muted">Nothing sealed.</p>}

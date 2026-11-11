@@ -28,6 +28,8 @@ import type {
   MatchingConfig,
   OprfEvaluateRequest,
   OprfEvaluateResponse,
+  PhoneVerificationStartResponse,
+  PhoneVerificationStatus,
   PreloginResponse,
   PublicUser,
   RegisterRequest,
@@ -204,6 +206,16 @@ export class ApiClient {
   }
 
   // ── sealed matching (survivor) ──
+  /** Phone verify-then-forget before sealed matching (counselor/PhoneVerify.tsx). */
+  phoneVerificationStatus() {
+    return this.json<PhoneVerificationStatus>('GET', '/api/matching/verification');
+  }
+  startPhoneVerification(phone: string) {
+    return this.json<PhoneVerificationStartResponse>('POST', '/api/matching/verification/start', { phone });
+  }
+  checkPhoneVerification(challengeId: string, code: string) {
+    return this.json<{ verified: true }>('POST', '/api/matching/verification/check', { challengeId, code });
+  }
   matchingConfig() {
     return this.json<MatchingConfig>('GET', '/api/matching/config');
   }

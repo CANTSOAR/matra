@@ -15,6 +15,7 @@ import {
 } from '@matra/crypto';
 import { holderTokenPublicKeyFromSeed, type RemoteHolderConfig } from './holders.js';
 import { DEFAULT_HOLDER_DAILY_BUDGET } from './holder.js';
+import { MockSmsVerifier, TwilioVerifySmsVerifier, type SmsVerifier } from './sms.js';
 
 /** apps/server/data */
 export const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -340,4 +341,77 @@ export function loadMatchingSettings(env: Env = process.env): { releaseDelayHour
 export function loadOprfLimits(env: Env = process.env): { perDay: number; lifetime: number } {
   const n = (v: string | undefined, d: number) => (v && Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : d);
   return { perDay: n(env.MATRA_OPRF_PER_DAY, 10), lifetime: n(env.MATRA_OPRF_LIFETIME, 50) };
+}
+
+// ───────────── demo mode and mock providers (docs/design/WEEKEND_MVP.md §1.2) ─────────────
+
+/** MATRA_DEMO_MODE=1: a fictional-data demo. Allows mock/simulated providers in production and forces the DEMO banner. */
+export function loadDemoMode(env: Env = process.env): boolean {
+  return env.MATRA_DEMO_MODE === '1';
+}
+
+/**
+ * Throws in production unless demo mode is on: a mock or simulated provider must never quietly stand in for a real one
+ * where real people's data is. Logs one warning in development.
+ */
+export function assertMockAllowed(what: string, env: Env = process.env): void {
+  if (isProduction(env) && !loadDemoMode(env))
+    throw new Error(
+      `${what} is a mock/simulated provider and cannot run in production. Configure a real provider, or set MATRA_DEMO_MODE=1 for a fictional-data demo.`,
+    );
+  if (!isProduction(env)) console.warn(`[matra] WARNING: ${what} is a mock/simulated provider (development only).`);
+}
+
+/**
+ * SMS phone verification provider for sealed matching (src/sms.ts):
+ *   MATRA_SMS_PROVIDER=mock (default outside production) | twilio (default in production).
+ *   twilio: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID; MATRA_SMS_REJECT_VOIP=0 turns the VoIP
+ *   check off (default on). mock: refused in production unless MATRA_DEMO_MODE=1; prints codes to the console (the dev
+ *   outbox) only outside production.
+ */
+export function loadSmsVerifier(env: Env = process.env): SmsVerifier {
+  const provider = env.MATRA_SMS_PROVIDER || (isProduction(env) ? 'twilio' : 'mock');
+  if (provider === 'mock') {
+    assertMockAllowed('SMS verification (mock)', env);
+    return new MockSmsVerifier({ log: !isProduction(env) });
+  }
+  if (provider === 'twilio') {
+    const missing = ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_VERIFY_SERVICE_SID'].filter((v) => !env[v]);
+    if (missing.length) throw new Error(`MATRA_SMS_PROVIDER=twilio needs ${missing.join(', ')} (see docs/DEPLOY.md)`);
+    return new TwilioVerifySmsVerifier({
+      accountSid: env.TWILIO_ACCOUNT_SID!,
+      authToken: env.TWILIO_AUTH_TOKEN!,
+      verifyServiceSid: env.TWILIO_VERIFY_SERVICE_SID!,
+      rejectVoip: env.MATRA_SMS_REJECT_VOIP !== '0',
+    });
+  }
+  throw new Error(`MATRA_SMS_PROVIDER must be "mock" or "twilio", got "${provider}"`);
+}
+
+export interface PhoneVerificationSettings {
+  required: boolean;
+  verifier: SmsVerifier;
+  hashKey: Uint8Array;
+  maxAccountsPerPhone: number;
+  /** return the mock's code to the browser (development, or MATRA_DEMO_MODE=1) */
+  exposeDemoCode: boolean;
+}
+
+/**
+ * Phone verify-then-forget before sealed matching (W13, W19):
+ *   MATRA_REQUIRE_PHONE_VERIFICATION=0 turns the gate off (development only; refused in production).
+ *   MATRA_PHONE_HASH_KEY / _FILE: the HMAC key for phone tokens, outside the database directory (production: required).
+ *   MATRA_SMS_MAX_ACCOUNTS_PER_PHONE (default 2): how many accounts one phone can enable.
+ */
+export function loadPhoneVerification(env: Env = process.env): PhoneVerificationSettings {
+  const production = isProduction(env);
+  const required = env.MATRA_REQUIRE_PHONE_VERIFICATION !== '0';
+  if (!required && production) throw new Error('MATRA_REQUIRE_PHONE_VERIFICATION=0 is refused in production: sealed matching needs its Sybil friction (W13).');
+  if (!required) console.warn('[matra] WARNING: MATRA_REQUIRE_PHONE_VERIFICATION=0 — sealed matching without phone verification (development only).');
+  const raw = env.MATRA_SMS_MAX_ACCOUNTS_PER_PHONE;
+  const max = raw === undefined || raw === '' ? 2 : Number(raw);
+  if (!Number.isInteger(max) || max < 1) throw new Error('MATRA_SMS_MAX_ACCOUNTS_PER_PHONE must be a positive integer');
+  const verifier = loadSmsVerifier(env);
+  const hashKey = loadSecretBytes('MATRA_PHONE_HASH_KEY', { env, devFile: path.join(DATA_DIR, 'phone-hash.key'), label: 'the phone-token HMAC key' });
+  return { required, verifier, hashKey, maxAccountsPerPhone: max, exposeDemoCode: verifier.name === 'mock' && (!production || loadDemoMode(env)) };
 }

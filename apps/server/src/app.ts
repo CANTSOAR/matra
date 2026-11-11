@@ -8,21 +8,32 @@
  *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch
  *   401 unauthorized | session_expired | invalid_credentials
  *   403 forbidden | forbidden_role | share_revoked | share_expired | attorney_not_verified | counselor_not_verified
- *       | age_not_confirmed
+ *       | age_not_confirmed | phone_not_verified
  *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found | entry_not_found
  *       | counselor_not_found | group_not_found
  *   403 … | counselor_not_listed (seal to a counselor missing from the signed roster)
- *   409 username_taken | already_revoked | already_sealed
+ *   400 phone_invalid | phone_not_supported | code_invalid | code_expired
+ *   409 username_taken | already_revoked | already_sealed | phone_limit_reached
  *   413 payload_too_large   415 unsupported_media_type   500 internal
  *   429 rate_limited | rate_limited_daily | rate_limited_lifetime
- *   503 holder_unavailable (one OPRF key holder is down; any t of m are enough)
+ *   503 holder_unavailable (one OPRF key holder is down; any t of m are enough) | sms_unavailable
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
-import { generateOprfKey, groupKeyFromShares, fromBase64, isOprfElement, splitOprfKey, toBase64, type ShareKey } from '@matra/crypto';
+import {
+  generateOprfKey,
+  groupKeyFromShares,
+  fromBase64,
+  isOprfElement,
+  normalizeMatchIdentifier,
+  splitOprfKey,
+  toBase64,
+  type ShareKey,
+} from '@matra/crypto';
 import type {
   AttorneyProfile,
   AuditEvent,
@@ -69,6 +80,7 @@ import {
 import * as S from './schemas.js';
 import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimits } from './oprf.js';
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
+import { MockSmsVerifier, SMS_CODE_TTL_MS, SmsError, phoneToken, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
   /** SQLite path, or ':memory:' for tests. */
@@ -102,6 +114,12 @@ export interface CreateAppOptions {
     limits?: Partial<OprfLimits>;
     releaseDelayHours?: number;
     allowKeyRotation?: boolean;
+    /**
+     * Phone verify-then-forget before sealed matching (W13; src/sms.ts, config.ts loadPhoneVerification). Default:
+     * required, the mock provider, an ephemeral hash key, 2 accounts per phone, demo code returned outside production.
+     */
+    requirePhoneVerification?: boolean;
+    phone?: { verifier?: SmsVerifier; hashKey?: Uint8Array; maxAccountsPerPhone?: number; exposeDemoCode?: boolean };
   };
 }
 
@@ -962,6 +980,114 @@ export function createApp(opts: CreateAppOptions): express.Express {
   pruneSeals();
   pruneGroups();
 
+  // ── phone verify-then-forget (W13, W19; src/sms.ts). Pending challenges live only in this Map, for 10 minutes: the
+  // raw number is in memory just long enough for the provider's check call, and never written anywhere.
+  const requirePhone = opts.matching?.requirePhoneVerification ?? true;
+  const phoneOpt = opts.matching?.phone ?? {};
+  const sms: SmsVerifier = phoneOpt.verifier ?? new MockSmsVerifier();
+  const phoneHashKey = phoneOpt.hashKey ?? new Uint8Array(randomBytes(32));
+  const maxAccountsPerPhone = phoneOpt.maxAccountsPerPhone ?? 2;
+  const exposeDemoCode = phoneOpt.exposeDemoCode ?? (sms.name === 'mock' && process.env.NODE_ENV !== 'production');
+  const MAX_CODE_ATTEMPTS = 5;
+  const challenges = new Map<string, { userId: string; phoneE164: string; providerRef: string; expiresAt: number; attempts: number }>();
+  const sweepChallenges = () => {
+    const now = Date.now();
+    for (const [k, c] of challenges) if (c.expiresAt <= now) challenges.delete(k);
+  };
+  // keyed by account id and by phone token (never the raw number); in memory only
+  const smsStartPerAccount = new RateLimiter(5, 24 * 3_600_000);
+  const smsStartPerPhone = new RateLimiter(3, 3_600_000);
+  const matchingVerifiedRow = db.prepare('SELECT matching_verified FROM users WHERE id = ?');
+  const isPhoneVerified = (userId: string) => (matchingVerifiedRow.get(userId) as { matching_verified: number } | undefined)?.matching_verified === 1;
+  /** Adult survivor AND (phone verified, or verification turned off in development). Replaces verifiedAdultSurvivor on
+   *  the routes that create sealed entries. Listing, config and withdrawal stay open so the UI can explain. */
+  const requireMatchingEligible = (req: Request, res: Response, next: NextFunction) =>
+    verifiedAdultSurvivor(req, res, () => {
+      if (requirePhone && !isPhoneVerified(req.user!.id))
+        throw new HttpError(403, 'phone_not_verified', 'Please confirm a phone number before using a sealed match.');
+      next();
+    });
+
+  app.get('/api/matching/verification', auth, survivorOnly, (req, res) => {
+    res.json({ required: requirePhone, verified: isPhoneVerified(req.user!.id) });
+  });
+
+  app.post('/api/matching/verification/start', auth, verifiedAdultSurvivor, async (req, res) => {
+    const me = req.user!;
+    const { phone } = parse(S.phoneVerificationStart, req.body);
+    const n = normalizeMatchIdentifier('phone', phone);
+    if (!n.ok || n.kind !== 'phone')
+      throw new HttpError(400, 'phone_invalid', 'We couldn’t read that as a phone number. Please check it, including the area code.');
+    const e164 = n.canonical.slice('phone:'.length);
+    if (!smsStartPerAccount.hit(me.id) || !smsStartPerPhone.hit(phoneToken(phoneHashKey, e164)))
+      throw new HttpError(429, 'rate_limited', 'We’ve sent several codes already. Please wait a while and try again.');
+    sweepChallenges();
+    let started: Awaited<ReturnType<SmsVerifier['start']>>;
+    try {
+      started = await sms.start(e164);
+    } catch (e) {
+      if (e instanceof SmsError) throw new HttpError(e.code === 'phone_not_supported' ? 400 : 503, e.code, e.message);
+      throw e;
+    }
+    const challengeId = newId();
+    const expiresAt = Date.now() + SMS_CODE_TTL_MS;
+    challenges.set(challengeId, { userId: me.id, phoneE164: e164, providerRef: started.providerRef, expiresAt, attempts: 0 });
+    res.json({ challengeId, expiresAt: new Date(expiresAt).toISOString(), ...(exposeDemoCode && started.demoCode && { demoCode: started.demoCode }) });
+  });
+
+  const phoneTokenGet = db.prepare('SELECT accounts FROM phone_tokens WHERE token_hash = ?');
+  const phoneTokenUpsert = db.prepare(
+    'INSERT INTO phone_tokens (token_hash, accounts) VALUES (?, 1) ON CONFLICT (token_hash) DO UPDATE SET accounts = accounts + 1',
+  );
+  app.post('/api/matching/verification/check', auth, verifiedAdultSurvivor, async (req, res) => {
+    const me = req.user!;
+    const body = parse(S.phoneVerificationCheck, req.body);
+    const c = challenges.get(body.challengeId);
+    const expired = () => new HttpError(400, 'code_expired', 'This code has expired. Please ask for a new one.');
+    if (!c || c.userId !== me.id) throw expired();
+    if (c.expiresAt <= Date.now()) {
+      challenges.delete(body.challengeId);
+      throw expired();
+    }
+    c.attempts++;
+    let result: Awaited<ReturnType<SmsVerifier['check']>>;
+    try {
+      result = await sms.check(c.providerRef, c.phoneE164, body.code);
+    } catch (e) {
+      if (e instanceof SmsError) throw new HttpError(503, 'sms_unavailable', e.message);
+      throw e;
+    }
+    if (result === 'expired') {
+      challenges.delete(body.challengeId);
+      throw expired();
+    }
+    if (result === 'wrong_code') {
+      if (c.attempts >= MAX_CODE_ATTEMPTS) {
+        challenges.delete(body.challengeId);
+        throw new HttpError(400, 'code_expired', 'That code didn’t match, too many times. Please ask for a new one.');
+      }
+      throw new HttpError(400, 'code_invalid', 'That code didn’t match. Please check it and try again.');
+    }
+    // Approved: forget the number now, whatever happens next. The limit is checked only after she has proved control
+    // of the phone, so this endpoint can't be used to test whether someone else's number is on Matra.
+    challenges.delete(body.challengeId);
+    const token = phoneToken(phoneHashKey, c.phoneE164);
+    db.transaction(() => {
+      if (isPhoneVerified(me.id)) return; // already verified: don't count this phone against a second account slot
+      const row = phoneTokenGet.get(token) as { accounts: number } | undefined;
+      if (row && row.accounts >= maxAccountsPerPhone)
+        throw new HttpError(
+          409,
+          'phone_limit_reached',
+          'This phone number has already been used to turn on sealed matching for as many accounts as we allow. Please try a different number.',
+        );
+      phoneTokenUpsert.run(token);
+      db.prepare('UPDATE users SET matching_verified = 1 WHERE id = ?').run(me.id);
+      audit(me.id, 'matching.phone_verified', 'You confirmed a phone number for sealed matching. The number itself was not kept.');
+    })();
+    res.json({ verified: true });
+  });
+
   app.get('/api/matching/config', auth, verifiedAdultSurvivor, (_req, res) => {
     pruneSeals();
     const roster = signedRoster();
@@ -998,7 +1124,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ? 'You’ve sealed as many identifiers as we allow in one day. You can add more tomorrow.'
         : 'This account has reached the limit for sealed identifiers.',
     );
-  app.post('/api/matching/oprf/:index', auth, verifiedAdultSurvivor, async (req, res) => {
+  app.post('/api/matching/oprf/:index', auth, requireMatchingEligible, async (req, res) => {
     const i = holderIndex(req);
     const { blinded } = parse(S.oprfEvaluateRequest, req.body);
     if (!isOprfElement(fromBase64(blinded))) throw new HttpError(400, 'invalid_request', 'blinded is not a valid group element'); // not counted
@@ -1037,7 +1163,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
      SELECT ?, ?, ? WHERE (SELECT COUNT(DISTINCT user_id) FROM match_entries WHERE tag = ?) >= 2`,
   );
 
-  app.post('/api/matching/entries', auth, verifiedAdultSurvivor, (req, res) => {
+  app.post('/api/matching/entries', auth, requireMatchingEligible, (req, res) => {
     const me = req.user!;
     const body = parse(S.createMatchEntryRequest, req.body);
     checkSealRecipients(body.seals);
@@ -1241,6 +1367,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
       // account-level and in-process holders' quotas; remote holders only know a pseudonym (HMAC of the id) that nothing can link back
       db.prepare('DELETE FROM oprf_quota WHERE user_id = ?').run(me.id);
       accountBudget.forget(me.id);
+      for (const [k, c] of challenges) if (c.userId === me.id) challenges.delete(k);
+      // phone_tokens is not linked to any account, so its count is NOT decremented (W19, docs/PRIVACY_DATA_INVENTORY.md)
       pruneGroups();
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM audit_events WHERE user_id = ?').run(me.id);

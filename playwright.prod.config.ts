@@ -28,8 +28,11 @@ const holderCmd = (i: number) =>
   `NODE_ENV=production MATRA_HOLDER_INDEX=${i} MATRA_OPRF_SHARE_FILE="${KEYS}/oprf-share-${i}.key" MATRA_HOLDER_TOKEN_PUBKEY="${pub('p.holderTokenPublicKey')}" ` +
   `MATRA_HOLDER_DB_PATH="${path.dirname(DB)}/holder-${i}.db" PORT=${HOLDER_PORT + i} npm run -s -w @matra/server holder`;
 const waitFor = (i: number) => `until curl -sf http://127.0.0.1:${HOLDER_PORT + i}/health >/dev/null; do sleep 0.2; done`;
+// Phone verification (W13): production refuses the mock SMS provider unless MATRA_DEMO_MODE=1 (this stack is a
+// fictional-data demo, and the scenarios read the mock's on-screen code), and needs a phone-token key outside the DB dir.
+const phoneKey = `node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > "${KEYS}/phone-hash.key"`;
 const env =
-  `NODE_ENV=production MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}" MATRA_MATCH_RELEASE_DELAY_HOURS=0 ` +
+  `NODE_ENV=production MATRA_DEMO_MODE=1 MATRA_SMS_PROVIDER=mock MATRA_PHONE_HASH_KEY_FILE="${KEYS}/phone-hash.key" MATRA_PEPPER=${PEPPER} MATRA_DB_PATH="${DB}" MATRA_MATCH_RELEASE_DELAY_HOURS=0 ` +
   `MATRA_OPRF_HOLDER_URLS=${holders.map((i) => `http://127.0.0.1:${HOLDER_PORT + i}`).join(',')} ` +
   `MATRA_OPRF_SHARE_PUBKEYS="${pub("p.holders.map((h) => h.publicKey).join(',')")}" MATRA_HOLDER_TOKEN_KEY_FILE="${KEYS}/holder-token.key"`;
 
@@ -43,6 +46,7 @@ export default defineConfig({
         `rm -f "${DB}" "${DB}-wal" "${DB}-shm" "${path.dirname(DB)}"/holder-*.db*`,
         `mkdir -p "${path.dirname(DB)}" "${KEYS}"`,
         ceremony,
+        phoneKey,
         // holders in the background (Playwright stops the whole process group at the end of the run)
         `(${holders.map((i) => `${holderCmd(i)} &`).join(' ')} true)`,
         ...holders.map(waitFor),

@@ -13,6 +13,7 @@ import type { IntakeRecord } from '@matra/shared';
 import type { ApiClient } from '../api/client';
 import * as vault from '../lib/vault';
 import { asGroup, asList, asRecord, newGroupItem, stepById, type AnswerValue, type IntakeDraft } from '../intake/draft';
+import { matchContactOf } from '../intake/record';
 import type { StoryEntry, Suggestion } from '../understand/types';
 import type { TranscriptResult } from '../voice/types';
 
@@ -199,4 +200,22 @@ export async function lodgeMatches(
     })),
   };
   return vault.lodgeEscrow(api, masterKey, matchable, alreadyLodged, { contact });
+}
+
+/**
+ * After she confirms a phone number (counselor/PhoneVerify.tsx): seal the identifiers her current sealed record chose
+ * for a sealed match but that could not be sealed yet. If anything new was sealed, her record is saved again as a new
+ * sealed version (same story; only the list of sealed fingerprints changes), so a later re-seal never resubmits — or
+ * undoes the withdrawal of — an identifier. Returns how many identifiers were newly sealed.
+ */
+export async function retrySealedMatches(api: ApiClient, masterKey: CryptoKey): Promise<number> {
+  const final = vault.latestOf(await vault.loadVault(api, masterKey, { withLedger: false }), 'final');
+  const record = final?.payload.record;
+  const before = final?.payload.escrowedHashes ?? [];
+  if (!final || !record || !(await vault.hasUnsealedMatches(record, before))) return 0;
+  const draft = final.payload.draft;
+  const after = await lodgeMatches(api, masterKey, record, before, draft ? matchContactOf(draft) : undefined);
+  const added = after.filter((h) => !before.includes(h)).length;
+  if (added) await vault.sealPayload(api, masterKey, { ...final.payload, escrowedHashes: after, savedAt: new Date().toISOString() }, final.meta.id);
+  return added;
 }

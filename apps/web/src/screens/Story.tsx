@@ -6,10 +6,11 @@ import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common';
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
-import { foldInLateEvidence, latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
+import { MatchingError, foldInLateEvidence, latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
 import { lodgeMatches } from '../space/adapters';
 import { matchContactOf } from '../intake/record';
+import { PhoneStepCard } from '../components/PhoneStepCard';
 
 /** Autosave to her vault: at most one save per minute, a moment after a meaningful change. */
 const MIN_GAP_MS = 60_000;
@@ -36,7 +37,7 @@ export function Story() {
   const pastSafetyRef = useRef(false);
   pastSafetyRef.current = pastSafety;
   const [sealing, setSealing] = useState<string | null>(null);
-  const [sealed, setSealed] = useState<{ entry: LedgerEntry; contentHash: string; escrowNote?: string } | null>(null);
+  const [sealed, setSealed] = useState<{ entry: LedgerEntry; contentHash: string; escrowNote?: string; needsPhone?: boolean } | null>(null);
   // How she prefers to tell it: the open story space (default) or one question at a time.
   const [mode, setMode] = useState<'space' | 'interview'>('space');
   const [fileCount, setFileCount] = useState(0);
@@ -271,6 +272,7 @@ export function Story() {
       };
       let escrowed = boot.previousEscrowed;
       let escrowNote: string | undefined;
+      let needsPhone = false;
       if (record.perpetrators.some((p) => p.escrowOptIn && p.identifiers.some((i) => i.kind !== 'full_name' && i.kind !== 'other'))) {
         setSealing('Sealing the names you chose for escrow…');
         try {
@@ -282,7 +284,9 @@ export function Story() {
             workingRef.current?.draft ? matchContactOf(workingRef.current.draft) : undefined,
           );
         } catch (e) {
-          escrowNote = `Your account was sealed, but the sealed match could not be set up right now (${friendlyError(e)}). You can try again later.`;
+          // A sealed match waits for her phone confirmation (W13): a calm next step, not an error.
+          if (e instanceof MatchingError && e.code === 'phone_verification_required') needsPhone = true;
+          else escrowNote = `Your account was sealed, but the sealed match could not be set up right now (${friendlyError(e)}). You can try again later.`;
         }
       }
       setSealing('Encrypting and sealing your account…');
@@ -295,7 +299,7 @@ export function Story() {
       );
       await setWorkingData(null);
       workingRef.current = null;
-      setSealed({ entry: res.ledgerEntry, contentHash: res.record.contentHash, escrowNote });
+      setSealed({ entry: res.ledgerEntry, contentHash: res.record.contentHash, escrowNote, needsPhone });
     } catch (e) {
       a.stopped = false; // nothing sealed: keep her draft saving
       throw new Error(friendlyError(e));
@@ -321,6 +325,7 @@ export function Story() {
           <p className="mono muted small">{shortHash(sealed.contentHash, 16)}</p>
         </div>
         {sealed.escrowNote && <div className="card warn">{sealed.escrowNote}</div>}
+        {sealed.needsPhone && <PhoneStepCard />}
         <div className="card stack">
           <h2>What you can do next — only if and when you want</h2>
           <div className="row">
@@ -388,3 +393,4 @@ export function Story() {
     </div>
   );
 }
+

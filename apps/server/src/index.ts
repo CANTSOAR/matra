@@ -1,6 +1,15 @@
 import fs from 'node:fs';
 import { createApp } from './app.js';
-import { WEB_DIST_DIR, loadMatchingSettings, loadOprfLimits, loadOprfThreshold, loadPepper, resolveDbPath } from './config.js';
+import {
+  WEB_DIST_DIR,
+  loadDemoMode,
+  loadMatchingSettings,
+  loadOprfLimits,
+  loadOprfThreshold,
+  loadPepper,
+  loadPhoneVerification,
+  resolveDbPath,
+} from './config.js';
 import { RemoteHolderPool } from './holders.js';
 
 const production = process.env.NODE_ENV === 'production';
@@ -19,7 +28,10 @@ if (webDir && !fs.existsSync(webDir)) {
   console.error(`[matra] web app not built: ${webDir} is missing. Run \`npm run build\` first.`);
   process.exit(1);
 }
-const demoBanner = process.env.MATRA_DEMO_BANNER === '1';
+// MATRA_DEMO_MODE=1 (fictional data only) always shows the DEMO banner; it is also what lets mock providers run in production.
+const demoMode = loadDemoMode();
+if (demoMode) console.warn('[matra] MATRA_DEMO_MODE=1 — fictional-data demo: mock/simulated providers allowed, DEMO banner on.');
+const demoBanner = process.env.MATRA_DEMO_BANNER === '1' || demoMode;
 const trustProxy = Number(process.env.MATRA_TRUST_PROXY) || 0;
 
 // Threshold OPRF key holders: all m shares in this process (dev / single-host demo), or m remote holder processes
@@ -27,6 +39,10 @@ const trustProxy = Number(process.env.MATRA_TRUST_PROXY) || 0;
 // generates shares; see config.ts loadOprfThreshold and docs/DEPLOY.md.
 const oprf = loadOprfThreshold();
 const pepper = loadPepper();
+// SMS phone verification before sealed matching (W13): production refuses the mock provider unless MATRA_DEMO_MODE=1,
+// and refuses to start without MATRA_PHONE_HASH_KEY (src/sms.ts, docs/DEPLOY.md).
+const phone = loadPhoneVerification();
+console.log(`[matra] sealed matching: phone verification ${phone.required ? `required (${phone.verifier.name} SMS provider)` : 'OFF (development)'}`);
 if (oprf.remote) {
   // Each reachable holder must serve exactly its pinned share public key; a down holder only warns (t of m suffice).
   const { reachable } = await new RemoteHolderPool(oprf.t, oprf.remote, pepper).verifyKeys();
@@ -44,7 +60,13 @@ const app = createApp({
   webDir,
   demoBanner,
   trustProxy,
-  matching: { oprf, limits: loadOprfLimits(), ...loadMatchingSettings() },
+  matching: {
+    oprf,
+    limits: loadOprfLimits(),
+    ...loadMatchingSettings(),
+    requirePhoneVerification: phone.required,
+    phone: { verifier: phone.verifier, hashKey: phone.hashKey, maxAccountsPerPhone: phone.maxAccountsPerPhone, exposeDemoCode: phone.exposeDemoCode },
+  },
 });
 
 const onListen = () => {

@@ -8,7 +8,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { groupKeyFromShares, toBase64, toHex } from '@matra/crypto';
-import { loadHolderSettings, loadMatchingSettings, loadOprfThreshold, loadSecretBytes, writeOprfCeremony } from './config.js';
+import {
+  assertMockAllowed,
+  loadDemoMode,
+  loadHolderSettings,
+  loadMatchingSettings,
+  loadOprfThreshold,
+  loadSecretBytes,
+  loadSmsVerifier,
+  writeOprfCeremony,
+} from './config.js';
 import { holderTokenPublicKeyFromSeed } from './holders.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'matra-cfg-'));
@@ -146,5 +155,18 @@ describe('loadSecretBytes (secrets held outside the database)', () => {
     const g = loadSecretBytes('X', { ...opts, env: {} });
     expect(fs.statSync(devFile).mode & 0o777).toBe(0o600);
     expect(toHex(loadSecretBytes('X', { ...opts, env: {} }))).toBe(toHex(g));
+  });
+});
+
+describe('demo mode and mock providers (WEEKEND_MVP §1.2)', () => {
+  it('production refuses a mock provider unless MATRA_DEMO_MODE=1', () => {
+    expect(loadDemoMode({})).toBe(false);
+    expect(loadDemoMode({ MATRA_DEMO_MODE: '1' })).toBe(true);
+    expect(() => assertMockAllowed('SMS verification (mock)', { NODE_ENV: 'production' })).toThrow(
+      'SMS verification (mock) is a mock/simulated provider and cannot run in production. Configure a real provider, or set MATRA_DEMO_MODE=1 for a fictional-data demo.',
+    );
+    expect(() => assertMockAllowed('SMS verification (mock)', { NODE_ENV: 'production', MATRA_DEMO_MODE: '1' })).not.toThrow();
+    expect(() => loadSmsVerifier({ NODE_ENV: 'production', MATRA_SMS_PROVIDER: 'mock' })).toThrow(/cannot run in production/);
+    expect(loadSmsVerifier({ NODE_ENV: 'production', MATRA_SMS_PROVIDER: 'mock', MATRA_DEMO_MODE: '1' }).name).toBe('mock');
   });
 });

@@ -280,14 +280,47 @@ export function matchContactFrom(record: IntakeRecord, input?: MatchContactInput
 }
 
 export class MatchingError extends Error {
-  constructor(message: string) {
+  /** `phone_verification_required`: she has to confirm a phone number first (counselor/PhoneVerify.tsx). */
+  constructor(
+    message: string,
+    readonly code?: 'phone_verification_required',
+  ) {
     super(message);
     this.name = 'MatchingError';
   }
 }
 
+/** The message the sealed screen and Home show when a sealed match waits for her phone confirmation. */
+export const PHONE_VERIFICATION_NEEDED = 'Your story is sealed. To turn on your sealed match, confirm a phone number first.';
+
 /** Local (vault-only) fingerprint of a canonical identifier, for de-duplication. Never sent to the server. */
 const localKey = (canonical: string) => sha256Hex(`matra/match/v1/local|${canonical}`);
+
+type MatchTodo = { label: string; id: Extract<ReturnType<typeof normalizeMatchIdentifier>, { ok: true }>; key: string };
+
+/** The opted-in, matchable identifiers in `record` that are not sealed yet (not in `done`). */
+async function matchTodo(record: IntakeRecord, done: Set<string>): Promise<MatchTodo[]> {
+  const todo: MatchTodo[] = [];
+  for (const p of record.perpetrators) {
+    if (!p.escrowOptIn) continue;
+    for (const raw of p.identifiers) {
+      // Only unique identifiers: free text ('other') and names are never sealed, whatever they look like.
+      if (raw.kind !== 'email' && raw.kind !== 'phone' && raw.kind !== 'social_handle') continue;
+      const id = normalizeMatchIdentifier(raw.kind, raw.value, raw.platform);
+      if (!id.ok) continue; // names and unrecognised text are never sealed
+      const key = await localKey(id.canonical);
+      if (done.has(key) || todo.some((t) => t.key === key)) continue;
+      const label = `${p.name?.trim() || 'A person you named'} · ${ESCROW_KIND_LABEL[id.kind] ?? 'identifier'}${id.platform ? ` (${id.platform})` : ''}`;
+      todo.push({ label, id, key });
+    }
+  }
+  return todo;
+}
+
+/** Does her sealed record still have identifiers she chose to seal for matching that aren't sealed yet? */
+export async function hasUnsealedMatches(record: IntakeRecord | undefined, alreadyLodged: string[] = []): Promise<boolean> {
+  return !!record && (await matchTodo(record, new Set(alreadyLodged))).length > 0;
+}
 
 /**
  * Seal every opted-in perpetrator identifier for sealed matching (Callisto-style; see packages/crypto/src/matching.ts).
@@ -306,24 +339,14 @@ export async function lodgeEscrow(
   opts: { contact?: MatchContactInput; consentStatement?: string } = {},
 ): Promise<string[]> {
   const done = new Set(alreadyLodged);
-  const todo: Array<{ label: string; id: Extract<ReturnType<typeof normalizeMatchIdentifier>, { ok: true }>; key: string }> = [];
-  for (const p of record.perpetrators) {
-    if (!p.escrowOptIn) continue;
-    for (const raw of p.identifiers) {
-      // Only unique identifiers: free text ('other') and names are never sealed, whatever they look like.
-      if (raw.kind !== 'email' && raw.kind !== 'phone' && raw.kind !== 'social_handle') continue;
-      const id = normalizeMatchIdentifier(raw.kind, raw.value, raw.platform);
-      if (!id.ok) continue; // names and unrecognised text are never sealed
-      const key = await localKey(id.canonical);
-      if (done.has(key) || todo.some((t) => t.key === key)) continue;
-      const label = `${p.name?.trim() || 'A person you named'} · ${ESCROW_KIND_LABEL[id.kind] ?? 'identifier'}${id.platform ? ` (${id.platform})` : ''}`;
-      todo.push({ label, id, key });
-    }
-  }
+  const todo = await matchTodo(record, done);
   if (!todo.length) return Array.from(done);
   const contact = matchContactFrom(record, opts.contact);
   if (!contact)
     throw new MatchingError('To use a sealed match, add a safe way for a legal options counselor to reach you (a phone number or email).');
+  // Phone verify-then-forget (W13): asked first, because without it every key holder refuses and the error says nothing.
+  const phone = await api.phoneVerificationStatus();
+  if (phone.required && !phone.verified) throw new MatchingError(PHONE_VERIFICATION_NEEDED, 'phone_verification_required');
   const config = await api.matchingConfig();
   if (!config.counselors.length) throw new MatchingError('Sealed matching isn’t available right now. Nothing was sealed.');
   const transport = { ...matchTransport(api), config: async () => config };
