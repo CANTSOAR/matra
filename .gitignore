@@ -27,3 +27,7 @@ apps/web/public/models/
 docs/outreach/PEOPLE.md
 docs/outreach/PERSONALIZED_EMAILS.md
 reasons.txt
+
+# Legal bank: local ID reservations (see scripts/legal-bank.mjs)
+docs/legal-research/questions/.ids/
+docs/legal-research/private/

@@ -17,7 +17,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "seed": "npm run seed -w @matra/server",
     "e2e": "playwright test",
-    "e2e:prod": "playwright test -c playwright.prod.config.ts"
+    "e2e:prod": "playwright test -c playwright.prod.config.ts",
+    "legal": "node scripts/legal-bank.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

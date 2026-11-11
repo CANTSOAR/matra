@@ -283,6 +283,9 @@ NJ RPC 7.3(b) bars a lawyer from contacting a prospective client "for the purpos
 ---
 
 ## 9. Open questions for licensed counsel
+
+*Since 2026-11-10 these are tracked one per file in the [legal research bank](legal-research/INDEX.md) (Q-001 to Q-012), with new questions added there. This list is kept as it was written.*
+
 1. Is Matra a directory, a nonprofit lawyer referral service, or a legal service plan under RPC 7.3(e)? Is registration required?
 2. Do attorney-directed narratives prepared through Matra receive privilege and work-product protection? How should the "prepared at counsel's request" designation be documented?
 3. What heightened standard, if any, applies in NJ to defense subpoenas for **non-privileged** victim writings? What R. 1:9-2 and victim-notice practice applies?

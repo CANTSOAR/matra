@@ -8,6 +8,7 @@ Matra is a survivor-controlled, zero-knowledge documentation tool with a consent
 |---|---|---|
 | [PITCH_ONE_PAGER.md](PITCH_ONE_PAGER.md) | Lawyers, funders | Problem, what the MVP does today, honest limits, pilot phases, asks |
 | [LEGAL_RESEARCH_MEMO.md](LEGAL_RESEARCH_MEMO.md) | Counsel, advisors | Confrontation and hearsay, discoverability and privilege, VCCO fees ($275/hr verdict), mandatory reporting, UPL and referral rules, privacy, escrow, the Legal Options Counselor (privilege, RPC 7.3), and a table of blueprint corrections |
+| [legal-research/](legal-research/README.md) | Founder, counsel | Legal question bank: one file per open question, research, and a short ask for counsel. Start at [INDEX.md](legal-research/INDEX.md) |
 | [SECURITY_WHITEPAPER.md](SECURITY_WHITEPAPER.md) | Security reviewers, partners | Architecture, key hierarchy, ledger, threat model, known limitations, roadmap |
 | [SUCCESSION_AND_DATA_PROMISE.md](SUCCESSION_AND_DATA_PROMISE.md) | Survivors, partners, counsel | Public commitments on data ownership, notice, export, successor migration, no silent confidentiality downgrade. Items marked for board and counsel adoption |
 | [SUSTAINABILITY_PLAN.md](SUSTAINABILITY_PLAN.md) | Board, funders, fiscal sponsor | Lessons from Callisto, revenue mix (no funder above about 30%), reserves, low burn, privacy-preserving impact measurement, the "if funding fails" runbook |
