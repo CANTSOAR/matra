@@ -10,7 +10,11 @@ what Matra must say about it in a privacy notice, are open questions for counsel
 
 **Never stored by Matra's code anywhere (DB, WAL, ledger, logs):** client IP addresses, user agents, referrers,
 request URLs or query strings, request bodies, plaintext of anything the survivor writes or uploads, phone numbers,
-SMS codes, perpetrator identifiers or their hashes. `apps/server/src/privacy.test.ts` drives a full session behind a
+SMS codes (except that development builds, not production, log each mock SMS code and a masked number to stdout:
+`sms.ts MockSmsVerifier`), perpetrator identifiers. Identifiers are never stored; only OPRF tags are (keyed
+pseudorandom values of the identifier, in `match_entries`, `match_groups`, `match_assignments` and `matcher_entries`).
+Whoever holds t key shares can recompute the tag for a guessed identifier, and in the in-process development mode the
+operator holds every share (W14). `apps/server/src/privacy.test.ts` drives a full session behind a
 proxy (IPv4 and IPv6, a distinctive user agent) and fails if the IP or user agent appears in the database files or in
 any log output. **No third-party requests:** the web app loads everything from its own origin (CSP `connect-src
 'self'`, no analytics, no CDN, no web fonts from elsewhere); `npm run build` runs `scripts/audit-web-build.mjs`, and
@@ -42,8 +46,12 @@ Retention key: **account** = until the account is deleted (crypto-shred, `POST /
 ### sessions
 | Column | What / why | Retention |
 |---|---|---|
-| token_hash | SHA-256 of the bearer token (the token itself is never stored) | until logout / expiry |
-| user_id, created_at, expires_at | whose session, when; expiry enforcement | until logout / expiry |
+| token_hash | SHA-256 of the bearer token (the token itself is never stored) | until logout, or at most 12 h + 10 min |
+| user_id, created_at, expires_at | whose session, when; expiry enforcement | until logout, or at most 12 h + 10 min |
+
+Sessions expire 12 h after sign-in (`SESSION_TTL_MS`). Expired rows are deleted at startup, on every sign-in, and by a
+sweep every 10 minutes (`auth.ts purgeExpiredSessions`, `app.ts` housekeeping), so an abandoned session (tab closed,
+quick exit, auto-lock) does not leave a sign-in time on disk. While a session is live, `created_at` is a sign-in time.
 
 ### attorney_profiles / counselor_profiles
 | Column | What / why | Retention |
@@ -83,11 +91,11 @@ Retention key: **account** = until the account is deleted (crypto-shred, `POST /
 |---|---|---|
 | match_entries | per (survivor, identifier): OPRF tag, contact bundle and contact details (ciphertext), her label (ciphertext), routing states sealed to the matcher (ciphertext), key epoch, sync flag | until she withdraws it or deletes her account |
 | match_seals | per (entry, counselor): seal ciphertext | with the entry |
-| match_groups | tag and time a group formed | while ≥ 2 survivors remain |
-| match_assignments | matcher's signed answer: counselor, reason (one state), signals | with the group |
+| match_groups | tag and time a group formed | until no entry with that tag remains (it outlives a withdrawal while another survivor's entry with the tag is still there) |
+| match_assignments | matcher's signed answer: counselor, reason (one state), signals | replaced wholesale on each refresh from the matcher, so it follows the matcher's groups |
 | matcher_pending_deletes | entry ids queued for deletion at the matcher | until the matcher confirms |
-| counselor_notes | counselor's notes, encrypted under her own key | with the group / account |
-| conflict_checks | counselor's conflict-check result and time per group | with the group / account |
+| counselor_notes | counselor's notes, encrypted under her own key | group-level notes: until no entry with the group's tag remains (or the counselor's account is deleted); notes about one entry: with that entry |
+| conflict_checks | counselor's conflict-check result and time per group | until no entry with the group's tag remains (or the counselor's account is deleted) |
 | report_requests, report_releases, report_release_blobs | staged release: who asked whom, her yes/no, wrapped keys, consent text, times | with the entry / account |
 | oprf_quota | per account and holder: today's count and lifetime count (no per-call times) | account |
 | phone_tokens | keyed hash of a verified number and a count; no account id, no rowid | **forever** (no row names an account, so none can be deleted with one) |
@@ -98,16 +106,20 @@ Retention key: **account** = until the account is deleted (crypto-shred, `POST /
 
 | Data | Why | Lifetime |
 |---|---|---|
-| Per-client rate-limit keys: `HMAC-SHA256(daily salt, IP)` | sign-in/registration, SMS sends, attestation proxy limits | window ≤ 24 h; all cleared when the salt rotates at midnight UTC; salt never written |
-| Per-account / per-username rate-limit counters | brute-force and SMS-spend limits | window ≤ 24 h |
-| Phone verification challenge (account id, E.164 number, provider ref) | to check the code she types | ≤ 10 minutes |
+| Per-client rate-limit keys: `HMAC-SHA256(daily salt, IP)` | sign-in/registration, SMS sends, attestation proxy limits | window ≤ 24 h; a timer at midnight UTC zero-fills the salt and empties these limiters even if no request arrives; salt never written |
+| Per-account / per-username rate-limit counters | brute-force and SMS-spend limits | window ≤ 24 h; expired entries swept every 10 minutes |
+| SMS send limiter key `account id \| phone token` (`app.ts smsStartPerAccountPhone`) | caps code requests per (account, number) | 1 h window, then swept within 10 minutes. This is the account-to-phone-token link that W19 keeps off disk: it exists in memory for that hour, so a memory snapshot taken then links them |
+| Phone verification challenge (account id, E.164 number, provider ref) | to check the code she types | ≤ 10 minutes, then swept within 10 minutes |
+| Mock SMS provider's pending codes (development / demo only): MACs of the code and number | to check the code | ≤ 10 minutes |
 | Pending phone tokens | written to `phone_tokens` in a later batch, apart from the account flag | until the next flush |
 
 ## 3. Logs (stdout)
 
 Request lines are `METHOD <route pattern> <status> <ms>` (e.g. `GET /api/shares/:id 200 4ms`): no URL, ids, query
-string, IP, user agent, account or body (`privacy.ts requestLogLine`; same for the key holders). `MATRA_LOG_REQUESTS=0`
-turns them off. Other lines are startup configuration, warnings and error *messages* (never request data). Retention of
+string, IP, user agent, account or body (`@matra/shared request-log.ts`, used by the app server, the key holders and the
+matcher). `MATRA_LOG_REQUESTS=0` turns them off in each. Other lines are startup configuration, warnings and error
+*messages* only (never the thrown object, which can carry request data). In development (not production) the mock SMS
+provider also logs each code and a masked number. Retention of
 stdout is whatever the host keeps; see [DEPLOY.md](DEPLOY.md).
 
 ## 4. OPRF key holders (each its own SQLite)
@@ -116,6 +128,7 @@ stdout is whatever the host keeps; see [DEPLOY.md](DEPLOY.md).
 |---|---|---|
 | oprf_quota | per pseudonymous token subject (not the account id): today's and lifetime evaluation counts | holder's lifetime |
 | daily_totals | evaluations and refusals per UTC day (append-only), for abuse detection | forever |
+| (memory) token replay cache: each holder token's random `jti` and expiry | refuse a replayed token | until that token's own expiry (minutes) |
 
 ## 5. Matcher (its own SQLite)
 

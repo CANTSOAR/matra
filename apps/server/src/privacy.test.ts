@@ -8,12 +8,15 @@ import path from 'node:path';
 import type express from 'express';
 import request from 'supertest';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { createApp, flushPhoneTokens, getDb } from './app.js';
-import { MAX_RATE_LIMIT_WINDOW_MS, RateLimiter } from './auth.js';
-import { ClientKeyer, requestLogLine } from './privacy.js';
-import { TEST_PEPPER, createRecord, registerUser, sealMatch, syncMatcher, uploadBlob, verifyPhone } from './test-helpers.js';
+import { HOUSEKEEPING_INTERVAL_MS, createApp, flushPhoneTokens, getDb } from './app.js';
+import { MAX_RATE_LIMIT_WINDOW_MS, RateLimiter, SESSION_TTL_MS } from './auth.js';
+import { ClientKeyer, msUntilUtcMidnight, requestLogLine } from './privacy.js';
+import { TEST_PEPPER, createRecord, makeApp, registerUser, sealMatch, syncMatcher, uploadBlob, verifyPhone } from './test-helpers.js';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe('ClientKeyer: daily-salted keyed hash of the client address', () => {
   it('is stable within a UTC day, differs between addresses, and never contains the address', () => {
@@ -47,6 +50,37 @@ describe('ClientKeyer: daily-salted keyed hash of the client address', () => {
     expect(l.keys()).toHaveLength(1);
   });
 
+  it('drops the salt and empties its limiters at midnight UTC with no request (an idle process keeps nothing)', () => {
+    vi.useFakeTimers({ now: Date.parse('2026-11-11T23:59:00Z'), toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const k = new ClientKeyer();
+    onTestFinished(() => k.stop());
+    const l = k.limiter(5, 3_600_000);
+    l.hit(k.keyFor('203.0.113.77'));
+    const salt = (k as unknown as { salt: Buffer }).salt;
+    expect(k.hasSalt).toBe(true);
+    expect(salt.some((b) => b !== 0)).toBe(true);
+    vi.advanceTimersByTime(59_000); // 23:59:59: still today
+    expect(k.hasSalt).toBe(true);
+    expect(l.keys()).toHaveLength(1);
+    vi.advanceTimersByTime(2_000); // past midnight, and no request arrived
+    expect(k.hasSalt).toBe(false);
+    expect(salt.every((b) => b === 0)).toBe(true); // yesterday's salt zero-filled, not just dereferenced
+    expect(l.keys()).toEqual([]);
+    // It re-arms: a key made the next day is gone again after the following midnight.
+    vi.advanceTimersByTime(3_600_000);
+    l.hit(k.keyFor('203.0.113.77'));
+    expect(k.hasSalt).toBe(true);
+    vi.advanceTimersByTime(24 * 3_600_000);
+    expect(k.hasSalt).toBe(false);
+    expect(l.keys()).toEqual([]);
+  });
+
+  it('msUntilUtcMidnight is always in (0, 24 h]', () => {
+    expect(msUntilUtcMidnight(Date.parse('2026-11-11T23:59:59.999Z'))).toBe(1);
+    expect(msUntilUtcMidnight(Date.parse('2026-11-12T00:00:00.000Z'))).toBe(86_400_000);
+    expect(msUntilUtcMidnight(Date.parse('2026-11-11T12:00:00Z'))).toBe(43_200_000);
+  });
+
   it('two processes (or a restart) never share a salt', () => {
     const t = () => Date.parse('2026-11-11T08:00:00Z');
     expect(new ClientKeyer(t).keyFor('203.0.113.77')).not.toBe(new ClientKeyer(t).keyFor('203.0.113.77'));
@@ -68,6 +102,39 @@ describe('RateLimiter retention', () => {
     now += MAX_RATE_LIMIT_WINDOW_MS; // a day later: client-a's entry has expired
     expect(l.hit('client-b')).toBe(true);
     expect(l.keys()).toEqual(['client-b']);
+  });
+});
+
+describe('session retention (W11: a session row records a sign-in time)', () => {
+  const sessionCount = (db: ReturnType<typeof makeApp>['db']) => (db.prepare('SELECT COUNT(*) n FROM sessions').get() as { n: number }).n;
+
+  it('an abandoned session is deleted after it expires, without its token ever being presented again', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const { app, db } = makeApp();
+    await registerUser(app, 'abandoned.session', 'survivor'); // she closes the tab / quick-exits: no logout
+    expect(sessionCount(db)).toBe(1);
+    vi.advanceTimersByTime(SESSION_TTL_MS - HOUSEKEEPING_INTERVAL_MS); // not yet expired: kept
+    expect(sessionCount(db)).toBe(1);
+    vi.advanceTimersByTime(2 * HOUSEKEEPING_INTERVAL_MS); // expired, and the next sweep has run
+    expect(sessionCount(db)).toBe(0);
+  });
+
+  it('expired rows are also deleted on any sign-in and at startup', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matra-sessions-'));
+    onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const dbPath = path.join(dir, 'matra.db');
+    const { app, db } = makeApp({ dbPath });
+    const a = await registerUser(app, 'session.a', 'survivor');
+    await registerUser(app, 'session.b', 'survivor');
+    db.prepare('UPDATE sessions SET expires_at = 1').run(); // both expired
+    await registerUser(app, 'session.c', 'survivor'); // a new sign-in sweeps the others
+    expect(sessionCount(db)).toBe(1);
+    db.prepare('UPDATE sessions SET expires_at = 1').run();
+    db.close();
+    const restarted = makeApp({ dbPath, matching: { allowKeyRotation: true } }); // test holders get fresh keys
+    expect(sessionCount(restarted.db)).toBe(0); // startup sweep
+    expect((await request(restarted.app).get('/api/audit').set(a.auth)).status).toBe(401);
+    restarted.db.close();
   });
 });
 

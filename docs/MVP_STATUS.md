@@ -55,7 +55,7 @@ These come from GOVERNANCE.md §5, the whitepaper §6 and the threat model §6. 
 | **W5** Argon2id and a passphrase-strength floor | Not done | Code |
 | **W7** attorney-verification procedure, plus MFA or passkeys for attorneys | Manual CLI flag only | Code + partner terms |
 | **W8** device safety (residue on exit, neutral naming) | Partly done (Quick Exit, idle lock) | Code + advocate review |
-| **W11** metadata minimization (log retention, IP truncation, encrypted alias, size padding) | Partly done: no IPs or user agents on disk or in logs (daily-salted in-memory hashes for rate limits), route-only request logs, web build audited for third-party requests, [data inventory](PRIVACY_DATA_INVENTORY.md). Still to do: size padding for records, encrypted alias, edge-log settings at the host | Code + hosting |
+| **W11** metadata minimization (log retention, IP truncation, encrypted alias, size padding) | Partly done: no IPs or user agents on disk or in logs (daily-salted in-memory hashes for rate limits), route-only request logs (app server, key holders, matcher), expired sessions swept every 10 minutes, web build audited for third-party requests, [data inventory](PRIVACY_DATA_INVENTORY.md). Still to do: size padding for records, encrypted alias, edge-log settings at the host | Code + hosting |
 
 ### 3. Engineering backlog that would make the audit cheaper and the pilot safer
 

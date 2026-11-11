@@ -78,6 +78,7 @@ import {
   RateLimiter,
   createSession,
   deleteSession,
+  purgeExpiredSessions,
   dummyVerify,
   fakeKdfSalt,
   hashAuthKey,
@@ -85,7 +86,7 @@ import {
   requireRole,
   verifyAuthKey,
 } from './auth.js';
-import { ClientKeyer, logRequests } from './privacy.js';
+import { ClientKeyer, errorMessageForLog, logRequests } from './privacy.js';
 import * as S from './schemas.js';
 import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimits } from './oprf.js';
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
@@ -436,6 +437,9 @@ const toAudit = (a: AuditRow): AuditEvent => ({
 });
 
 // ───────────── app ─────────────
+
+/** How often createApp drops expired sessions, SMS challenges and in-memory limiter entries (W11). */
+export const HOUSEKEEPING_INTERVAL_MS = 10 * 60_000;
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
@@ -1172,6 +1176,22 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const smsStartPerIp = clients.limiter(sendLimits.perIpPerHour, 3_600_000);
   const smsGlobalHour = new RateLimiter(sendLimits.globalPerHour, 3_600_000);
   const smsGlobalDay = new RateLimiter(sendLimits.globalPerDay, 24 * 3_600_000);
+  // Housekeeping (W11): drop what has expired even when no request arrives, so an idle server keeps no abandoned session
+  // row (its created_at is a sign-in time), no expired challenge (a raw number) and no expired limiter key (the
+  // (account, phone token) pair is the very link W19 keeps off disk). Unref'd; errors (a closed test DB) are ignored.
+  const memoryLimiters = [smsStartPerAccount, smsStartPerAccountPhone, smsGlobalHour, smsGlobalDay];
+  const housekeeping = () => {
+    try {
+      purgeExpiredSessions(db);
+    } catch {
+      /* DB closed */
+    }
+    sweepChallenges();
+    for (const l of memoryLimiters) l.sweep();
+  };
+  housekeeping();
+  setInterval(housekeeping, HOUSEKEEPING_INTERVAL_MS).unref();
+  app.locals.housekeeping = housekeeping;
   const matchingVerifiedRow = db.prepare('SELECT matching_verified FROM users WHERE id = ?');
   const isPhoneVerified = (userId: string) => (matchingVerifiedRow.get(userId) as { matching_verified: number } | undefined)?.matching_verified === 1;
   /** Adult survivor AND (phone verified, or verification turned off in development). Replaces verifiedAdultSurvivor on
@@ -2110,7 +2130,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (typeof e?.status === 'number' && e.status >= 400 && e.status < 500)
       return res.status(e.status).json({ error: 'Bad request', code: 'invalid_request' });
     // Log the error message only — never request data (or an arbitrary thrown object, which could carry it).
-    console.error('[matra] internal error:', typeof e?.message === 'string' ? e.message : 'unknown');
+    console.error('[matra] internal error:', errorMessageForLog(e));
     res.status(500).json({ error: 'Internal server error', code: 'internal' });
   });
 

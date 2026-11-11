@@ -49,6 +49,7 @@ export function fakeKdfSalt(pepper: Buffer, username: string): { kdfSalt: string
 export function createSession(db: DB, userId: string): string {
   const token = randomBytes(32).toString('base64url');
   const now = Date.now();
+  purgeExpiredSessions(db, now);
   db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(
     sha256Hex(token),
     userId,
@@ -56,6 +57,15 @@ export function createSession(db: DB, userId: string): string {
     now + SESSION_TTL_MS,
   );
   return token;
+}
+
+/**
+ * Delete every expired session row (W11: a row's created_at is a sign-in time, so it must not outlive the session).
+ * Run at startup, on every sign-in, and from createApp's housekeeping timer, so a session that is simply abandoned
+ * (tab closed, quick exit, auto-lock) is gone within SESSION_TTL_MS + one sweep interval. Returns the number deleted.
+ */
+export function purgeExpiredSessions(db: DB, now = Date.now()): number {
+  return db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now).changes;
 }
 
 export function deleteSession(db: DB, token: string): void {

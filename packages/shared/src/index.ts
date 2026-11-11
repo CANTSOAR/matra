@@ -865,3 +865,5 @@ export interface ApiError { error: string; code?: string }
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
  POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)
 */
+
+export * from './request-log.js';

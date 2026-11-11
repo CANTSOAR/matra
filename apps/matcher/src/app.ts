@@ -14,11 +14,13 @@
  *   GET    /v1/assignments                   → { assignments: MatcherAssignment[] }
  *   POST   /v1/assignments/:tag/decline { counselorId }                              → { ok: true } (reassigns)
  *
- * Logs `METHOD <route pattern> status ms` only: never ids, tags, bodies, tokens, IPs or query strings.
+ * Logs `METHOD <route pattern> status ms` only (shared requestLogLine; MATRA_LOG_REQUESTS=0 turns it off): never ids,
+ * tags, bodies, tokens, IPs or query strings. Error logs carry the error message only.
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { AttestationProvider } from './attestation.js';
+import { errorMessageForLog, logRequests } from '@matra/shared';
 import { MatcherError, type Matcher } from './matcher.js';
 
 export interface MatcherAppOptions {
@@ -39,12 +41,8 @@ export function createMatcherApp(o: MatcherAppOptions): express.Express {
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'" });
     next();
   });
-  if (o.logRequests)
-    app.use((req, res, next) => {
-      const t0 = Date.now();
-      res.on('finish', () => console.log(`[matcher] ${req.method} ${req.route?.path ?? '(unmatched)'} ${res.statusCode} ${Date.now() - t0}ms`));
-      next();
-    });
+  // The same route-only logger as the app server and key holders (@matra/shared request-log.ts; W11).
+  if (o.logRequests) app.use(logRequests('[matcher]'));
   app.use(express.json({ limit: '64kb' }));
 
   const want = digest(o.token);
@@ -99,7 +97,8 @@ export function createMatcherApp(o: MatcherAppOptions): express.Express {
     if (err instanceof MatcherError) return res.status(err.status).json({ error: err.message, code: err.code });
     const e = err as { status?: number; message?: string; type?: string };
     if (typeof e?.status === 'number' && e.status >= 400 && e.status < 500) return res.status(e.status).json({ error: 'Bad request', code: 'invalid_request' });
-    console.error('[matcher] internal error:', e?.message ?? err);
+    // The message only: never the thrown object, which can carry request data (W11).
+    console.error('[matcher] internal error:', errorMessageForLog(err));
     res.status(500).json({ error: 'Internal error', code: 'internal' });
   });
   return app;

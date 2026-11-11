@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createHash } from 'node:crypto';
 import { generateRosterKey, matcherKeysFromSeed, newAttestationNonce, sealRouting, signCounselorRoster, toBase64, verifyAttestation } from '@matra/crypto';
@@ -288,6 +288,35 @@ describe('matcher HTTP API', () => {
     return createMatcherApp({ matcher, attester, token: TOKEN });
   };
   const auth = { Authorization: `Bearer ${TOKEN}` };
+
+  it('logs route patterns and error messages only: never ids, tags, IPs, user agents or a thrown object (W11)', async () => {
+    const lines: string[] = [];
+    const capture = (...a: unknown[]) => void lines.push(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' '));
+    const spies = [vi.spyOn(console, 'log').mockImplementation(capture), vi.spyOn(console, 'error').mockImplementation(capture)];
+    try {
+      const { matcher } = createMatcher({ dbPath: ':memory:', keys, releaseDelayMs: 0 });
+      // A thrown value with no message, carrying request data (what a careless error log would print whole).
+      matcher.decline = () => {
+        throw { leaked: 'tag-SECRET-203.0.113.9', headers: { 'user-agent': 'UA-SECRET' } };
+      };
+      const attester = new SimulatedAttester({ platformSecretKey: platform, measurement: 'ab'.repeat(32), keys });
+      const app = createMatcherApp({ matcher, attester, token: TOKEN, logRequests: true });
+      const r = await request(app)
+        .post('/v1/assignments/tag-SECRET/decline')
+        .set(auth)
+        .set('User-Agent', 'UA-SECRET')
+        .set('X-Forwarded-For', '203.0.113.9')
+        .send({ counselorId: 'c-SECRET' });
+      expect(r.status).toBe(500);
+      await request(app).get('/v1/nope/tag-SECRET?x=1');
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
+    expect(lines).toContain('[matcher] internal error: unknown');
+    expect(lines.some((l) => /^\[matcher\] POST \/v1\/assignments\/:tag\/decline 500 \d+ms$/.test(l))).toBe(true);
+    expect(lines.some((l) => /^\[matcher\] GET \(unmatched\) 404 \d+ms$/.test(l))).toBe(true);
+    for (const secret of ['SECRET', '203.0.113.9', 'UA-']) expect(lines.join('\n')).not.toContain(secret);
+  });
 
   it('attestation is public, needs a 64-hex nonce, and verifies', async () => {
     const app = make();

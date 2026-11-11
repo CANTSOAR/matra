@@ -233,9 +233,10 @@ keeps working, from in-memory keyed hashes that cannot outlive 24 hours. No thir
 **Design.**
 - `apps/server/src/auth.ts`: add `HashedRateLimiter` (same `hit(key)` API as `RateLimiter`):
   - key = `HMAC-SHA256(salt, kind | ip | extra)`, first 16 bytes hex; the raw IP is never stored in the map.
-  - `salt` = 32 random bytes held in memory, regenerated at each UTC midnight (checked on `hit`). On rotation the map
-    is **cleared**, so no entry lives longer than one UTC day (max < 24 h), and an entry's own window (60 s for login)
-    is far shorter anyway.
+  - `salt` = 32 random bytes held in memory, regenerated at each UTC midnight. On rotation the map is **cleared**, so
+    no entry lives longer than one UTC day (max < 24 h), and an entry's own window (60 s for login) is far shorter
+    anyway. *(As built: `privacy.ts ClientKeyer`; an unref'd timer drops the salt and clears the maps at midnight even
+    with no request, so an idle process does not keep yesterday's salt beside yesterday's keys.)*
   - Size cap as today (sweep expired entries over 10,000).
   - Export `clientIpKey(req)`: `req.ip ?? req.socket.remoteAddress ?? 'unknown'`, used only to feed the limiter.
 - `app.ts`: `rateLimit()` uses `HashedRateLimiter`. Keep the existing limits.

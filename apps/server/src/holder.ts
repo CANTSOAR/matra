@@ -32,7 +32,7 @@ import type { OprfKeyPair } from '@matra/crypto';
 import { openHolderDb, type DB } from './db.js';
 import { HOLDER_TOKEN_HEADER, HolderTokenVerifier, holderTokenPublicKey } from './holders.js';
 import { DEFAULT_OPRF_LIMITS, OprfKeyHolder, SqliteQuotaStore, type OprfLimits } from './oprf.js';
-import { logRequests } from './privacy.js';
+import { errorMessageForLog, logRequests } from './privacy.js';
 import * as S from './schemas.js';
 
 export interface HolderAppOptions {
@@ -142,7 +142,7 @@ export function createHolderApp(opts: HolderAppOptions): express.Express {
     const e = err as { type?: string; status?: number; message?: string };
     if (typeof e?.status === 'number' && e.status >= 400 && e.status < 500)
       return void res.status(e.status).json({ error: 'Bad request', code: 'invalid_request' });
-    console.error(`[holder ${opts.index}] internal error:`, e?.message ?? 'unknown');
+    console.error(`[holder ${opts.index}] internal error:`, errorMessageForLog(e));
     res.status(500).json({ error: 'Internal server error', code: 'internal' });
   });
   return app;
