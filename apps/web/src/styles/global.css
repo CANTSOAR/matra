@@ -2,37 +2,38 @@
    Fonts are self-hosted (imported in main.tsx) — never load fonts or assets from a third party. */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   /* ── core palette (names shared with src/intake/intake.css and other screens) ── */
-  --matra-bg: #faf6f0; /* warm cream */
-  --matra-surface: #fffdf9; /* card paper */
-  --matra-surface-2: #f5eee6; /* recessed areas: consent text, wells */
+  --matra-bg: #fdf8f3; /* bright warm cream */
+  --matra-surface: #fffefc; /* card paper */
+  --matra-surface-2: #f9f2eb; /* recessed areas: consent text, wells */
   --matra-text: #2e2622; /* deep warm ink — 13.8:1 on bg */
   --matra-muted: #6a5d55; /* 5.9:1 on bg, 6.3:1 on surface */
   --matra-accent: #a04f38; /* rose-clay / terracotta — 5.3:1 on bg */
   --matra-accent-contrast: #ffffff; /* 5.7:1 on accent */
-  --matra-accent-soft: #f7e8e0; /* selected / suggestion background; accent text 4.8:1 on it */
+  --matra-accent-soft: #faece5; /* selected / suggestion background; accent text 4.8:1 on it */
   --matra-accent-strong: #84402c; /* hover/pressed accent */
   --matra-warm: #e8a87c; /* apricot — decorative fills only (ink text 7.3:1 on it) */
-  --matra-warm-soft: #fbeee2;
+  --matra-warm-soft: #fdf1e7;
   --matra-sage: #4f6e5a; /* calm secondary — 5.3:1 on bg */
-  --matra-sage-soft: #e7efe8; /* sage text 4.8:1 on it */
+  --matra-sage-soft: #ebf3ec; /* sage text 4.8:1 on it */
   --matra-success: #356b47; /* 6.2:1 on surface */
   --matra-success-soft: #e5f1e8;
   --matra-caution: #86560f; /* 6.2:1 on surface */
   --matra-caution-soft: #fbefdc;
   --matra-danger: #a3302a; /* 6.9:1 on surface */
-  --matra-border: #eadfd4; /* hairlines between items (decorative) */
+  --matra-border: #f0e6dc; /* hairlines between items (decorative) */
   --matra-border-strong: #9c8a7e; /* form control edges — 3.25:1 on surface (WCAG 1.4.11) */
   --matra-focus: #7a3a26; /* focus ring — 7.9:1 on bg */
 
-  --matra-radius: 14px;
-  --matra-radius-lg: 20px;
+  --matra-radius: 16px;
+  --matra-radius-lg: 26px;
   --matra-radius-pill: 999px;
 
-  --matra-shadow: 0 1px 2px rgba(74, 50, 36, 0.05), 0 4px 14px rgba(74, 50, 36, 0.06), 0 12px 32px -12px rgba(74, 50, 36, 0.1);
-  --matra-shadow-lg: 0 2px 4px rgba(74, 50, 36, 0.05), 0 12px 28px rgba(74, 50, 36, 0.09), 0 32px 64px -24px rgba(74, 50, 36, 0.18);
+  /* soft, diffuse, slightly rosy: cards float on light rather than sit in boxes */
+  --matra-shadow: 0 1px 2px rgba(120, 72, 50, 0.04), 0 6px 18px rgba(120, 72, 50, 0.05), 0 18px 40px -16px rgba(120, 72, 50, 0.1);
+  --matra-shadow-lg: 0 2px 6px rgba(120, 72, 50, 0.05), 0 16px 36px rgba(120, 72, 50, 0.08), 0 40px 72px -28px rgba(120, 72, 50, 0.16);
 
   --matra-font-display: 'Fraunces Variable', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   --matra-font-body: 'Nunito Sans Variable', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -61,32 +62,32 @@
   --font-mono: var(--matra-font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --matra-bg: #1d1916; /* warm charcoal */
-    --matra-surface: #272120;
-    --matra-surface-2: #211c1a;
-    --matra-text: #f2eae2; /* 14.7:1 on bg */
-    --matra-muted: #bcaea2; /* 8.1:1 on bg */
-    --matra-accent: #e8a184; /* 8.2:1 on bg */
-    --matra-accent-contrast: #2a1610; /* 8.1:1 on accent */
-    --matra-accent-soft: #3b2a23;
-    --matra-accent-strong: #f0b49a;
-    --matra-warm: #d9976d;
-    --matra-warm-soft: #33261d;
-    --matra-sage: #a3c0aa;
-    --matra-sage-soft: #26302a;
-    --matra-success: #93cba2;
-    --matra-success-soft: #1f3226;
-    --matra-caution: #e9bd6c;
-    --matra-caution-soft: #3a2e1b;
-    --matra-danger: #ff9e8f;
-    --matra-border: #3a312c;
-    --matra-border-strong: #8a786c; /* 3.8:1 on surface */
-    --matra-focus: #f0b49a;
-    --matra-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.22);
-    --matra-shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 44px rgba(0, 0, 0, 0.35);
-  }
+/* "Dim": opt-in only (lib/theme.ts), never from the device setting. A warm dusk rather than a dark cave. */
+:root[data-theme='dim'] {
+  color-scheme: dark;
+  --matra-bg: #2c2522; /* warm dusk */
+  --matra-surface: #362e2a;
+  --matra-surface-2: #312925;
+  --matra-text: #f2eae2; /* 14.7:1 on bg */
+  --matra-muted: #bcaea2; /* 8.1:1 on bg */
+  --matra-accent: #e8a184; /* 8.2:1 on bg */
+  --matra-accent-contrast: #2a1610; /* 8.1:1 on accent */
+  --matra-accent-soft: #46332b;
+  --matra-accent-strong: #f0b49a;
+  --matra-warm: #d9976d;
+  --matra-warm-soft: #3e2f25;
+  --matra-sage: #a3c0aa;
+  --matra-sage-soft: #2f3a33;
+  --matra-success: #93cba2;
+  --matra-success-soft: #29392e;
+  --matra-caution: #e9bd6c;
+  --matra-caution-soft: #45371f;
+  --matra-danger: #ff9e8f;
+  --matra-border: #463b35;
+  --matra-border-strong: #94827a; /* 3.5:1 on surface */
+  --matra-focus: #f0b49a;
+  --matra-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 6px 18px rgba(0, 0, 0, 0.16);
+  --matra-shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.22), 0 18px 44px rgba(0, 0, 0, 0.24);
 }
 
 *,
@@ -105,8 +106,10 @@ body {
   background-color: var(--matra-bg);
   /* a soft, lightweight wash of warmth — pure CSS, no images */
   background-image:
-    radial-gradient(1100px 520px at 8% -10%, color-mix(in srgb, var(--matra-warm) 16%, transparent), transparent 70%),
-    radial-gradient(900px 600px at 105% 30%, color-mix(in srgb, var(--matra-sage) 9%, transparent), transparent 70%);
+    radial-gradient(1200px 600px at 5% -12%, color-mix(in srgb, var(--matra-warm) 22%, transparent), transparent 70%),
+    radial-gradient(900px 640px at 108% 24%, color-mix(in srgb, var(--matra-sage) 10%, transparent), transparent 70%),
+    radial-gradient(1000px 700px at 40% 115%, color-mix(in srgb, var(--matra-accent) 6%, transparent), transparent 70%);
+  background-attachment: fixed;
   background-repeat: no-repeat;
   color: var(--matra-text);
   font-family: var(--matra-font-body);
@@ -225,8 +228,9 @@ kbd {
 
 /* ───────── demo instance banner (MATRA_DEMO_BANNER=1) ───────── */
 .demo-banner {
-  background: #7a2a1f;
-  color: #ffffff;
+  background: var(--matra-caution-soft);
+  color: var(--matra-caution);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--matra-caution) 18%, transparent);
   padding: 10px 16px;
   padding-right: 200px; /* clear of Quick exit */
   font-size: 0.9375rem;
@@ -241,7 +245,7 @@ kbd {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: color-mix(in srgb, var(--matra-bg) 82%, transparent);
+  background: color-mix(in srgb, var(--matra-surface) 74%, transparent);
   -webkit-backdrop-filter: saturate(1.2) blur(12px);
   backdrop-filter: saturate(1.2) blur(12px);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--matra-border) 80%, transparent);
@@ -450,15 +454,15 @@ ul.list.cards > li + li { margin-top: var(--matra-space-4); }
   justify-content: center;
   gap: 8px;
   min-height: 46px;
-  padding: 10px 20px;
-  border-radius: var(--matra-radius);
+  padding: 10px 22px;
+  border-radius: var(--matra-radius-pill); /* soft, rounded buttons */
   border: 1px solid color-mix(in srgb, var(--matra-border-strong) 55%, transparent);
   background: var(--matra-surface);
   color: var(--matra-text);
   font: 700 1rem/1.2 var(--matra-font-body);
   text-decoration: none;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(74, 50, 36, 0.06);
+  box-shadow: 0 1px 2px rgba(120, 72, 50, 0.05);
   transition:
     transform var(--matra-duration) var(--matra-ease),
     box-shadow var(--matra-duration) var(--matra-ease),
@@ -490,7 +494,8 @@ ul.list.cards > li + li { margin-top: var(--matra-space-4); }
   transform: none;
   box-shadow: none;
 }
-.btn-small { min-height: 40px; padding: 7px 14px; font-size: 0.93rem; border-radius: 12px; }
+.btn-small { min-height: 40px; padding: 7px 16px; font-size: 0.93rem; }
+.dim-btn { font-weight: 600; color: var(--matra-muted); }
 .btn-large { min-height: 54px; padding: 14px 28px; font-size: 1.06rem; }
 
 .field {
@@ -510,7 +515,7 @@ textarea {
   min-height: 48px;
   padding: 11px 14px;
   border: 1px solid var(--matra-border-strong);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--matra-surface);
   color: var(--matra-text);
   font: inherit;

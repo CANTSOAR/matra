@@ -4,6 +4,7 @@ import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react
 import type { Role } from '@matra/shared';
 import { NEUTRAL_TITLE, QuickExitButton } from '../lib/quickExit';
 import { useSession } from '../lib/session';
+import { useDim } from '../lib/theme';
 import { DEMO_BUILD } from '../matchPins';
 
 /**
@@ -55,6 +56,22 @@ function useFocusOnNavigate() {
   }, [loc.pathname]);
 }
 
+/** "Dim" / "Brighten": a softer, darker screen for late at night, only for this tab (lib/theme.ts). */
+function DimToggle() {
+  const [dim, setDim] = useDim();
+  return (
+    <button
+      type="button"
+      className="btn btn-quiet btn-small dim-btn"
+      aria-pressed={dim}
+      title={dim ? 'Make the screen bright again' : 'A darker, softer screen for night time'}
+      onClick={() => setDim(!dim)}
+    >
+      {dim ? 'Brighten' : 'Dim'}
+    </button>
+  );
+}
+
 export function Layout() {
   const { session, logout } = useSession();
   const navigate = useNavigate();
@@ -99,6 +116,7 @@ export function Layout() {
             </nav>
           )}
           <span className="header-spacer" />
+          <DimToggle />
           {session && (
             <button
               type="button"
