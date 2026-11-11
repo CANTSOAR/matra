@@ -14,6 +14,7 @@ import {
   type ShareKey,
 } from '@matra/crypto';
 import { holderTokenPublicKeyFromSeed, type RemoteHolderConfig } from './holders.js';
+import { DEFAULT_HOLDER_DAILY_BUDGET } from './holder.js';
 
 /** apps/server/data */
 export const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -212,8 +213,10 @@ export function loadOprfThreshold(env: Env = process.env): OprfThresholdSettings
     if (urls.length !== m) throw new Error(`MATRA_OPRF_HOLDER_URLS must list ${m} holder URLs (MATRA_OPRF_HOLDERS), got ${urls.length}`);
     if (publicKeys.length !== m) throw new Error(`MATRA_OPRF_SHARE_PUBKEYS must list ${m} base64 share public keys, in index order`);
     for (const u of urls) if (!/^https?:\/\//.test(u)) throw new Error(`MATRA_OPRF_HOLDER_URLS: not an http(s) URL: ${u}`);
+    // Holder tokens are bearer credentials (bound to one blinded element, 60 s): on plain http an on-path attacker could
+    // capture one and spend a survivor's quota. Production only allows http:// to a loopback address.
     if (production && urls.some((u) => u.startsWith('http://') && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(u)))
-      console.warn('[matra] WARNING: an OPRF key holder URL is plain http:// to a non-local host. Use https between institutions.');
+      throw new Error('MATRA_OPRF_HOLDER_URLS: plain http:// to a non-loopback host is refused in production. Use https between institutions.');
     groupKeyFromShares(publicKeys.map((pk, i) => ({ index: i + 1, publicKey: fromBase64(pk) })), t); // throws if inconsistent
     const tokenKey = loadSecretBytes('MATRA_HOLDER_TOKEN_KEY', { env, devFile: path.join(DATA_DIR, 'holder-token.key'), label: 'the holder-token signing key', required });
     return { t, m, mode: 'remote', remote: { urls, publicKeys, tokenKey } };
@@ -270,11 +273,20 @@ export function loadOprfThreshold(env: Env = process.env): OprfThresholdSettings
   return { t, m, mode: 'in-process', shares: consistent(load()) };
 }
 
+function holderDailyBudget(env: Env): number {
+  const v = env.MATRA_HOLDER_DAILY_BUDGET;
+  if (v === undefined || v === '') return DEFAULT_HOLDER_DAILY_BUDGET;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new Error('MATRA_HOLDER_DAILY_BUDGET must be a positive integer');
+  return n;
+}
+
 /**
  * Settings for one standalone OPRF key holder process (src/holder-server.ts):
  *   MATRA_HOLDER_INDEX (i), MATRA_OPRF_SHARE / MATRA_OPRF_SHARE_FILE (its one share; dev: apps/server/data/oprf-share-<i>.key),
  *   MATRA_HOLDER_TOKEN_PUBKEY (base64 Ed25519 key of the app server's token key; dev: derived from the dev token key),
- *   MATRA_HOLDER_DB_PATH (its own quota DB; default apps/server/data/holder-<i>.db), PORT, MATRA_OPRF_PER_DAY / _LIFETIME.
+ *   MATRA_HOLDER_DB_PATH (its own quota DB; default apps/server/data/holder-<i>.db), PORT, MATRA_OPRF_PER_DAY / _LIFETIME,
+ *   MATRA_HOLDER_DAILY_BUDGET (global evaluations per UTC day across all subjects; default 1000, src/holder.ts).
  */
 export function loadHolderSettings(env: Env = process.env) {
   const index = Number(env.MATRA_HOLDER_INDEX);
@@ -305,6 +317,7 @@ export function loadHolderSettings(env: Env = process.env) {
     dbPath,
     port: Number(env.PORT) || 4310 + index,
     limits: loadOprfLimits(env),
+    dailyBudget: holderDailyBudget(env),
   };
 }
 

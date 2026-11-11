@@ -356,6 +356,9 @@ function matchTransport(api: ApiClient) {
   return {
     config: () => api.matchingConfig(),
     evaluate: (i: number, req: { blinded: string }) => api.oprfEvaluate(i, req),
+    // Sealing still went ahead with t valid holders. Indices only (no identifier); there is no operator report channel yet.
+    onBadHolders: (indices: number[]) =>
+      console.warn(`[matra] OPRF key holder${indices.length > 1 ? 's' : ''} ${indices.join(', ')} answered with an invalid proof; sealed using the others.`),
     createEntry: (req: Parameters<ApiClient['createMatchEntry']>[0]) => api.createMatchEntry(req),
     listEntries: () => api.listMatchEntries(),
     addSeals: (id: string, req: Parameters<ApiClient['addMatchSeals']>[1]) => api.addMatchSeals(id, req),

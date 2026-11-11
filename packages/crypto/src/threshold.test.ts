@@ -104,8 +104,11 @@ describe('threshold OPRF: a bad share or proof is rejected and named', () => {
       [1, { index: 1, evaluated: new Uint8Array(0), proof: new Uint8Array(0) }],
     ] as const) {
       const evals = good.map((g) => (g.index === badIndex ? bad : g));
-      // with every other holder valid: the output is still right
+      // with every other holder valid: the output is still right, and the bad holder is still named
       expect(toHex(c.finalizeThresholdOprf(bl, cfg, evals))).toBe(want);
+      const report = c.finalizeThresholdOprfReport(bl, cfg, evals);
+      expect(toHex(report.output)).toBe(want);
+      expect(report.badHolders).toEqual([badIndex]);
       // with only one other valid holder: refused, naming the bad one
       const two = evals.filter((e) => e.index === badIndex || e.index === (badIndex === 1 ? 2 : 1));
       let err: c.ThresholdOprfError | undefined;
@@ -239,5 +242,23 @@ describe('threshold OPRF: client orchestration (matching.ts)', () => {
     const err = await c.evaluateMatchOprf(lying, keys, bl).catch((e) => e);
     expect(err).toBeInstanceOf(c.ThresholdOprfError);
     expect(err.badHolders).toEqual([2]);
+    // a lying holder while the other two answer: sealing goes ahead, and the transport is told which holder lied
+    const reported: number[][] = [];
+    const covered = { ...transport(async (i, req) => (i === 2 ? answer(1, req) : answer(i, req))), onBadHolders: (ix: number[]) => reported.push(ix) };
+    expect(toHex(await c.evaluateMatchOprf(covered, keys, bl))).toBe(want);
+    expect(reported).toEqual([[2]]);
+    // all honest: nothing reported
+    const quiet: number[][] = [];
+    await c.evaluateMatchOprf({ ...transport(async (i, req) => answer(i, req)), onBadHolders: (ix: number[]) => quiet.push(ix) }, keys, bl);
+    expect(quiet).toEqual([]);
+  });
+});
+
+describe('isOprfElement (app server pre-check before charging the account quota)', () => {
+  it('accepts a blinded element; refuses the identity, a non-canonical encoding and a wrong length', () => {
+    expect(c.isOprfElement(c.blindMatchIdentifier('email:x@example.com').blinded)).toBe(true);
+    expect(c.isOprfElement(new Uint8Array(32))).toBe(false); // identity
+    expect(c.isOprfElement(new Uint8Array(32).fill(255))).toBe(false);
+    expect(c.isOprfElement(new Uint8Array(31))).toBe(false);
   });
 });

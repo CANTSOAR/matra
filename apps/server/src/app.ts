@@ -22,7 +22,7 @@ import cors from 'cors';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
-import { generateOprfKey, groupKeyFromShares, fromBase64, splitOprfKey, toBase64, type ShareKey } from '@matra/crypto';
+import { generateOprfKey, groupKeyFromShares, fromBase64, isOprfElement, splitOprfKey, toBase64, type ShareKey } from '@matra/crypto';
 import type {
   AttorneyProfile,
   AuditEvent,
@@ -67,7 +67,7 @@ import {
   verifyAuthKey,
 } from './auth.js';
 import * as S from './schemas.js';
-import { DEFAULT_OPRF_LIMITS, type OprfLimits } from './oprf.js';
+import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimits } from './oprf.js';
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
 
 export interface CreateAppOptions {
@@ -422,6 +422,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }
   })();
   const keyEpoch = Number(meta('key_epoch'));
+  // One unit per account per distinct blinded element, whichever holders it goes to (src/oprf.ts AccountOprfBudget).
+  const accountBudget = new AccountOprfBudget(new SqliteQuotaStore(db), limits);
 
   const loginLimiterKey = new RateLimiter(10, 60_000);
   const loginLimiterIp = new RateLimiter(60, 60_000);
@@ -985,20 +987,28 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const i = holderIndex(req);
     res.json(holders.publicKeys()[i - 1]);
   });
+  // Quota: the ACCOUNT is charged once per distinct blinded element (first call, any holder) before anything is relayed,
+  // so sending each guess to a different t-subset of holders does not multiply her budget; each holder also counts its
+  // own calls (a backstop, and the only count a remote holder can keep).
+  const rateLimited = (code: 'rate_limited_daily' | 'rate_limited_lifetime') =>
+    new HttpError(
+      429,
+      code,
+      code === 'rate_limited_daily'
+        ? 'You’ve sealed as many identifiers as we allow in one day. You can add more tomorrow.'
+        : 'This account has reached the limit for sealed identifiers.',
+    );
   app.post('/api/matching/oprf/:index', auth, verifiedAdultSurvivor, async (req, res) => {
     const i = holderIndex(req);
     const { blinded } = parse(S.oprfEvaluateRequest, req.body);
+    if (!isOprfElement(fromBase64(blinded))) throw new HttpError(400, 'invalid_request', 'blinded is not a valid group element'); // not counted
+    const charged = accountBudget.charge(req.user!.id, blinded);
+    if (!charged.ok) throw rateLimited(charged.code);
     const r = await holders.evaluate(i, req.user!.id, blinded);
     if (!r.ok) {
       if (r.code === 'invalid_element') throw new HttpError(400, 'invalid_request', 'blinded is not a valid group element');
       if (r.code === 'holder_unavailable') throw new HttpError(503, 'holder_unavailable', 'This key holder is not available right now.');
-      throw new HttpError(
-        429,
-        r.code,
-        r.code === 'rate_limited_daily'
-          ? 'You’ve sealed as many identifiers as we allow in one day. You can add more tomorrow.'
-          : 'This account has reached the limit for sealed identifiers.',
-      );
+      throw rateLimited(r.code);
     }
     res.json(r.response);
   });
@@ -1228,8 +1238,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
       db.prepare('DELETE FROM match_seals WHERE counselor_id = ?').run(me.id);
       db.prepare('DELETE FROM counselor_notes WHERE counselor_id = ?').run(me.id);
       db.prepare('DELETE FROM counselor_profiles WHERE user_id = ?').run(me.id);
-      // in-process holders' quotas; remote holders only know a pseudonym (HMAC of the id) that nothing can link back
+      // account-level and in-process holders' quotas; remote holders only know a pseudonym (HMAC of the id) that nothing can link back
       db.prepare('DELETE FROM oprf_quota WHERE user_id = ?').run(me.id);
+      accountBudget.forget(me.id);
       pruneGroups();
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM audit_events WHERE user_id = ?').run(me.id);

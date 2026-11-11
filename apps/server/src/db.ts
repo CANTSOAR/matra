@@ -300,8 +300,9 @@ const MIGRATIONS: string[] = [
 ];
 
 /**
- * A standalone OPRF key holder's own database (src/holder.ts): just its quota counters, keyed by the app server's
- * pseudonymous token subject. Same table shape as the app DB's oprf_quota, so SqliteQuotaStore works on both.
+ * A standalone OPRF key holder's own database (src/holder.ts): its quota counters, keyed by the app server's
+ * pseudonymous token subject (same table shape as the app DB's oprf_quota, so SqliteQuotaStore works on both), and
+ * its append-only daily evaluation totals.
  */
 export function openHolderDb(dbPath: string): DB {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
@@ -316,6 +317,17 @@ export function openHolderDb(dbPath: string): DB {
     lifetime_count INTEGER NOT NULL,
     PRIMARY KEY (user_id, holder)
   )`);
+  // Append-only per-day totals (src/holder.ts HolderDailyTotals): rows can be added and counts can only grow.
+  db.exec(`CREATE TABLE IF NOT EXISTS daily_totals (
+    day         TEXT PRIMARY KEY,
+    evaluations INTEGER NOT NULL,
+    refused     INTEGER NOT NULL
+  );
+  CREATE TRIGGER IF NOT EXISTS daily_totals_no_delete BEFORE DELETE ON daily_totals
+    BEGIN SELECT RAISE(ABORT, 'daily_totals is append-only'); END;
+  CREATE TRIGGER IF NOT EXISTS daily_totals_no_decrease BEFORE UPDATE ON daily_totals
+    WHEN NEW.day IS NOT OLD.day OR NEW.evaluations < OLD.evaluations OR NEW.refused < OLD.refused
+    BEGIN SELECT RAISE(ABORT, 'daily_totals is append-only'); END;`);
   return db;
 }
 

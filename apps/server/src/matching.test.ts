@@ -65,28 +65,50 @@ describe('sealed matching: access control and rate limits', () => {
     expect(db.prepare('SELECT * FROM oprf_quota WHERE user_id = ?').all(s2.user.id)).toEqual([]);
   });
 
-  it('rate-limits per account and per key holder (daily + lifetime)', async () => {
+  it('rate-limits per account (daily + lifetime), one unit per distinct blinded element whichever holders it goes to', async () => {
     const { app, db } = makeApp({ matching: { limits: { perDay: 3, lifetime: 5 } } });
     const s = await registerUser(app, 'survivor.rl');
     const other = await registerUser(app, 'survivor.other');
-    const hit = (u: TestUser, h = 1) => request(app).post(`/api/matching/oprf/${h}`).set(u.auth).send(blinded());
-    for (let i = 0; i < 3; i++) expect((await hit(s)).status).toBe(200);
+    const hit = (u: TestUser, h = 1, b = blinded()) => request(app).post(`/api/matching/oprf/${h}`).set(u.auth).send(b);
+    const third = blinded();
+    expect((await hit(s)).status).toBe(200);
+    expect((await hit(s)).status).toBe(200);
+    expect((await hit(s, 1, third)).status).toBe(200);
     const d = await hit(s);
     expect(d.status).toBe(429);
     expect(d.body.code).toBe('rate_limited_daily');
     expect((await hit(other)).status).toBe(200); // per account
-    expect((await hit(s, 2)).status).toBe(200); // holder 2 keeps its own counters
+    expect((await hit(s, 2, third)).status).toBe(200); // the same blinded element at another holder is not charged again
+    const n = await hit(s, 2); // a NEW element at another holder is: the account's budget is spent
+    expect(n.status).toBe(429);
+    expect(n.body.code).toBe('rate_limited_daily');
 
     // next day: allowed again until the lifetime cap
-    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ? AND holder = '1'`).run(s.user.id);
+    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ?`).run(s.user.id);
     expect((await hit(s)).status).toBe(200);
     expect((await hit(s)).status).toBe(200);
-    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ? AND holder = '1'`).run(s.user.id);
+    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ?`).run(s.user.id);
     const l = await hit(s);
     expect(l.status).toBe(429);
     expect(l.body.code).toBe('rate_limited_lifetime');
     // only a day + counts are stored, no timestamps per call
     expect(Object.keys(db.prepare('SELECT * FROM oprf_quota LIMIT 1').get() as object).sort()).toEqual(['day', 'day_count', 'holder', 'lifetime_count', 'user_id']);
+  });
+
+  it('spreading guesses over different t-subsets of holders does not multiply the account budget (2-of-3)', async () => {
+    const { app, db } = makeApp({ matching: { limits: { perDay: 3, lifetime: 50 } } });
+    const s = await registerUser(app, 'survivor.spread');
+    const pairs = [[1, 2], [1, 3], [2, 3], [1, 2], [1, 3], [2, 3]];
+    const ok: number[][] = [];
+    for (const p of pairs) {
+      const b = blinded();
+      const r = await Promise.all(p.map((h) => request(app).post(`/api/matching/oprf/${h}`).set(s.auth).send(b)));
+      if (r.every((x) => x.status === 200)) ok.push(p);
+      else expect(r.every((x) => x.status === 429 && x.body.code === 'rate_limited_daily')).toBe(true);
+    }
+    // per-holder counting alone would have allowed ⌊3·3/2⌋ = 4 guesses today; the account limit is 3
+    expect(ok).toHaveLength(3);
+    expect(db.prepare(`SELECT day_count FROM oprf_quota WHERE user_id = ? AND holder = 'account'`).get(s.user.id)).toEqual({ day_count: 3 });
   });
 
   it('unverified counselors get nothing and are not offered to survivors', async () => {

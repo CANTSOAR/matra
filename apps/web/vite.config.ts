@@ -47,6 +47,31 @@ const matchPins = {
   oprfShares: (process.env.MATRA_OPRF_SHARE_PUBKEYS || '').split(',').map((s) => s.trim()).filter(Boolean),
   rosterKey: process.env.MATRA_COUNSELOR_ROSTER_PUBKEY || '',
 };
+// The OPRF pin is all-or-nothing: a build with only some of these set (one missing or misspelled) would otherwise ship
+// with NO OPRF pin and trust whatever key set the server sends. And a set that is not one consistent t-of-m key
+// (wrong t, a share from another ceremony, a wrong group key) fails here rather than in every survivor's sealing.
+{
+  const oprfVars = ['MATRA_OPRF_THRESHOLD', 'MATRA_OPRF_GROUP_PUBKEY', 'MATRA_OPRF_SHARE_PUBKEYS'] as const;
+  const set = oprfVars.filter((v) => (process.env[v] ?? '').trim() !== '');
+  if (set.length && set.length !== oprfVars.length)
+    throw new Error(`OPRF pins are all-or-nothing: ${set.join(', ')} set but ${oprfVars.filter((v) => !set.includes(v)).join(', ')} missing (see docs/DEPLOY.md).`);
+  if (set.length) {
+    // threshold.ts itself (the @matra/crypto barrel's extensionless imports do not load in a Node-run config), and only
+    // when pins are set, so dev builds do not pull it in
+    const { checkThresholdKeys } = await import('../../packages/crypto/src/threshold.ts');
+    const fromBase64 = (b: string) => new Uint8Array(Buffer.from(b, 'base64'));
+    if (!Number.isInteger(matchPins.oprfT)) throw new Error('MATRA_OPRF_THRESHOLD must be an integer');
+    try {
+      checkThresholdKeys({
+        t: matchPins.oprfT,
+        groupPublicKey: fromBase64(matchPins.oprfGroup),
+        holders: matchPins.oprfShares.map((pk, i) => ({ index: i + 1, publicKey: fromBase64(pk) })),
+      });
+    } catch (e) {
+      throw new Error(`OPRF pins are inconsistent (MATRA_OPRF_THRESHOLD / _GROUP_PUBKEY / _SHARE_PUBKEYS): ${(e as Error).message}`);
+    }
+  }
+}
 
 export default defineConfig({
   plugins: [react()],

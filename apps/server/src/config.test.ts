@@ -89,6 +89,11 @@ describe('threshold OPRF shares in production (M3, W14)', () => {
     const other = ceremony();
     const swapped = [pub.holders[0]!.publicKey, pub.holders[1]!.publicKey, other.pub.holders[2]!.publicKey].join(',');
     expect(() => loadOprfThreshold({ ...env, MATRA_OPRF_SHARE_PUBKEYS: swapped })).toThrow(/inconsistent/);
+    // holder tokens are bearer credentials: plain http to a non-loopback holder is fatal in production
+    const plain = 'http://h1.example.org,https://h2.example.org,https://h3.example.org';
+    expect(() => loadOprfThreshold({ ...env, MATRA_OPRF_HOLDER_URLS: plain })).toThrow(/plain http:\/\/ to a non-loopback host/);
+    expect(loadOprfThreshold({ ...env, MATRA_OPRF_HOLDER_URLS: 'http://127.0.0.1:4311,http://localhost:4312,https://h3.example.org' }).mode).toBe('remote');
+    expect(loadOprfThreshold({ ...env, NODE_ENV: 'development', MATRA_OPRF_HOLDER_URLS: plain }).mode).toBe('remote');
   });
 
   it('a standalone holder needs its share and the pinned token public key in production', () => {
@@ -107,6 +112,9 @@ describe('threshold OPRF shares in production (M3, W14)', () => {
     expect(() => loadHolderSettings({ ...env, MATRA_HOLDER_TOKEN_PUBKEY: undefined })).toThrow(/MATRA_HOLDER_TOKEN_PUBKEY must be set/);
     expect(() => loadHolderSettings({ ...env, MATRA_OPRF_SHARE_FILE: undefined })).toThrow(/MATRA_OPRF_SHARE .*must be set/);
     expect(() => loadHolderSettings({ ...env, MATRA_HOLDER_INDEX: '0' })).toThrow(/MATRA_HOLDER_INDEX/);
+    expect(h.dailyBudget).toBe(1000);
+    expect(loadHolderSettings({ ...env, MATRA_HOLDER_DAILY_BUDGET: '250' }).dailyBudget).toBe(250);
+    expect(() => loadHolderSettings({ ...env, MATRA_HOLDER_DAILY_BUDGET: '0' })).toThrow(/MATRA_HOLDER_DAILY_BUDGET/);
     expect(() => loadHolderSettings({ ...env, MATRA_HOLDER_DB_PATH: path.join(path.dirname(files.MATRA_OPRF_SHARE_2_FILE!), 'h.db') })).toThrow(
       /outside the database directory/,
     );

@@ -17,7 +17,10 @@
  * Procedure: run it OFFLINE on a machine nobody keeps; hand each share file to a DIFFERENT institution over a channel
  * only that institution can read; then delete <dir>. The dealer briefly knows k (and any t files together are k), which
  * is why the files must never travel together and why a distributed key generation (no dealer) is listed as future
- * work in docs/SECURITY_WHITEPAPER.md. k and the polynomial are overwritten in memory before this script exits.
+ * work in docs/SECURITY_WHITEPAPER.md. The byte buffers holding k and the share keys are zeroed before this script
+ * exits, but k, the polynomial coefficients and every intermediate are also JavaScript bigints, which cannot be wiped:
+ * they stay in memory until garbage collection (possibly copied). Another reason to run it on an offline machine that
+ * is then discarded, and to move to a DKG.
  * Refuses to write into the database directory (MATRA_DB_PATH) or over existing share files without --force.
  *
  * --token-key (single-operator demos and tests only): also writes `<dir>/holder-token.key`, a fresh Ed25519 seed for

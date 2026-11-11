@@ -618,7 +618,7 @@ export interface ApiError { error: string; code?: string }
 
  GET    /api/matching/config                          -> MatchingConfig   (survivor)
  GET    /api/matching/oprf/:index/key                 -> OprfHolderInfo   (key holder i's share public key)
- POST   /api/matching/oprf/:index OprfEvaluateRequest -> OprfEvaluateResponse (verified-adult survivor; per-holder quota;
+ POST   /api/matching/oprf/:index OprfEvaluateRequest -> OprfEvaluateResponse (verified-adult survivor; account quota charged once per distinct blinded element, plus a per-holder quota;
                                                          503 holder_unavailable when holder i is down)
  POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed')
  POST   /api/matching/entries/:id/seals AddMatchSealsRequest -> { entry: EscrowEntry } (owner only; adds seals for new counselors)

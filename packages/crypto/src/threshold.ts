@@ -27,7 +27,7 @@
 import { ristretto255, ristretto255_oprf } from '@noble/curves/ed25519.js';
 import { bytesToNumberLE } from '@noble/curves/utils.js';
 import { randomBytes } from '@noble/hashes/utils.js';
-import type { MatchBlind, OprfKeyPair } from './matching';
+import type { MatchBlind, OprfKeyPair } from './matching.ts';
 
 const Point = ristretto255.Point;
 const Fn = Point.Fn;
@@ -109,7 +109,11 @@ function combinePoints(lambdas: Map<number, bigint>, points: Map<number, P>): P 
 
 /**
  * Dealer only (key ceremony): Shamir-share an OPRF secret key among m holders, any t of whom can evaluate. The caller
- * must overwrite `secretKey` afterwards. The polynomial coefficients exist only inside this call.
+ * must overwrite `secretKey` afterwards. The polynomial coefficients are only referenced inside this call, but they are
+ * JavaScript bigints, which are immutable and cannot be wiped: `coeffs.fill(0n)` drops the array's references, while k,
+ * every a_j and every Horner intermediate stay on the heap (possibly copied) until garbage collection. Only byte buffers
+ * can actually be zeroed. That is a further reason to run the ceremony on an offline machine that is then discarded,
+ * and to replace the dealer with a DKG.
  */
 export function splitOprfKey(secretKey: Uint8Array, t: number, m: number): ShareKey[] {
   checkTM(t, m);
@@ -165,10 +169,16 @@ export function checkThresholdKeys(cfg: ThresholdKeyConfig): void {
 
 /**
  * Client: verify each holder's DLEQ proof against its own (pinned) share public key, combine any t valid evaluations
- * with Lagrange coefficients in the exponent, and RFC 9497 Finalize. Returns the 64-byte output VOPRF_k(input).
+ * with Lagrange coefficients in the exponent, and RFC 9497 Finalize. Returns the 64-byte output VOPRF_k(input) and
+ * `badHolders`, the indices whose answer was rejected (bad proof, unknown index, or a second answer for one index) —
+ * reported on success too, so a holder that misbehaves while the others cover for it is still named.
  * Throws ThresholdOprfError (naming every holder whose proof failed) if fewer than t evaluations are valid.
  */
-export function finalizeThresholdOprf(b: MatchBlind, cfg: ThresholdKeyConfig, evals: HolderEvaluation[]): Uint8Array {
+export function finalizeThresholdOprfReport(
+  b: MatchBlind,
+  cfg: ThresholdKeyConfig,
+  evals: HolderEvaluation[],
+): { output: Uint8Array; badHolders: number[] } {
   checkThresholdKeys(cfg);
   const pkOf = new Map(cfg.holders.map((h) => [h.index, h.publicKey]));
   const valid = new Map<number, P>();
@@ -197,7 +207,12 @@ export function finalizeThresholdOprf(b: MatchBlind, cfg: ThresholdKeyConfig, ev
   const E = combinePoints(lagrangeAt(0n, S), valid);
   // RFC 9497 Finalize is mode-independent (unblind + Hash(len‖input‖len‖element‖"Finalize")); the blinded element was
   // built with the VOPRF-mode hash-to-group, so this equals VOPRF_k(input).
-  return OPRF.oprf.finalize(b.input, b.blind, E.toBytes());
+  return { output: OPRF.oprf.finalize(b.input, b.blind, E.toBytes()), badHolders: bad };
+}
+
+/** finalizeThresholdOprfReport without the report: just VOPRF_k(input). */
+export function finalizeThresholdOprf(b: MatchBlind, cfg: ThresholdKeyConfig, evals: HolderEvaluation[]): Uint8Array {
+  return finalizeThresholdOprfReport(b, cfg, evals).output;
 }
 
 /** TESTS ONLY: reconstruct k from shares (interpolation at 0). Never computed in production: no party holds t shares. */

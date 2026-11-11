@@ -11,14 +11,24 @@
  *   • RemoteHolderPool — each holder is a separate process (src/holder-server.ts), ideally at a separate institution.
  *     The app server authenticates each call with a short-lived Ed25519-signed holder token:
  *         token   = base64url(payload) "." base64url(Ed25519(MATRA_HOLDER_TOKEN_KEY, "matra/holder-token/v1|" ‖ payload))
- *         payload = {"sub": hex HMAC-SHA256(pepper, "holder-sub|" ‖ userId), "aud": <holder index>, "exp": now+60 s, "jti"}
- *     The holder pins the token public key, checks aud = its own index, exp, and refuses a replayed jti. `sub` is a
- *     stable pseudonym, so the holder can keep per-survivor quotas without ever learning a user id. The holder TRUSTS
- *     the app server's statement that `sub` is an eligible survivor (adult, and later phone-verified): it cannot check
- *     that itself. A compromised app server can therefore spend any holder's quota under fresh pseudonyms — the
- *     quotas bound honest-server abuse, they are not a defence against the app server (docs/threat-model.md W14).
+ *         payload = {"sub": hex HMAC-SHA256(pepper, "holder-sub|" ‖ userId), "aud": <holder index>, "exp": now+60 s,
+ *                    "jti", "bh": base64url(SHA-256(the request's `blinded` string))}
+ *     The holder pins the token public key, checks aud = its own index, exp (at most TTL + skew ahead), that `bh` matches
+ *     the body it received (a captured token cannot be spent on another blinded element), and refuses a replayed jti
+ *     (remembered until the token's own expiry). `sub` is a stable pseudonym, so the holder can keep per-survivor quotas
+ *     without ever learning a user id.
+ *
+ *     The holder TRUSTS the app server's statement that `sub` is an eligible survivor (adult, and later phone-verified):
+ *     it cannot check that itself, and it accepts any well-formed `sub`. So whoever holds MATRA_HOLDER_TOKEN_KEY (the
+ *     operator, or someone who steals it from the app server) can mint a fresh subject per query and get unlimited
+ *     proof-checked evaluations from t honest holders, then combine them: a full dictionary attack on guessed phone
+ *     numbers or handles, online rather than offline, which the holders cannot tell apart from real traffic beyond
+ *     its volume. Remote mode therefore does NOT take that attack away from the operator; it moves it onto holders that
+ *     can observe it (each standalone holder has a global daily evaluation budget and keeps an append-only daily
+ *     total, src/holder.ts). Closing it needs eligibility attested by a party other than the app server (e.g. anonymous
+ *     tokens issued after verification and spent at the holders) — future work (docs/threat-model.md W14).
  */
-import { createHmac, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto';
+import { createHash, createHmac, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto';
 import { oprfPublicKey, toBase64, type ShareKey } from '@matra/crypto';
 import type { OprfHolderInfo } from '@matra/shared';
 import type { DB } from './db.js';
@@ -62,8 +72,13 @@ export class InProcessHolderPool implements HolderPool {
 export const HOLDER_TOKEN_DOMAIN = 'matra/holder-token/v1';
 export const HOLDER_TOKEN_HEADER = 'X-Matra-Holder-Token';
 const TOKEN_TTL_S = 60;
+/** How far ahead of the holder's clock a token's exp may be: its TTL plus 30 s of clock skew. */
+const TOKEN_MAX_AHEAD_MS = (TOKEN_TTL_S + 30) * 1000;
 
-export interface HolderTokenPayload { sub: string; aud: number; exp: number; jti: string }
+export interface HolderTokenPayload { sub: string; aud: number; exp: number; jti: string; bh: string }
+
+/** The token's binding to the request body: base64url(SHA-256(the `blinded` string exactly as sent)). */
+export const blindedHash = (blindedB64: string) => createHash('sha256').update(blindedB64).digest('base64url');
 
 // Raw 32-byte Ed25519 seed / public key ⇄ node KeyObject (fixed RFC 8410 DER prefixes).
 const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
@@ -95,14 +110,17 @@ export function signHolderToken(key: KeyObject, p: Omit<HolderTokenPayload, 'exp
     aud: p.aud,
     exp: p.exp ?? Math.floor(Date.now() / 1000) + TOKEN_TTL_S,
     jti: p.jti ?? randomBytes(16).toString('hex'),
+    bh: p.bh,
   } satisfies HolderTokenPayload);
   const sig = sign(null, Buffer.from(`${HOLDER_TOKEN_DOMAIN}|${payload}`), key);
   return `${b64url(payload)}.${b64url(sig)}`;
 }
 
 /**
- * Holder side: verify signature, audience and expiry, and refuse a replayed jti (kept in memory for 2 minutes, longer
- * than any token lives). Returns the payload, or null for anything wrong (the caller answers 401 without detail).
+ * Holder side: verify signature, audience, expiry (at most TTL + 30 s skew ahead), that the token is bound to this
+ * request's blinded element, and refuse a replayed jti (kept in memory until the token's own expiry, so it cannot be
+ * replayed after being forgotten). Returns the payload, or null for anything wrong (the caller answers 401 without
+ * detail).
  */
 export class HolderTokenVerifier {
   private readonly seen = new Map<string, number>();
@@ -110,7 +128,7 @@ export class HolderTokenVerifier {
     private readonly key: KeyObject,
     private readonly index: number,
   ) {}
-  verify(token: string | undefined, nowMs = Date.now()): HolderTokenPayload | null {
+  verify(token: string | undefined, blindedB64: string, nowMs = Date.now()): HolderTokenPayload | null {
     if (!token || token.length > 1024) return null;
     const [p, s, extra] = token.split('.');
     if (!p || !s || extra !== undefined) return null;
@@ -123,10 +141,11 @@ export class HolderTokenVerifier {
       return null;
     }
     if (typeof v.sub !== 'string' || !/^[0-9a-f]{64}$/.test(v.sub) || typeof v.jti !== 'string' || v.jti.length > 64) return null;
-    if (v.aud !== this.index || typeof v.exp !== 'number' || v.exp * 1000 <= nowMs || v.exp * 1000 > nowMs + 5 * 60_000) return null;
+    if (v.aud !== this.index || typeof v.exp !== 'number' || v.exp * 1000 <= nowMs || v.exp * 1000 > nowMs + TOKEN_MAX_AHEAD_MS) return null;
+    if (typeof v.bh !== 'string' || v.bh !== blindedHash(blindedB64)) return null;
     for (const [j, until] of this.seen) if (until <= nowMs) this.seen.delete(j);
     if (this.seen.has(v.jti)) return null;
-    this.seen.set(v.jti, nowMs + 120_000);
+    this.seen.set(v.jti, v.exp * 1000);
     return v;
   }
 }
@@ -165,7 +184,7 @@ export class RemoteHolderPool implements HolderPool {
   }
   async evaluate(index: number, userId: string, blindedB64: string): Promise<PoolEvaluateResult> {
     if (!Number.isInteger(index) || index < 1 || index > this.m) return { ok: false, code: 'holder_unavailable' };
-    const token = signHolderToken(this.key, { sub: holderSubject(this.pepper, userId), aud: index });
+    const token = signHolderToken(this.key, { sub: holderSubject(this.pepper, userId), aud: index, bh: blindedHash(blindedB64) });
     try {
       const r = await fetch(this.url(index, '/evaluate'), {
         method: 'POST',

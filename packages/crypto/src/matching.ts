@@ -80,7 +80,7 @@ import {
   wrapKeyForRecipient,
 } from './index';
 import type { NormalizedIdentifier } from './normalize';
-import { checkThresholdKeys, finalizeThresholdOprf, ThresholdOprfError, type HolderEvaluation, type ThresholdKeyConfig } from './threshold';
+import { checkThresholdKeys, finalizeThresholdOprfReport, ThresholdOprfError, type HolderEvaluation, type ThresholdKeyConfig } from './threshold';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -117,6 +117,18 @@ export function oprfPublicKey(secretKey: Uint8Array): Uint8Array {
   const k = Fn.fromBytes(secretKey);
   if (Fn.is0(k)) throw new Error('OPRF secret key must be non-zero');
   return Point.BASE.multiply(k).toBytes();
+}
+
+/**
+ * True when `bytes` is a canonical, non-identity ristretto255 element: what oprfBlindEvaluate accepts. Lets the app
+ * server refuse a bad blinded element before charging the account's OPRF quota.
+ */
+export function isOprfElement(bytes: Uint8Array): boolean {
+  try {
+    return bytes.length === 32 && !ristretto255.Point.fromBytes(bytes).is0();
+  } catch {
+    return false;
+  }
 }
 
 /** Key holder: evaluate one blinded element, with a DLEQ proof. Throws on an invalid / identity element. */
@@ -565,6 +577,12 @@ export interface MatchTransport {
   config(): Promise<MatchingConfig>;
   /** OPRF evaluation by key holder `index` (1..m). */
   evaluate(index: number, req: OprfEvaluateRequest): Promise<OprfEvaluateResponse>;
+  /**
+   * Called when holders answered with an evaluation that failed its proof (or under the wrong index) even though t
+   * others were valid and sealing went ahead: the deployment is running with less margin than t-of-m suggests.
+   * Indices only; nothing about the identifier.
+   */
+  onBadHolders?(indices: number[]): void;
   createEntry(req: CreateMatchEntryRequest): Promise<{ entry: EscrowEntry }>;
   listEntries?(): Promise<{ entries: EscrowEntry[] }>;
   addSeals?(entryId: string, req: AddMatchSealsRequest): Promise<{ entry: EscrowEntry }>;
@@ -631,8 +649,9 @@ export function matchingOprfKeys(config: MatchingConfig, pins?: MatchPins): Thre
 
 /**
  * Ask every key holder in parallel; any t valid (proof-checked) answers are enough. A rate limit (429) is surfaced
- * as-is when it is why fewer than t answered (quotas are per holder and equal). Fewer than t answers otherwise →
- * MatchingError('holders_unavailable'); a bad proof → ThresholdOprfError naming the holder (from finalize).
+ * as-is when it is why fewer than t answered (the account quota, charged once per blinded element). Fewer than t answers otherwise →
+ * MatchingError('holders_unavailable'); a bad proof → ThresholdOprfError naming the holder (from finalize). A bad
+ * proof alongside t valid answers still seals, and the bad indices go to `t.onBadHolders`.
  */
 export async function evaluateMatchOprf(t: MatchTransport, keys: ThresholdKeyConfig, b: MatchBlind): Promise<Uint8Array> {
   const req = { blinded: toBase64(b.blinded) };
@@ -653,7 +672,9 @@ export async function evaluateMatchOprf(t: MatchTransport, keys: ThresholdKeyCon
     throw new MatchingError('holders_unavailable', `only ${evals.length} of ${keys.holders.length} OPRF key holders answered; ${keys.t} are needed`);
   }
   try {
-    return finalizeThresholdOprf(b, keys, evals);
+    const { output, badHolders } = finalizeThresholdOprfReport(b, keys, evals);
+    if (badHolders.length) t.onBadHolders?.(badHolders);
+    return output;
   } catch (e) {
     if (e instanceof ThresholdOprfError && !e.badHolders.length) throw new MatchingError('holders_unavailable', e.message);
     throw e;

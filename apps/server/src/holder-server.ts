@@ -8,9 +8,9 @@ import { loadHolderSettings } from './config.js';
 
 const s = loadHolderSettings();
 const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
-const app = createHolderApp({ index: s.index, share: s.share, tokenPublicKey: s.tokenPublicKey, dbPath: s.dbPath, limits: s.limits, logRequests: process.env.MATRA_LOG_REQUESTS !== '0' });
+const app = createHolderApp({ index: s.index, share: s.share, tokenPublicKey: s.tokenPublicKey, dbPath: s.dbPath, limits: s.limits, dailyBudget: s.dailyBudget, logRequests: process.env.MATRA_LOG_REQUESTS !== '0' });
 const server = app.listen(s.port, host, () => {
-  console.log(`[matra] OPRF key holder ${s.index} on http://${host}:${s.port}  (quota db: ${s.dbPath})`);
+  console.log(`[matra] OPRF key holder ${s.index} on http://${host}:${s.port}  (quota db: ${s.dbPath}, daily budget: ${s.dailyBudget})`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
