@@ -465,7 +465,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 3. **Client integrity:** published build hashes, SRI, a strict CSP (**done** for production serving: same-origin only, no inline script or eval; see DEPLOY.md), and an attorney key-fingerprint check in the UI (**done**, manual: see section 5).
 4. ~~**Share expiry** (VAWA "reasonably time-limited" consent)~~ (**done**: default 90 days, renewable, length in the consent text and ledger hash). Still to do: MFA or passkeys for attorneys, and a documented attorney-verification procedure.
 5. **Metadata minimization:** ~~no IP addresses or user agents on disk or in logs, route-only request logs, no third-party requests from the web app~~ (**done**, see the metadata row in section 5 and [PRIVACY_DATA_INVENTORY.md](PRIVACY_DATA_INVENTORY.md)). Still to do: encrypt the survivor alias, pad record and blob sizes, and configure the host's edge logs (DEPLOY.md).
-6. **Incident response plan** and breach-notification procedure (N.J.S.A. 56:8-163; NY GBL 899-aa).
+6. **Incident response plan** and breach-notification procedure (N.J.S.A. 56:8-163; NY GBL 899-aa). A draft, pending counsel, is in [ops/INCIDENT_RESPONSE.md](ops/INCIDENT_RESPONSE.md); whether a ciphertext-only leak requires notice is open (Q-055). Deploy approvals (n-of-m across organizations, signed releases, published hashes) are proposed in [ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md), and the hosting choice for real enclave attestation (W18) in [ops/HOSTING.md](ops/HOSTING.md).
 
 **Next phase**
 7. **External timestamp anchoring** of the ledger head: an RFC 3161 Time-Stamp Authority, and/or periodic publication to a public, append-only log. This turns "trust our server clock" into third-party-verifiable time evidence.

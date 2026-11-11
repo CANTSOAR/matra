@@ -96,5 +96,6 @@ Coercion of the survivor, malware on her device, a state-level adversary, and tr
 
 - Close the residual W1 risks and fix W3, W4, W7, W8, W9, W13, W14 and W15 (for W15: account-level Sybil resistance, since A7 is only mitigated). Until the W14 residuals are closed (holders run at separate institutions, remote mode, AND eligibility attested by someone other than the app server), do not claim sealed matching is private from the operator. (Same list as the whitepaper's "Before any real-data pilot" roadmap.)
 - Independent audit of `packages/crypto` and the server, results published.
-- Incident-response plan and law-enforcement request guide.
+- Incident-response plan (draft pending counsel: [ops/INCIDENT_RESPONSE.md](ops/INCIDENT_RESPONSE.md)) and law-enforcement request guide (not written; Q-039).
+- n-of-m approval for code that reaches survivors and published release hashes (proposed: [ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md); W4), and real enclave attestation for the matcher (W18; options in [ops/HOSTING.md](ops/HOSTING.md)).
 - See the gates in [GOVERNANCE.md](../GOVERNANCE.md).

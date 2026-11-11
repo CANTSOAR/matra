@@ -103,6 +103,10 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | **unset** | Development only. On a demo, verify attorneys explicitly (see below) |
 | `MATRA_SERVE_WEB`, `MATRA_WEB_DIR` | unset | Advanced: turn web serving on or off, or serve from another directory |
 
+Process around deploys (who approves a release, signed tags, published hashes, the emergency path) is proposed in
+[ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md); hosting the matcher in a real enclave is compared in
+[ops/HOSTING.md](ops/HOSTING.md); what to do after a leak is drafted in [ops/INCIDENT_RESPONSE.md](ops/INCIDENT_RESPONSE.md).
+
 ## Logs and IP addresses (W11)
 
 Matra's own code never writes a client IP address or user agent anywhere (database, ledger, logs); see

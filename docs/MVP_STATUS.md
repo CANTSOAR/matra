@@ -1,6 +1,6 @@
 # Matra MVP: status and gap list
 
-*Assessed 2026-10-07 from the code, tests and docs at commit `74f2a51` (plus uncommitted work in progress). Written for the founder.*
+*First assessed 2026-10-07 at commit `74f2a51`. Updated 2026-11-11 for branch `weekend-mvp` (§0 below; not merged to `main`, not pushed). Written for the founder.*
 
 ## Verdict
 
@@ -10,13 +10,42 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 
 | Area | Grade | Why |
 |---|---|---|
-| Core flow (story space → vault → PDF → share → revoke → sealed match → counselor) | **A-** | Built and covered by 9 Playwright scenarios (dump-first story, interview mode, evidence, summary/export, sharing, revocation, sealed match with the counselor portal, Quick Exit, sign-in errors) against both the dev and production builds, plus an opt-in on-device voice test |
-| Crypto design | **B** | Sound primitives (AES-256-GCM, RSA-OAEP-3072, PBKDF2 600k). Known gaps W2–W5 and W12 are documented. Thin unit tests (2 crypto tests) |
+| Core flow (story space → vault → PDF → share → revoke → sealed match → counselor) | **A-** | Built and covered by Playwright scenarios (13 on weekend-mvp, incl. phone verification, staged release and recovery code) (dump-first story, interview mode, evidence, summary/export, sharing, revocation, sealed match with the counselor portal, Quick Exit, sign-in errors) against both the dev and production builds, plus an opt-in on-device voice test |
+| Crypto design | **B** | Sound primitives (AES-256-GCM, RSA-OAEP-3072, PBKDF2 600k). Known gaps W2–W5 and W12 are documented. *weekend-mvp:* threshold OPRF (ristretto255, Shamir, DLEQ via `@noble`), ECIES routing, recovery code; `packages/crypto` now has 191 unit tests including tamper, wrong-key and t−1-shares-fail cases |
 | Server | **B** | Express + SQLite, append-only ledger enforced by triggers, rate limits on register and login, strict CSP in production |
 | Trauma-informed UX | **B / unvalidated** | Skip-anything, Quick Exit, triple-Esc, 15-minute idle lock, 18+ gate. **No advocate has reviewed the script yet**, which is the single biggest credibility gap |
 | Legal posture | **B+ research / F review** | Excellent memo. Zero review by licensed counsel |
-| Ops readiness | **D** | No hosted demo URL, no entity, no incident-response plan, no legal-request policy, no audit |
-| Escrow (matching) | **C, demo-only** | Survivor self-probing is closed. *2026-11-11 (weekend-mvp):* the OPRF key is now a 2-of-3 threshold key (Shamir shares, per-share proofs) and each holder can run as its own process. The operator can still test guessed identifiers in **both** modes (W2, W14): in-process it holds every share; in remote mode it holds the holder-token key and can mint fresh subjects, so remote holders only turn an offline attack into an online one they can observe (per-holder daily budget and append-only daily totals), they do not stop it. Closing that needs eligibility attested by someone other than the app server. The account budget is charged once per guess whichever holders answer. *Phone verify-then-forget (weekend-mvp):* an account must confirm a phone by SMS before sealing, one phone enables at most 2 accounts, and only a keyed hash with no account id is kept, written in a separate later batch; the SMS provider's records together with Matra's could still link a number to an account (W13, W19). Friction against cheap mass accounts, not Sybil resistance; the Twilio adapter is untested against the real service and demos run a mock that verifies nothing. *Matcher (weekend-mvp):* a separate matcher service (`apps/matcher`, in-process or its own process) now assigns each matched group to ONE counselor, licensed where it happened, else where a survivor lives, from routing data sealed to the matcher (the app server can't read it), with the reason shown to the counselor; a group where nobody gave a state goes to the least-loaded counselor, and a counselor can decline a group (conflict of interest) so it is passed to another. Its attestation is **simulated** (a dev-key-signed hash of its own source), so it shows the protocol, not hardware assurance; the app server still sees tags and could re-route seals undetected (W18). *Staged release (weekend-mvp):* the counselor first sees only the identifier, states and contact methods; contact details come after she records a conflict check (a server gate, not a cryptographic one: W21); she can then ask a survivor she has spoken with for her full report, and only that survivor's yes releases it (wrapped to the counselor's key on her device), with ledger rows for every check, request, consent, decline and revoke. Correctly kept off for any pilot |
+| Ops readiness | **D+** | No hosted demo URL, no entity, no legal-request policy, no audit, no CI. *weekend-mvp:* drafts in [ops/](ops/): incident-response plan (pending counsel), n-of-m deploy governance (proposed, not configured), hosting comparison (nothing provisioned), export-control question |
+| Escrow (matching) | **C+, demo-only** | Survivor self-probing is closed. *weekend-mvp* (details in §0): 2-of-3 threshold OPRF with separate holder processes, phone verify-then-forget, a separate matcher routing each group to one counselor by state, counselor-first staged release. Still demo-only: the operator can test guessed identifiers in both holder modes (W2, W14), attestation is simulated (W18), the contact gate is server-side (W21), phones are friction, not Sybil resistance (W13, W19). Correctly kept off for any pilot |
+
+## 0. Branch `weekend-mvp` (2026-11-11): what shipped
+
+Plan: [design/WEEKEND_MVP.md](design/WEEKEND_MVP.md) (with a Deviations section per feature). Every feature below was
+committed with typecheck, unit tests and e2e green, then fixed after an adversarial review (the "review fixes"
+commits). Threat-model rows: [threat-model.md](threat-model.md).
+
+| Feature | What it does | What is simulated, mocked or still open |
+|---|---|---|
+| Flaky e2e scenario 2 | Fixed a race between the evidence draft save and reopening her story (`foldInLateEvidence`) | — |
+| Threshold OPRF (W2, W14) | The OPRF key is a t-of-m Shamir key (default 2-of-3) with per-share DLEQ proofs, combined on her device; each holder can run as its own process with its own quota DB; account-level budget; holder tokens; key rotation via `MATRA_OPRF_ROTATE` | The dealer briefly knows the whole key (no DKG). In-process mode gives the operator every share; in remote mode the operator holds the holder-token key, so holders turn an offline guessing attack into an observable online one, they don't stop it. Holders aren't at separate institutions yet |
+| SMS verify-then-forget (W13, W19) | A phone must be confirmed by SMS before sealed matching; at most 2 accounts per phone; only a keyed hash with no account id is kept; VoIP refusal and anti-pumping caps | Demos run a **mock** SMS provider that verifies nothing; the Twilio Verify adapter is untested against the real service. Friction, not Sybil resistance. The SMS provider sees numbers (Q-013) |
+| Separate matcher (W15, W18) | `apps/matcher` assigns each matched group to ONE counselor, licensed where it happened, else where a survivor lives, from routing states sealed to the matcher; counselors can decline (conflict) | Attestation is **simulated**: a dev key signs a hash of the matcher's own source. It shows the protocol, not hardware assurance. Real platforms are placeholders that refuse to start ([ops/HOSTING.md](ops/HOSTING.md)) |
+| Staged release (W1, W21) | The counselor first sees the identifier, states and contact methods; contact details after she records a conflict check; a full report only with that survivor's yes, wrapped to the counselor's key on her device; every step ledgered | The contact gate is a server gate, not a cryptographic one (W21) |
+| Metadata minimization (W11) | No IPs or user agents in the DB, WAL, ledger or logs; daily-salted in-memory rate-limit keys; route-only request logs; expired sessions swept; web build audited for third-party requests; [data inventory](PRIVACY_DATA_INVENTORY.md) | Size padding, encrypted alias and the host's edge logs are not done |
+| Recovery code (W20) | An optional code only she holds (shown once) can set a new passphrase; the server stores only a scrypt hash and wrapped keys and cannot reset anyone | Shamir recovery with trusted people is later. Doesn't fix W5 (passphrase still PBKDF2) |
+| Ops docs | [Deploy governance](ops/DEPLOY_GOVERNANCE.md) (n-of-m approvals, signed tags, published hashes, emergency path), [incident response](ops/INCIDENT_RESPONSE.md) (**draft pending counsel**, plans as if a ciphertext-only leak may need notice: Q-055), [hosting](ops/HOSTING.md) (Nitro vs Confidential Space vs Azure; recommends Confidential Space for the matcher), [export control](ops/EXPORT_CONTROL.md) (question only: Q-056) | Process proposed, nothing configured: no branch protection, no CI, no approver organizations yet |
+| Research note | [design/PER_SUBMISSION_OPRF.md](design/PER_SUBMISSION_OPRF.md): per-submission OPRF evaluation (would close part of W13), deferred | Not built |
+| Legal research bank | 14 tech-adjacent questions researched and citation-checked (memo-ready), some sources still [VERIFY] | Research, not advice; nothing reviewed by counsel |
+
+**Not built on this branch:** the demo plan (WEEKEND_MVP.md §4: `demo:reset` / `demo` scripts, seeded demo profile,
+the "What the server sees" inspector, tech and lawyer walkthroughs, slides). `docs/DEMO_SCRIPT.md` still describes the
+older setup.
+
+### Verification run on 2026-11-11 (`weekend-mvp`, before the ops-docs commit)
+
+- `npm run typecheck`: clean across all workspaces.
+- `npm test`: **582 passing, 1 skipped** (crypto 191, matcher 28, server 140, web 223 + 1 skipped).
+- `npm run e2e`: **12 passed, 1 skipped** (the on-device voice test, skipped unless built with `MATRA_VOICE_HARNESS=1`), first run, no retries. `e2e:prod` was not rerun.
 
 ### Verification run on 2026-10-07
 
@@ -49,13 +78,16 @@ These come from GOVERNANCE.md §5, the whitepaper §6 and the threat model §6. 
 | Independent security audit | Not started; needs ~$30k+ or a funded route | OTF Security Lab, OSTIF, Least Authority, GitHub SOSF money |
 | Outside cryptographer review of the threat model | Not started | Academic crypto contacts (Varia, Ristenpart, Qin) |
 | Signed pilot partner with trained advocates | Not started | SAVE of Essex, healingSPACE, Partners (NJ) |
-| Published incident-response plan and law-enforcement request guide | Not written | You (templates exist elsewhere; counsel reviews) |
+| Published incident-response plan and law-enforcement request guide | *weekend-mvp:* incident-response plan drafted ([ops/INCIDENT_RESPONSE.md](ops/INCIDENT_RESPONSE.md), pending counsel; Q-055, Q-036); law-enforcement request guide not written (Q-039) | You (templates exist elsewhere; counsel reviews) |
 | **W3** attorney key substitution: out-of-band fingerprint check | Partly done (manual fingerprint in the UI; she must confirm it before sharing) | Code |
-| **W4** malicious client code: published build hashes, SRI, reproducible builds | CSP done; the rest isn't | Code |
+| **W4** malicious client code: published build hashes, SRI, reproducible builds | CSP done; release process proposed in [ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md) (signed tags, published hashes, n-of-m approvals), not yet configured or shown reproducible | Code |
 | **W5** Argon2id and a passphrase-strength floor | Not done. *2026-11-11 (weekend-mvp):* an optional recovery code only she holds (128 random bits, shown once, confirm-last-4) can now set a new passphrase; the server stores only a scrypt hash and wrapped keys and cannot reset anyone (W20). It does not change W5: the passphrase is still PBKDF2 | Code |
 | **W7** attorney-verification procedure, plus MFA or passkeys for attorneys | Manual CLI flag only | Code + partner terms |
 | **W8** device safety (residue on exit, neutral naming) | Partly done (Quick Exit, idle lock) | Code + advocate review |
 | **W11** metadata minimization (log retention, IP truncation, encrypted alias, size padding) | Partly done: no IPs or user agents on disk or in logs (daily-salted in-memory hashes for rate limits), route-only request logs (app server, key holders, matcher), expired sessions swept every 10 minutes, web build audited for third-party requests, [data inventory](PRIVACY_DATA_INVENTORY.md). Still to do: size padding for records, encrypted alias, edge-log settings at the host | Code + hosting |
+| **W14** key holders at separate institutions, remote mode, eligibility attested by someone other than the app server | Code supports remote holders; no institutions signed (Q-040, Q-041) | Partner institutions + counsel |
+| **W18** real enclave attestation for the matcher (replace the simulation) | Not started; comparison and recommendation in [ops/HOSTING.md](ops/HOSTING.md) | Code + hosting |
+| n-of-m deploy approvals from separate organizations | Proposed ([ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md)); needs approver organizations (Q-044) | Partner organizations + counsel |
 
 ### 3. Engineering backlog that would make the audit cheaper and the pilot safer
 
@@ -65,14 +97,14 @@ Short items that you or a contributor can do now, in rough priority order:
 2. Argon2id via WASM and a passphrase-strength meter (W5).
 3. Metadata minimization, the rest of W11: size padding for records and blobs, encrypted share alias (IPs and request logs are done).
 4. Published build hashes and an SRI manifest (W4).
-5. More crypto unit tests: tamper detection, wrong-key failure, key-wrap round trips and fingerprint stability. Auditors price by uncertainty, and 2 tests on the crypto package invites a higher quote.
+5. ~~More crypto unit tests.~~ *Mostly done on weekend-mvp:* `packages/crypto` has 191 tests (tamper, wrong key, threshold t−1, attestation, recovery). Still worth adding: key-wrap round trips and fingerprint stability for the original vault code. Auditors price by uncertainty.
 6. Attorney-first route (N1) and the private-draft vs sealed-statement split (N5). These are the two things lawyers are most likely to ask for.
 7. Resource directory (N12) with NJ county programs and hotlines.
 8. External ledger anchoring (W10, N9). Not blocking, but it's the next credibility step for "integrity" claims.
 
 ### 4. Leave alone for now
 
-- Escrow beyond the demo. Keep it off until OPRF plus a threshold key and a counselor model exist. In conversations, present it as a research question, not a feature.
+- Escrow beyond the demo. The OPRF, threshold key and counselor model now exist in demo form (weekend-mvp), but keep matching off for any pilot until the W13, W14, W18 and W21 residuals are closed. In conversations, present it as a research question, not a feature.
 - NY expansion, Spanish, Shamir recovery (recovery shares with people she trusts; the single recovery code she holds herself is built, W20). Do these after the NJ pilot.
 
 ## How to talk about readiness in one sentence
