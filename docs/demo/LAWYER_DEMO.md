@@ -94,9 +94,12 @@ in the browser before it is saved.
 
 **Open.** Profile B, sign in as `attorney.nj1` and open the incoming share (Jane's, or Riley's, which is already there).
 
-- The case file is decrypted in the attorney's browser. Point out the **verified** badge: the attorney's browser
-  recomputes the record's hash and checks it against the ledger entry.
-- Evidence files: **Decrypt & verify**. A file whose hash doesn't match is withheld.
+- The case file is decrypted in the attorney's browser. Point out the **Verification** panel, in plain words: *"This
+  account has not changed since it was sealed on …"*, *"Ledger chain intact through entry N"*. The browser re-hashed
+  the account itself and recomputed the ledger chain; nobody has to run a command. **Technical details** under each
+  line show the hashes for anyone who wants them.
+- Evidence: **Check all 3 evidence files** (Riley's share has three fictional text files). The line turns to *"3 of 3
+  evidence files match"*. A file whose hash doesn't match is named in red and its download is withheld.
 
 **The PDF.** Click **Download incident summary (PDF)**. Walk through it:
 
@@ -108,9 +111,14 @@ in the browser before it is saved.
 | *Force, Strangulation & Substances, as Reported by the Survivor* | Her answers are quoted as given, including "I'm not sure". |
 | *Disclosures (Outcry Witnesses)* | Who she told, when, how, and what was said. |
 | *Evidence Inventory* | Each file with its SHA-256 hash. Images had location data stripped on her device, so the stored copy is a derivative. She is told to keep the original file and device. |
-| *Integrity & Chain of Custody* | Record ID, ciphertext hash, ledger sequence number, entry hash and previous hash, plus a short *How to verify* section (for example `shasum -a 256 <file>`). |
+| *Integrity & Chain of Custody* | Record ID, ciphertext hash, ledger sequence number, entry hash and previous hash. *How to verify* now starts with *"Open <app>/verify and drop this PDF and the evidence files in"*; the manual method (`shasum -a 256`, the entry-hash formula) is a short appendix for experts. |
 | *Survivor Attestation* | A declaration ("true to the best of my recollection") with signature lines, unsigned unless she signs it, and a "Received by (agency use)" block. Ask the room whether that block belongs in a document that isn't prepared for police. |
 
+- **Check a file.** Back on *Shared with you*, click **Check a file** and drop in the PDF and the three files you just
+  downloaded. *"This is what a clerk, opposing counsel or the client can do with the PDF and files you send them: no
+  account, nothing uploaded. The browser reads the record hash out of the PDF, asks our ledger for that one entry, and
+  checks the files and the chain itself."* Then drop an edited copy of one file: it is named in red. Be plain about the
+  limit: the checker can't read the account, so it can't check the PDF's printed words; the attorney portal does that.
 - *"The hashes support authentication and integrity. They don't get anything past a hearsay or confrontation
   objection, and they don't show that the content is true. Before anyone relies on the ledger in court, it needs
   outside timestamp anchoring, a written procedure and a named custodian."*

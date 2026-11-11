@@ -3,6 +3,7 @@ import type { BriefOptions } from './types';
 import { BRIEF_TITLE, INCIDENT_SUMMARY_TITLE, briefSections } from './sections';
 import { renderPdf } from './pdf/render';
 import { formatTimestamp } from './format';
+import { summaryVerification } from './verification';
 
 /**
  * "Incident Summary in the Survivor's Own Words", generated entirely in the browser (zero-knowledge: the server never
@@ -36,6 +37,7 @@ export async function generatePoliceBrief(record: IntakeRecord, opts: BriefOptio
       subject: 'Incident summary in the survivor’s own words, prepared by the survivor',
       date: generatedAt,
     },
+    verification: summaryVerification(record, o, generatedAt),
   });
 }
 

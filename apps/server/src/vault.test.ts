@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { decryptJSON, sha256Hex, unwrapKeyWithMaster } from '@matra/crypto';
+import { checkLedgerProof, decryptJSON, sha256Hex, unwrapKeyWithMaster } from '@matra/crypto';
+import type { LedgerProofResponse } from '@matra/shared';
 import { createRecord, makeApp, registerUser, uploadBlob } from './test-helpers.js';
 import { computeEntryHash } from './ledger.js';
 import { GENESIS_HASH } from './db.js';
@@ -117,5 +118,72 @@ describe('vault records + WORM ledger', () => {
     expect(noKey.body.code).toBe('invalid_wrapped_key');
     const wrongType = await request(app).post('/api/vault/blobs').set(a.auth).send({ x: 1 });
     expect(wrongType.status).toBe(415);
+  });
+});
+
+describe('ledger proof lookup (the in-browser checker, /verify)', () => {
+  it('answers only exact sealed-content hashes, with bare links to the head that the client can check', async () => {
+    const { app, db } = makeApp();
+    const a = await registerUser(app, 'proof.a');
+    const b = await registerUser(app, 'proof.b');
+    const rec = (await createRecord(app, a, { story: 'mine' })).res.body;
+    const blob = (await uploadBlob(app, a)).res.body;
+    await createRecord(app, b, { story: 'someone else' });
+
+    const res = await request(app).post('/api/ledger/proof').send({ contentHashes: [rec.record.contentHash, blob.blob.contentHash] });
+    expect(res.status).toBe(200);
+    const proof = res.body as LedgerProofResponse;
+    expect(proof.entries.map((e) => [e.type, e.subjectId])).toEqual([
+      ['record.sealed', rec.record.id],
+      ['blob.sealed', blob.blob.id],
+    ]);
+    // links carry no other entry's type, subject or time
+    expect(proof.links.map((l) => Object.keys(l).sort())).toEqual(proof.links.map(() => ['entryHash', 'prevHash', 'seq']));
+    expect(proof.links.map((l) => l.seq)).toEqual([1, 2, 3]);
+    expect(proof.head.seq).toBe(3);
+    expect(checkLedgerProof(proof)).toMatchObject({ ok: true, throughSeq: 3, headSeq: 3 });
+
+    // unknown hash: nothing, and no links
+    const none = (await request(app).post('/api/ledger/proof').send({ contentHashes: ['f'.repeat(64)] })).body as LedgerProofResponse;
+    expect(none).toMatchObject({ entries: [], links: [], truncated: false });
+    // no prefixes, ids or empty lists: exact 64-hex hashes only
+    for (const contentHashes of [[rec.record.contentHash.slice(0, 16)], [rec.record.id], [], Array(33).fill('a'.repeat(64))])
+      expect((await request(app).post('/api/ledger/proof').send({ contentHashes })).status).toBe(400);
+    // share, account and other non-content entries are not answered, even by their exact hash
+    expect((await request(app).post('/api/account/delete').set(b.auth)).status).toBe(200);
+    const shredded = db.prepare(`SELECT content_hash FROM ledger WHERE type = 'account.shredded'`).get() as { content_hash: string };
+    expect((await request(app).post('/api/ledger/proof').send({ contentHashes: [shredded.content_hash] })).body.entries).toEqual([]);
+  });
+
+  it('is rate-limited per client', async () => {
+    const { app } = makeApp();
+    let last = 0;
+    for (let i = 0; i < 31; i++) last = (await request(app).post('/api/ledger/proof').send({ contentHashes: ['a'.repeat(64)] })).status;
+    expect(last).toBe(429);
+  });
+});
+
+describe('checkLedgerProof (client-side chain check)', () => {
+  it('rejects a tampered entry, a broken link, a gap, and a chain that does not reach the head', async () => {
+    const { app } = makeApp();
+    const a = await registerUser(app, 'chain.a');
+    const hashes: string[] = [];
+    for (let i = 0; i < 4; i++) hashes.push((await createRecord(app, a, { i })).res.body.record.contentHash);
+    const proof = (await request(app).post('/api/ledger/proof').send({ contentHashes: [hashes[1]] })).body as LedgerProofResponse;
+    expect(checkLedgerProof(proof)).toMatchObject({ ok: true, throughSeq: 4 });
+
+    const tampered = structuredClone(proof);
+    tampered.entries[0]!.timestamp = '2020-01-01T00:00:00.000Z'; // back-dated
+    expect(checkLedgerProof(tampered)).toMatchObject({ ok: false, brokenAtSeq: 2 });
+    const broken = structuredClone(proof);
+    broken.links[2]!.prevHash = 'b'.repeat(64);
+    expect(checkLedgerProof(broken)).toMatchObject({ ok: false, brokenAtSeq: 4 });
+    const gap = structuredClone(proof);
+    gap.links.splice(1, 1);
+    expect(checkLedgerProof(gap).ok).toBe(false);
+    const shortOfHead = structuredClone(proof);
+    shortOfHead.links.pop();
+    expect(checkLedgerProof(shortOfHead).problem).toMatch(/head/);
+    expect(checkLedgerProof({ ...shortOfHead, truncated: true })).toMatchObject({ ok: true, throughSeq: 3, truncated: true });
   });
 });

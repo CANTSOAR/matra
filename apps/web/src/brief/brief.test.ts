@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import type { IntakeRecord } from '@matra/shared';
-import { briefSections, generateIncidentSummary, generatePoliceBrief, generateVccoDraft, incidentSummaryFilename, vccoSections } from './index';
+import { briefSections, generateIncidentSummary, generatePoliceBrief, generateVccoDraft, incidentSummaryFilename, readVerification, vccoSections } from './index';
 import type { BriefSection } from './types';
 import { minimalRecord, sampleBriefOptions, sampleRecord } from './fixtures';
 import { makeSanitizer, wrapText } from './pdf/text';
@@ -204,6 +204,27 @@ describe('PDF generation', () => {
     expect(isPdf(bytes)).toBe(true);
     expect(await pageCount(bytes)).toBeGreaterThan(30);
   }, 60_000);
+
+  it('embeds machine-readable verification data that the checker reads back, and points to /verify', async () => {
+    const bytes = await generatePoliceBrief(sampleRecord, { ...sampleBriefOptions, verifyUrl: 'https://matra.example/verify' });
+    const v = await readVerification(bytes);
+    expect(v).toMatchObject({
+      v: 1,
+      kind: 'matra-incident-summary',
+      recordId: sampleBriefOptions.recordId,
+      recordContentHash: sampleBriefOptions.recordContentHash,
+      ledgerEntryId: sampleBriefOptions.ledgerEntry.id,
+      ledgerSeq: sampleBriefOptions.ledgerEntry.seq,
+      generatedAt: '2026-10-06T15:30:00.000Z',
+    });
+    expect(v!.evidence.map((e) => e.sha256)).toEqual(sampleRecord.evidence.map((e) => e.sha256));
+    // other PDFs (the VCCO draft, or anything else) carry none
+    expect(await readVerification(await generateVccoDraft(sampleRecord))).toBeNull();
+    expect(await readVerification(new TextEncoder().encode('not a pdf'))).toBeNull();
+    const text = joined(briefSections(sampleRecord, { ...sampleBriefOptions, verifyUrl: 'https://matra.example/verify' }));
+    expect(text).toContain('Open https://matra.example/verify and drop this PDF and the evidence files in.');
+    expect(text).toContain('Appendix: checking by hand');
+  });
 
   it('exposes the incident-summary alias and filename', async () => {
     expect(generateIncidentSummary).toBe(generatePoliceBrief);

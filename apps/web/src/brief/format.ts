@@ -189,3 +189,13 @@ export function immediateSafetyAnswer(v: 'safe' | 'not_safe' | 'unsure' | undefi
     default: return NOT_PROVIDED;
   }
 }
+
+/** The in-browser checker's path (apps/web/src/verify). */
+export const VERIFY_PATH = '/verify';
+
+/** Where to check a summary: this app's own origin when running in a browser. */
+export function verifyPageUrl(opts: { verifyUrl?: string } = {}): string {
+  if (opts.verifyUrl) return opts.verifyUrl;
+  const origin = typeof globalThis.location !== 'undefined' && /^https?:/.test(globalThis.location.origin) ? globalThis.location.origin : '';
+  return `${origin}${VERIFY_PATH}`;
+}

@@ -21,7 +21,8 @@
  *                           counselor.pa get nothing.
  *               taylor.demo names the same profile in her sealed story but said NO to sealed matching: nothing about it
  *                           leaves her vault, and she is in no group.
- *               riley.demo  sealed story already shared with attorney.nj1 (the attorney part of the demo, no waiting).
+ *               riley.demo  sealed story and three (fictional, text) evidence files already shared with attorney.nj1
+ *                           (the attorney part of the demo, no waiting: the verification panel and /verify).
  *
  * Refuses to run unless MATRA_DEMO_MODE=1 and the database is under a `.demo` directory (it registers fixed accounts
  * with published passphrases). Not idempotent on its own: demo:reset deletes the demo databases first.
@@ -32,6 +33,7 @@ import type { AddressInfo } from 'node:net';
 import {
   DEFAULT_KDF_ITERATIONS,
   deriveKeys,
+  encryptBlob,
   encryptJSON,
   generateContentKey,
   generateIdentity,
@@ -48,7 +50,7 @@ import {
   type MatchPins,
   type MatchTransport,
 } from '@matra/crypto';
-import type { AttorneyProfile, AuthResponse, IntakeRecord, MatchContactPreferences, MatchStates, RegisterRequest } from '@matra/shared';
+import type { AttorneyProfile, AuthResponse, EvidenceItem, EvidenceKind, IntakeRecord, MatchContactPreferences, MatchStates, RegisterRequest } from '@matra/shared';
 import { createApp, flushPhoneTokens, getDb } from './app.js';
 import {
   loadDemoMode,
@@ -160,7 +162,29 @@ const RILEY: StorySeed = {
   contact: { phone: '(555) 010-0204', safe: { phone: true, text: true, email: false, voicemail: false } },
 };
 
-function intakeRecord(s: StorySeed): IntakeRecord {
+/** Riley's evidence (fictional): text files, so the attorney's verification panel and /verify have files to check. */
+const RILEY_EVIDENCE: Array<{ fileName: string; kind: EvidenceKind; description: string; text: string }> = [
+  {
+    fileName: 'demo-texts-with-landlord.txt',
+    kind: 'message_export',
+    description: 'Texts he sent before letting himself in (fictional demo file)',
+    text: 'DEMO — FICTIONAL\nMon 7:42 pm  Landlord: Coming by to look at the heater.\nMon 7:43 pm  Me: Please not tonight, I am home.\nMon 8:05 pm  Landlord: Already here.\n',
+  },
+  {
+    fileName: 'demo-heating-complaint.txt',
+    kind: 'document',
+    description: 'The heating complaint I sent the week before (fictional demo file)',
+    text: 'DEMO — FICTIONAL\nTo the building office: the heating in my unit has not worked for nine days. Please fix it.\n',
+  },
+  {
+    fileName: 'demo-dates-he-came-in.txt',
+    kind: 'document',
+    description: 'My notes of the dates he came in without asking (fictional demo file)',
+    text: 'DEMO — FICTIONAL\nOct 3, evening. Oct 9, morning. Oct 14, evening (kitchen).\n',
+  },
+];
+
+function intakeRecord(s: StorySeed, evidence: EvidenceItem[] = []): IntakeRecord {
   return {
     schemaVersion: 1,
     completedAt: new Date().toISOString(),
@@ -182,7 +206,7 @@ function intakeRecord(s: StorySeed): IntakeRecord {
     disclosures: [],
     medical: { soughtCare: false },
     priorReports: [],
-    evidence: [],
+    evidence,
     safety: { immediateSafety: 'safe' },
     financialImpact: {},
     goals: { policeReport: 'undecided', attorney: 'yes', compensation: 'undecided', protectiveOrder: 'undecided' },
@@ -263,10 +287,39 @@ async function main() {
   }
   type Survivor = Awaited<ReturnType<typeof register>>;
 
-  /** Encrypt and upload a sealed ('final') story, as the web app's review screen does. */
-  async function sealStory(u: Survivor, s: StorySeed, escrowedHashes: string[] = []) {
+  /** Encrypt and upload one evidence file, as the web app's Evidence screen does (each file has its own key). */
+  async function uploadEvidence(u: Survivor, f: (typeof RILEY_EVIDENCE)[number]) {
+    const bytes = new TextEncoder().encode(f.text);
     const key = await generateContentKey();
-    const payload = { kind: 'final', record: intakeRecord(s), escrowedHashes, savedAt: new Date().toISOString() };
+    const res = await fetch(`${base}/api/vault/blobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        Authorization: `Bearer ${u.token}`,
+        'X-Owner-Wrapped-Key': Buffer.from(JSON.stringify(await wrapKeyWithMaster(key, u.masterKey))).toString('base64'),
+      },
+      body: Buffer.from(await encryptBlob(bytes, key)),
+    });
+    if (!res.ok) throw new Error(`POST /api/vault/blobs → ${res.status}`);
+    const { blob } = (await res.json()) as { blob: { id: string } };
+    const item: EvidenceItem = {
+      id: blob.id,
+      kind: f.kind,
+      fileName: f.fileName,
+      mimeType: 'text/plain',
+      sizeBytes: bytes.length,
+      sha256: await sha256Hex(bytes),
+      blobId: blob.id,
+      description: f.description,
+      metadataStripped: true,
+    };
+    return { item, key };
+  }
+
+  /** Encrypt and upload a sealed ('final') story, as the web app's review screen does. */
+  async function sealStory(u: Survivor, s: StorySeed, escrowedHashes: string[] = [], evidence: EvidenceItem[] = []) {
+    const key = await generateContentKey();
+    const payload = { kind: 'final', record: intakeRecord(s, evidence), escrowedHashes, savedAt: new Date().toISOString() };
     const res = await call<{ record: { id: string; createdAt: string } }>(u.token, 'POST', '/api/vault/records', {
       envelope: await encryptJSON(payload, key),
       ownerWrappedKey: await wrapKeyWithMaster(key, u.masterKey),
@@ -352,7 +405,9 @@ async function main() {
     await sealStory(taylor, TAYLOR); // she said no to sealed matching: nothing is sealed, no phone asked
 
     const riley = await register('riley.demo', 'survivor');
-    const rileyRecord = await sealStory(riley, RILEY);
+    const rileyFiles = [];
+    for (const f of RILEY_EVIDENCE) rileyFiles.push(await uploadEvidence(riley, f));
+    const rileyRecord = await sealStory(riley, RILEY, [], rileyFiles.map((f) => f.item));
     const { attorneys } = await call<{ attorneys: AttorneyProfile[] }>(riley.token, 'GET', '/api/attorneys');
     const alex = attorneys.find((a) => a.displayName === ATTORNEYS[0]!.profile.displayName)!;
     const fp = await publicKeyFingerprint(alex.publicKey);
@@ -361,19 +416,19 @@ async function main() {
       attorneyId: alex.userId,
       recipientWrappedKey: await wrapKeyForRecipient(rileyRecord.key, alex.publicKey),
       attorneyKeyFingerprint: fp,
-      blobs: [],
+      blobs: await Promise.all(rileyFiles.map(async (f) => ({ blobId: f.item.blobId!, recipientWrappedKey: await wrapKeyForRecipient(f.key, alex.publicKey) }))),
       consentStatement: [
         `I, "riley.demo", choose to share my sealed Matra file (sealed ${rileyRecord.createdAt}) with ${alex.displayName} of ${alex.organization}, a verified attorney, so that they can advise me.`,
-        'I am sharing: my written account; the incident summary in my own words, prepared from my account.',
+        'I am sharing: my written account; my evidence files; the incident summary in my own words, prepared from my account.',
         `It will be encrypted on my device so that only the holder of the key with fingerprint ${fp} can open it.`,
         'Access ends after 90 days unless I renew it. (Demo seed.)',
         `Agreed at ${new Date().toISOString()}.`,
       ].join('\n'),
-      scope: ['record', 'brief'],
+      scope: ['record', 'evidence', 'brief'],
       survivorAlias: 'riley.demo',
       expiresInDays: 90,
     });
-    console.log('[demo-seed] riley.demo shared her sealed story with attorney.nj1');
+    console.log(`[demo-seed] riley.demo shared her sealed story and ${rileyFiles.length} evidence files with attorney.nj1`);
 
     // Forward everything to the matcher now (normally right after each response), and write the buffered phone-token
     // counts (normally 10–60 minutes later, so their time does not point to an account: W19).

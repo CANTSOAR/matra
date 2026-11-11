@@ -38,6 +38,7 @@ const AttorneyCase = page(() => import('./attorney/Attorney'), 'AttorneyCase');
 const CounselorPortal = page(() => import('./counselor/Counselor'), 'CounselorPortal');
 const CounselorReport = page(() => import('./counselor/CounselorReport'), 'CounselorReport');
 const ReportRequest = page(() => import('./counselor/ReportRequest'), 'ReportRequest');
+const VerifyPage = page(() => import('./verify/VerifyPage'), 'VerifyPage');
 
 /** A calm placeholder while a screen's code arrives. */
 function Lazy({ children }: { children: ReactNode }) {
@@ -53,6 +54,7 @@ export function AppRoutes() {
         <Route path="start" element={<StartScreen />} />
         <Route path="signin" element={<SignInScreen />} />
         <Route path="recover" element={<Lazy><RecoverScreen /></Lazy>} />
+        <Route path="verify" element={<Lazy><VerifyPage /></Lazy>} />
 
         <Route path="vault" element={<RequireSession role="survivor"><Lazy><Dashboard /></Lazy></RequireSession>} />
         <Route path="vault/story" element={<RequireSession role="survivor"><Lazy><Story /></Lazy></RequireSession>} />
@@ -82,6 +84,17 @@ export function AppRoutes() {
 }
 
 /**
+ * The one deep link: the incident summary PDF prints "<app>/verify" (the file checker, public). Read once at start-up;
+ * the address bar then goes back to "/" like every other page.
+ */
+function startPath(): string {
+  if (typeof window === 'undefined' || window.location.pathname !== '/verify') return '/';
+  window.history.replaceState(null, '', '/');
+  return '/verify';
+}
+const START = startPath();
+
+/**
  * MemoryRouter on purpose: in-app navigation never touches the browser URL or history,
  * so the address bar stays neutral and Quick exit's location.replace() leaves no
  * back-button trail into the app.
@@ -89,7 +102,7 @@ export function AppRoutes() {
 export default function App() {
   return (
     <SessionProvider>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[START]}>
         <AppRoutes />
       </MemoryRouter>
     </SessionProvider>

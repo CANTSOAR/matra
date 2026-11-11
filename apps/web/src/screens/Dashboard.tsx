@@ -357,6 +357,12 @@ export function Dashboard() {
                 ))}
               </ul>
             )}
+            {sealed.length > 0 && (
+              <p className="small muted" style={{ margin: 0 }}>
+                Want to check a summary PDF or an evidence file later, for example one you gave someone?{' '}
+                <Link to="/verify" data-testid="home-verify-link">Check a file</Link>. It’s checked on your device and never uploaded.
+              </p>
+            )}
           </>
         )}
       </section>

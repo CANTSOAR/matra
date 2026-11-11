@@ -3,6 +3,7 @@
  * fictional accounts, three key holders, the separate matcher, and the Server view next to the app. All data is
  * fictional. Tests run in order on one freshly reset stack.
  */
+import fs from 'node:fs';
 import type { Page } from '@playwright/test';
 import type { InspectorSnapshot } from '@matra/shared';
 import { addToStory, chip, expect, fill, moreDetails, nav, openTopic, savePage, sealFromReview, signIn, signOut, storyMap, storySafety, test, verifyPhone } from './helpers';
@@ -66,11 +67,37 @@ test('1. Server view: every process of the seeded stack, and nothing anyone wrot
   expect(raw).not.toContain('demo_handle');
 });
 
-test('2. the attorney opens the story Riley shared with them (seeded), decrypted on the attorney’s device', async ({ page }) => {
+test('2. the attorney opens the story Riley shared with them (seeded), decrypted on the attorney’s device, and the browser verifies it; the PDF and files check out on /verify', async ({ page }) => {
   await signIn(page, 'attorney.nj1', ATTORNEY_PASS, 'attorney');
   await page.getByRole('link', { name: 'Open' }).first().click();
   await expect(page.getByRole('heading', { name: 'Client: riley.demo' })).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('main')).toContainText('He was my landlord.');
+  const checks = page.getByTestId('case-checks');
+  await expect(checks.locator('[data-check="account"]')).toContainText('This account has not changed since it was sealed on');
+  await expect(checks.locator('[data-check="chain"]')).toContainText(/Ledger chain intact through entry \d+\./);
+  await page.getByRole('button', { name: 'Check all 3 evidence files' }).click();
+  await expect(checks.locator('[data-check="evidence"]')).toContainText('3 of 3 evidence files match.', { timeout: 30_000 });
+  await expect(checks.locator('[data-tone="bad"]')).toHaveCount(0);
+
+  // The files and the summary PDF, as they would be emailed on, checked in the browser on /verify
+  const files: Array<{ name: string; mimeType: string; buffer: Buffer }> = [];
+  for (const link of await page.getByRole('link', { name: 'Download (verified ✓)' }).all()) {
+    const dl = page.waitForEvent('download');
+    await link.click();
+    const d = await dl;
+    files.push({ name: d.suggestedFilename(), mimeType: 'text/plain', buffer: fs.readFileSync((await d.path())!) });
+  }
+  expect(files).toHaveLength(3);
+  const pdfDl = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download incident summary (PDF)' }).click();
+  const pdf = fs.readFileSync((await (await pdfDl).path())!);
+  await page.getByRole('link', { name: '← All files' }).click();
+  await page.getByRole('link', { name: 'Check a file' }).click();
+  await page.getByLabel('Choose files to check').setInputFiles([{ name: 'riley-summary.pdf', mimeType: 'application/pdf', buffer: pdf }, ...files]);
+  const result = page.getByTestId('verify-result');
+  await expect(result).toHaveAttribute('data-tone', 'ok', { timeout: 30_000 });
+  await expect(result).toContainText('3 of 3 evidence files match.');
+  await expect(result).toContainText(/Ledger chain intact through entry \d+\./);
   await page.getByTestId('lock-signout').click();
   await expect(page.getByRole('heading', { name: 'For attorneys' })).toBeVisible();
 });

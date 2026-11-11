@@ -110,7 +110,7 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 
 | Data | Why | Lifetime |
 |---|---|---|
-| Per-client rate-limit keys: `HMAC-SHA256(daily salt, IP)` | sign-in/registration, SMS sends, attestation proxy limits | window ≤ 24 h; a timer at midnight UTC zero-fills the salt and empties these limiters even if no request arrives; salt never written |
+| Per-client rate-limit keys: `HMAC-SHA256(daily salt, IP)` | sign-in/registration, SMS sends, attestation proxy and ledger-proof (`/verify`) limits | window ≤ 24 h; a timer at midnight UTC zero-fills the salt and empties these limiters even if no request arrives; salt never written |
 | Per-account / per-username rate-limit counters | brute-force and SMS-spend limits | window ≤ 24 h; expired entries swept every 10 minutes |
 | SMS send limiter key `account id \| phone token` (`app.ts smsStartPerAccountPhone`) | caps code requests per (account, number) | 1 h window, then swept within 10 minutes. This is the account-to-phone-token link that W19 keeps off disk: it exists in memory for that hour, so a memory snapshot taken then links them |
 | Phone verification challenge (account id, E.164 number, provider ref) | to check the code she types | ≤ 10 minutes, then swept within 10 minutes |

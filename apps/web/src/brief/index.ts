@@ -8,6 +8,8 @@ export { briefSections, BRIEF_TITLE, INCIDENT_SUMMARY_TITLE, PREPARED_BY_NOTE, V
 export { generatePoliceBrief, generateIncidentSummary } from './police';
 export { generateVccoDraft, vccoSections, VCCO } from './vcco';
 export { BriefPreview } from './BriefPreview';
+export { readVerification, verifyPageUrl, VERIFY_PATH } from './verification';
+export type { SummaryVerification } from './verification';
 export type { BriefPreviewProps } from './BriefPreview';
 
 /** Trigger a browser download of PDF bytes. */

@@ -235,6 +235,10 @@ export const reportConsentRequest = z.object({
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
+export const ledgerProofRequest = z.object({
+  contentHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/, 'content hashes are 64 lowercase hex chars')).min(1).max(32),
+});
+
 export const attorneysQuery = z.object({
   state: usps.optional(),
 });

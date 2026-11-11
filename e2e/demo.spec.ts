@@ -374,18 +374,51 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');
   await page.getByRole('link', { name: 'Open' }).first().click();
   await expect(page.getByRole('heading', { name: `Client: ${ALIAS_A}` })).toBeVisible({ timeout: 60_000 });
-  const proof = page.locator('section', { has: page.getByRole('heading', { name: 'Integrity proof' }) });
-  await expect(proof.getByText('Verified ✓')).toBeVisible();
+  // The verification panel: checked in the browser, in plain language
+  const checks = page.getByTestId('case-checks');
+  await expect(page.getByTestId('case-verification').getByText('Verified ✓')).toBeVisible();
+  await expect(checks.locator('[data-check="account"]')).toHaveAttribute('data-tone', 'ok');
+  await expect(checks.locator('[data-check="account"]')).toContainText('This account has not changed since it was sealed on');
+  await expect(checks.locator('[data-check="evidence"]')).toContainText('2 evidence files were shared. Not checked yet.');
+  await expect(checks.locator('[data-check="chain"]')).toContainText(/Ledger chain intact through entry \d+\./);
   expect(await page.locator('.brief-verbatim-text').allTextContents()).toContain(NARRATIVE);
   const ev = page.locator('section', { has: page.getByRole('heading', { name: 'Evidence', exact: true }) });
   const photo = ev.locator('li', { hasText: 'hallway.jpg' });
   await photo.getByRole('button', { name: 'Decrypt & verify' }).click();
   await expect(photo.getByText('Verified ✓', { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(checks.locator('[data-check="evidence"]')).toContainText('1 of 2 evidence files match so far. 1 file not checked yet.');
+  await page.getByRole('button', { name: 'Check all 1 evidence file' }).click();
+  await expect(checks.locator('[data-check="evidence"]')).toContainText('2 of 2 evidence files match.', { timeout: 30_000 });
+  await expect(checks.locator('[data-tone="bad"]')).toHaveCount(0);
   const dl = page.waitForEvent('download');
   await photo.getByRole('link', { name: 'Download (verified ✓)' }).click();
-  const got = fs.readFileSync((await (await dl).path())!);
+  const photoPath = (await (await dl).path())!;
+  const got = fs.readFileSync(photoPath);
   expect(hasExifGps(got)).toBe(false);
   await shot(page, '12-attorney-case');
+
+  // The PDF carries what the checker needs; "Check a file" verifies it with the evidence, in the browser
+  const pdfDl = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download incident summary (PDF)' }).click();
+  const pdfPath = (await (await pdfDl).path())!;
+  expect(fs.readFileSync(pdfPath).subarray(0, 5).toString()).toBe('%PDF-'); // its verification data is read back on /verify below
+  await page.getByRole('link', { name: '← All files' }).click();
+  await page.getByRole('link', { name: 'Check a file' }).click();
+  await expect(page.getByTestId('verify-title')).toBeVisible();
+  await page.getByLabel('Choose files to check').setInputFiles([
+    { name: 'summary.pdf', mimeType: 'application/pdf', buffer: fs.readFileSync(pdfPath) },
+    { name: 'hallway.jpg', mimeType: 'image/jpeg', buffer: got },
+  ]);
+  const result = page.getByTestId('verify-result');
+  await expect(result).toHaveAttribute('data-tone', 'ok', { timeout: 30_000 });
+  await expect(result).toContainText('The sealed account behind this summary is in the ledger: sealed on');
+  await expect(result).toContainText('1 of 2 evidence files match so far.');
+  await expect(result).toContainText(/Ledger chain intact through entry \d+\./);
+  // a changed file is named in red
+  await page.getByLabel('Choose files to check').setInputFiles([{ name: 'edited.jpg', mimeType: 'image/jpeg', buffer: Buffer.concat([got, Buffer.from([0])]) }]);
+  await expect(result).toHaveAttribute('data-tone', 'bad');
+  await expect(result).toContainText('edited.jpg doesn’t match any file in this summary.');
+  await shot(page, '12b-verify-file', { mobile: false });
   await signOut(page);
 
   // Survivor sees the access, then revokes

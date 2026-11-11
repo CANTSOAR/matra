@@ -71,6 +71,7 @@ import {
   envelopeContentHash,
   getLedgerEntry,
   ledgerHead,
+  ledgerProof,
   newId,
   sha256Hex,
   verifyLedger,
@@ -983,6 +984,20 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   app.get('/api/ledger/head', (_req, res) => {
     res.json(ledgerHead(db));
+  });
+
+  // The in-browser checker (/verify) and the attorney portal: sealed-content entries by the EXACT hashes the requester
+  // already holds (a file, or the hashes printed in a summary PDF), plus bare chain links to the head (ledger.ts
+  // ledgerProof). No prefixes, ids or ranges, so it cannot list the ledger. Public, like the rest of the ledger, so a
+  // court clerk can check a PDF without an account; rate-limited per client (daily-salted HMAC of the IP, in memory
+  // only: privacy.ts) and globally. Nothing about the request is stored.
+  const proofLimiter = clients.limiter(30, 60_000);
+  const proofGlobal = new RateLimiter(600, 60_000);
+  app.post('/api/ledger/proof', (req, res) => {
+    if (!proofLimiter.hit(clients.key(req)) || !proofGlobal.hit('all'))
+      throw new HttpError(429, 'rate_limited', 'Too many checks. Please wait a minute and try again.');
+    const body = parse(S.ledgerProofRequest, req.body);
+    res.json(ledgerProof(db, body.contentHashes));
   });
 
   // ════════════ attorneys ════════════

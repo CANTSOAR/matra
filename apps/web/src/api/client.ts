@@ -26,6 +26,8 @@ import type {
   EscrowEntry,
   Envelope,
   LedgerEntry,
+  LedgerProofRequest,
+  LedgerProofResponse,
   LedgerVerifyResponse,
   ReportConsentRequest,
   ReportRelease,
@@ -204,6 +206,10 @@ export class ApiClient {
   }
   ledgerHead() {
     return this.json<{ seq: number; entryHash: string }>('GET', '/api/ledger/head');
+  }
+  /** Public: sealed-content ledger entries for exactly these hashes, plus chain links to the head (the checker). */
+  ledgerProof(contentHashes: string[]) {
+    return this.json<LedgerProofResponse>('POST', '/api/ledger/proof', { contentHashes } satisfies LedgerProofRequest);
   }
 
   // ── attorneys & shares ──

@@ -924,3 +924,23 @@ dl.proof dd { margin: 0; }
   a.next-step:hover,
   .quick-exit:hover { transform: none; }
 }
+
+/* Integrity check results (verify/CheckLines.tsx): the /verify page and the attorney's verification panel */
+.check-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.check-line { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: var(--matra-radius); background: var(--matra-surface-2); }
+.check-line.ok { background: var(--matra-success-soft); }
+.check-line.bad { background: color-mix(in srgb, var(--matra-danger) 9%, var(--matra-surface)); }
+.check-mark {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-weight: 800;
+  color: var(--matra-surface);
+  background: var(--matra-muted);
+}
+.check-line.ok .check-mark { background: var(--matra-success); }
+.check-line.bad .check-mark { background: var(--matra-danger); }
+.check-details { margin: 8px 0 0; padding-left: 1.1em; overflow-wrap: anywhere; display: grid; gap: 4px; }

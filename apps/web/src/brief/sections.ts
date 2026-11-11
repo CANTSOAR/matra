@@ -3,7 +3,7 @@ import type { BriefBlock, BriefOptions, BriefRow, BriefSection } from './types';
 import {
   AGENCY_TYPE_LABELS, DISCLOSURE_METHOD_LABELS, EVIDENCE_KIND_LABELS, FORCE_LABELS, IDENTIFIER_LABELS,
   INCIDENT_TYPE_LABELS, NOT_PROVIDED, PHYSICAL_EVIDENCE_LABELS, SUBSTANCE_LABELS, formatBytes, formatDate,
-  formatTimestamp, goalLabel, has, immediateSafetyAnswer, immediateSafetyOf, orNP, parseIsoDate, survivorAnswered, yesNo,
+  formatTimestamp, goalLabel, has, immediateSafetyAnswer, immediateSafetyOf, orNP, parseIsoDate, survivorAnswered, verifyPageUrl, yesNo,
 } from './format';
 
 /** The document's name, everywhere it is shown (PDF title, header, preview, buttons). */
@@ -528,29 +528,34 @@ function integrityBlocks(r: IntakeRecord, opts: BriefOptions): BriefBlock[] {
       text: 'The record hash supplied with this brief does not match the hash attested in the ledger entry. Treat the integrity data as unverified.',
     });
   }
+  const url = verifyPageUrl(opts);
   blocks.push({ kind: 'subheading', text: 'How to verify' });
   blocks.push({
     kind: 'paragraph',
     text:
-      '1. Evidence files. Compute the SHA-256 of each file exactly as received (macOS/Linux: shasum -a 256 <file>; ' +
-      'Windows: certutil -hashfile <file> SHA256) and compare it with the value in the Evidence Inventory. A match ' +
-      'shows the file is bit-for-bit identical to the one the survivor sealed.',
+      `Open ${url} and drop this PDF and the evidence files in. The check runs in your own browser: the files are ` +
+      'never uploaded. It shows, in plain language, whether each evidence file is bit-for-bit the file listed in the ' +
+      'Evidence Inventory, whether the sealed account this summary was made from is in the integrity ledger and when it ' +
+      'was sealed, and whether the ledger chain is intact. If the PDF has been printed or re-saved, type the record ' +
+      'ciphertext SHA-256 shown above into the same page instead.',
   });
   blocks.push({
     kind: 'paragraph',
     text:
-      '2. The account. The survivor’s account is stored only in encrypted form; the service operator cannot read it. ' +
-      'When it was sealed, the SHA-256 of the encrypted record was written to an append-only, hash-chained ledger. ' +
-      'Each entry’s hash is SHA-256(seq|type|subjectId|contentHash|timestamp|prevHash) and includes the previous entry’s ' +
-      'hash, so an entry cannot be altered or back-dated without breaking every later entry. A matching ledger entry ' +
-      'therefore shows that this exact encrypted record existed, unchanged, no later than the ledger timestamp.',
+      'This PDF is a rendering of the sealed account, made on the device of the survivor or of the counsel she shared ' +
+      'it with. The checker confirms the files and the sealed account; it cannot read the account. The survivor’s ' +
+      'counsel can confirm that the words in this summary match the sealed account: the attorney portal decrypts it and ' +
+      'checks it against the ledger automatically.',
   });
+  blocks.push({ kind: 'subheading', text: 'Appendix: checking by hand (for technical readers)' });
   blocks.push({
     kind: 'paragraph',
     text:
-      '3. This document. This PDF is a rendering of that record made on the survivor’s device. The authoritative version ' +
-      'is the encrypted record; with the survivor’s consent, the survivor’s counsel can decrypt it and confirm that its hash matches ' +
-      'the ledger and that its text matches this brief.',
+      'Evidence: compare the SHA-256 of each file (shasum -a 256 <file>, or certutil -hashfile <file> SHA256) with the ' +
+      'Evidence Inventory. Account: the ledger stores SHA-256 of the canonical encrypted record JSON {v, alg, iv, ct}; ' +
+      'each entry hash is SHA-256(seq|type|subjectId|contentHash|timestamp|prevHash) and includes the previous entry’s ' +
+      'hash, so no entry can be altered or back-dated without breaking every later one. Entries are public at ' +
+      '/api/ledger/entries/<entry ID>.',
   });
   return blocks;
 }

@@ -312,3 +312,4 @@ export async function publicKeyFingerprint(jwk: JsonWebKey): Promise<string> {
 // ./matching.ts: a split-key RFC 9497 VOPRF, per-perpetrator Shamir shares, and counselor-only threshold decryption.
 export * from './matching';
 export * from './recovery';
+export * from './ledger';

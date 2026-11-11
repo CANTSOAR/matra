@@ -839,6 +839,24 @@ export interface CreateShareRequest {
 
 export interface LedgerVerifyResponse { ok: boolean; length: number; headHash: string; brokenAtSeq?: number }
 
+/**
+ * POST /api/ledger/proof (public): look up sealed-content ledger entries ('record.sealed', 'blob.sealed') by the exact
+ * SHA-256 content hashes the requester already holds, for the in-browser checker (/verify) and the attorney portal.
+ * Only exact 64-hex hashes; no prefixes, ids or ranges, so it cannot be used to list the ledger.
+ */
+export interface LedgerProofRequest { contentHashes: string[] }
+/** One chain link: enough to check that links connect, without the entry's type, subject or time. */
+export interface LedgerLink { seq: number; prevHash: string; entryHash: string }
+export interface LedgerProofResponse {
+  /** The sealed-content entries whose contentHash was asked for (hashes not found are simply absent). */
+  entries: LedgerEntry[];
+  /** Links from the earliest entry found up to the head (or up to a cap; see `truncated`), in seq order. */
+  links: LedgerLink[];
+  head: { seq: number; entryHash: string };
+  /** true when `links` stops before the head (very long ledgers); the client says how far it checked. */
+  truncated: boolean;
+}
+
 export interface ApiError { error: string; code?: string }
 
 /*
@@ -869,6 +887,9 @@ export interface ApiError { error: string; code?: string }
  GET    /api/ledger/entries/:id                       -> { entry: LedgerEntry }
  GET    /api/ledger/verify                            -> LedgerVerifyResponse
  GET    /api/ledger/head                              -> { seq: number, entryHash: string }
+ POST   /api/ledger/proof       LedgerProofRequest    -> LedgerProofResponse (public; 1–32 exact content hashes; sealed records
+                                                         and evidence only; rate-limited per client, keyed by a daily-salted
+                                                         HMAC of the IP held in memory, and globally; 429 rate_limited)
 
  GET    /api/attorneys?state=NJ                       -> { attorneys: AttorneyProfile[] }  (verified only)
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }

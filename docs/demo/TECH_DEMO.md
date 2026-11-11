@@ -585,12 +585,24 @@ sqlite3 .demo/db/matra.db "DELETE FROM records;"                               #
 *"Triggers stop accidents and casual edits, not a root operator who drops them. That's why the chain needs external
 anchoring (W10)."*
 
+Nobody has to recompute the chain by hand: the browser does. Open **Check a file** (`/verify`, linked from the attorney
+portal, her Home and the PDF) and drop in Riley's summary PDF and her three files (download them as `attorney.nj1`). The
+page hashes the files locally (WebCrypto), reads the record hash the PDF carries in its document info
+(`/MatraVerification`, [brief/verification.ts](../../apps/web/src/brief/verification.ts)), sends only that hash to
+`POST /api/ledger/proof`, and re-checks what comes back with `checkLedgerProof`
+([packages/crypto/src/ledger.ts](../../packages/crypto/src/ledger.ts)): the entry's hash is recomputed, and the bare
+links (`seq`, `prevHash`, `entryHash` only: no one else's entry types, subjects or times) must connect to the published
+head. The endpoint answers exact 64-hex hashes of `record.sealed` / `blob.sealed` entries only, so it can't list the
+ledger; it is rate-limited per client by a daily-salted HMAC of the IP held in memory (W22). The attorney's case view
+runs the same checks on the account it just decrypted and on each evidence file's ciphertext.
+
 Unit-test versions:
 
 ```sh
 npm test -w @matra/crypto -- attestation   # bad signature, wrong nonce, stale, measurement, non-canonical; routing moved/tampered
 npm test -w @matra/crypto -- matching      # tampered share, decoy lines, contact ciphertext swapped between entries
 npm test -w @matra/matcher -- measure      # one changed source file changes the measurement; tests don't
+npm test -w @matra/web -- verify           # tampered file, wrong record, back-dated entry, broken chain → red
 ```
 
 ---
