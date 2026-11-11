@@ -15,7 +15,7 @@ import {
 } from '@matra/crypto';
 import { holderTokenPublicKeyFromSeed, type RemoteHolderConfig } from './holders.js';
 import { DEFAULT_HOLDER_DAILY_BUDGET } from './holder.js';
-import { MockSmsVerifier, TwilioVerifySmsVerifier, type SmsVerifier } from './sms.js';
+import { MockSmsVerifier, PHONE_SEND_LIMITS, TwilioVerifySmsVerifier, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 /** apps/server/data */
 export const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -395,6 +395,9 @@ export interface PhoneVerificationSettings {
   maxAccountsPerPhone: number;
   /** return the mock's code to the browser (development, or MATRA_DEMO_MODE=1) */
   exposeDemoCode: boolean;
+  /** E.164 country calling codes codes may be sent to */
+  allowedCountryCodes: string[];
+  sendLimits: PhoneSendLimits;
 }
 
 /**
@@ -402,6 +405,9 @@ export interface PhoneVerificationSettings {
  *   MATRA_REQUIRE_PHONE_VERIFICATION=0 turns the gate off (development only; refused in production).
  *   MATRA_PHONE_HASH_KEY / _FILE: the HMAC key for phone tokens, outside the database directory (production: required).
  *   MATRA_SMS_MAX_ACCOUNTS_PER_PHONE (default 2): how many accounts one phone can enable.
+ *   MATRA_SMS_ALLOWED_COUNTRY_CODES (default "1", NANP): comma-separated E.164 country calling codes codes may be sent to.
+ *   MATRA_SMS_MAX_PER_IP_PER_HOUR (10), MATRA_SMS_MAX_PER_HOUR (200), MATRA_SMS_MAX_PER_DAY (1000): send caps against
+ *   SMS pumping (sms.ts PHONE_SEND_LIMITS); the global caps answer 503 sms_unavailable.
  */
 export function loadPhoneVerification(env: Env = process.env): PhoneVerificationSettings {
   const production = isProduction(env);
@@ -411,7 +417,31 @@ export function loadPhoneVerification(env: Env = process.env): PhoneVerification
   const raw = env.MATRA_SMS_MAX_ACCOUNTS_PER_PHONE;
   const max = raw === undefined || raw === '' ? 2 : Number(raw);
   if (!Number.isInteger(max) || max < 1) throw new Error('MATRA_SMS_MAX_ACCOUNTS_PER_PHONE must be a positive integer');
+  const posInt = (name: string, dflt: number) => {
+    const v = env[name];
+    if (v === undefined || v === '') return dflt;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a positive integer`);
+    return n;
+  };
+  const sendLimits: PhoneSendLimits = {
+    ...PHONE_SEND_LIMITS,
+    perIpPerHour: posInt('MATRA_SMS_MAX_PER_IP_PER_HOUR', PHONE_SEND_LIMITS.perIpPerHour),
+    globalPerHour: posInt('MATRA_SMS_MAX_PER_HOUR', PHONE_SEND_LIMITS.globalPerHour),
+    globalPerDay: posInt('MATRA_SMS_MAX_PER_DAY', PHONE_SEND_LIMITS.globalPerDay),
+  };
+  const allowedCountryCodes = (env.MATRA_SMS_ALLOWED_COUNTRY_CODES || '1').split(',').map((c) => c.trim().replace(/^\+/, ''));
+  if (allowedCountryCodes.some((c) => !/^[1-9]\d{0,2}$/.test(c)))
+    throw new Error('MATRA_SMS_ALLOWED_COUNTRY_CODES must be comma-separated E.164 country calling codes, e.g. "1" or "1,44"');
   const verifier = loadSmsVerifier(env);
   const hashKey = loadSecretBytes('MATRA_PHONE_HASH_KEY', { env, devFile: path.join(DATA_DIR, 'phone-hash.key'), label: 'the phone-token HMAC key' });
-  return { required, verifier, hashKey, maxAccountsPerPhone: max, exposeDemoCode: verifier.name === 'mock' && (!production || loadDemoMode(env)) };
+  return {
+    required,
+    verifier,
+    hashKey,
+    maxAccountsPerPhone: max,
+    exposeDemoCode: verifier.name === 'mock' && (!production || loadDemoMode(env)),
+    allowedCountryCodes,
+    sendLimits,
+  };
 }

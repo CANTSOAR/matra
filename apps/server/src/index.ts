@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { createApp } from './app.js';
+import { createApp, flushPhoneTokens } from './app.js';
 import {
   WEB_DIST_DIR,
   loadDemoMode,
@@ -65,7 +65,14 @@ const app = createApp({
     limits: loadOprfLimits(),
     ...loadMatchingSettings(),
     requirePhoneVerification: phone.required,
-    phone: { verifier: phone.verifier, hashKey: phone.hashKey, maxAccountsPerPhone: phone.maxAccountsPerPhone, exposeDemoCode: phone.exposeDemoCode },
+    phone: {
+      verifier: phone.verifier,
+      hashKey: phone.hashKey,
+      maxAccountsPerPhone: phone.maxAccountsPerPhone,
+      exposeDemoCode: phone.exposeDemoCode,
+      allowedCountryCodes: phone.allowedCountryCodes,
+      sendLimits: phone.sendLimits,
+    },
   },
 });
 
@@ -77,6 +84,7 @@ const server = host ? app.listen(port, host, onListen) : app.listen(port, onList
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
+    flushPhoneTokens(app); // buffered phone-token counts (W19) would otherwise be lost
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
   });

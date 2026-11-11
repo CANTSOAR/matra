@@ -9,7 +9,7 @@ import path from 'node:path';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { blindMatchIdentifier, toBase64 } from '@matra/crypto';
-import { createApp, getDb } from './app.js';
+import { createApp, flushPhoneTokens, getDb } from './app.js';
 import { loadPhoneVerification, loadSmsVerifier, assertMockAllowed } from './config.js';
 import { openDb } from './db.js';
 import { MockSmsVerifier, TwilioVerifySmsVerifier, phoneToken, type SmsVerifier } from './sms.js';
@@ -53,8 +53,10 @@ describe('phone verification gate (W13)', () => {
     expect(ok.body).toEqual({ verified: true });
     expect((await request(app).get('/api/matching/verification').set(s.auth)).body).toEqual({ required: true, verified: true });
     await expect(sealMatch(app, s, 'email', 'someone@example.com')).resolves.toBeDefined();
-    const events = (await request(app).get('/api/audit').set(s.auth)).body.events as Array<{ detail: string }>;
-    expect(events.some((e) => e.detail === 'You confirmed a phone number for sealed matching. The number itself was not kept.')).toBe(true);
+    // no timestamped audit row for her account that could be lined up with the SMS provider's (number, time) (W19)
+    const events = (await request(app).get('/api/audit').set(s.auth)).body.events as Array<{ action: string }>;
+    expect(events.some((e) => /phone/.test(e.action))).toBe(false);
+    expect(db.prepare(`SELECT COUNT(*) n FROM audit_events WHERE action LIKE '%phone%'`).get()).toEqual({ n: 0 });
   });
 
   it('counselors, attorneys and accounts without an 18+ confirmation cannot start a verification', async () => {
@@ -119,12 +121,18 @@ describe('verify-then-forget flow', () => {
     expect(third.status).toBe(409);
     expect(third.body.code).toBe('phone_limit_reached');
     expect((await request(app).get('/api/matching/verification').set(c!.auth)).body.verified).toBe(false);
+    // the counts are still only in memory (flushed later, in their own transaction: W19), yet the limit counted them
+    expect(db.prepare('SELECT COUNT(*) n FROM phone_tokens').get()).toEqual({ n: 0 });
+    flushPhoneTokens(app);
     // one token for all three spellings, counting the two accounts it enabled
     expect(db.prepare('SELECT accounts FROM phone_tokens').all()).toEqual([{ accounts: 2 }]);
+    // and the limit holds across a flush (DB count + buffer)
+    expect((await verifyPhone(app, c!, '(201) 555-0100')).body.code).toBe('phone_limit_reached');
     // a different phone works for the third account
     expect((await verifyPhone(app, c!, '(201) 555-0111')).status).toBe(200);
     // verifying again from an already verified account does not use up another slot
     expect((await verifyPhone(app, a!, '(201) 555-0111')).status).toBe(200);
+    flushPhoneTokens(app);
     expect(db.prepare('SELECT accounts FROM phone_tokens ORDER BY accounts').all()).toEqual([{ accounts: 1 }, { accounts: 2 }]);
   });
 
@@ -136,13 +144,121 @@ describe('verify-then-forget flow', () => {
     expect((await verifyPhone(app, b)).body.code).toBe('phone_limit_reached');
   });
 
-  it('rate-limits code requests: 3 per phone per hour, 5 per account per day', async () => {
+  it('rate-limits code requests: 3 per (account, phone) per hour, 5 per account per day', async () => {
     const { app } = makeApp();
     const s = await registerUser(app, 'survivor.spam', 'survivor', { phoneVerified: false });
     for (let i = 0; i < 3; i++) expect((await start(app, s.auth, '(201) 555-0100')).status).toBe(200);
     expect((await start(app, s.auth, '(201) 555-0100')).body.code).toBe('rate_limited');
     expect((await start(app, s.auth, '(201) 555-0122')).status).toBe(200);
     expect((await start(app, s.auth, '(201) 555-0133')).body.code).toBe('rate_limited'); // 6th of the day for this account
+  });
+
+  it('the per-phone limit is per account: other accounts can neither see nor exhaust it for her number', async () => {
+    const { app } = makeApp();
+    const attackers = await Promise.all([1, 2].map((i) => registerUser(app, `survivor.att${i}`, 'survivor', { phoneVerified: false })));
+    for (const a of attackers) for (let i = 0; i < 3; i++) expect((await start(app, a.auth, '(201) 555-0199')).status).toBe(200);
+    // six requests for her number from other accounts in the last hour: she still gets her codes, and verifies
+    const owner = await registerUser(app, 'survivor.owner', 'survivor', { phoneVerified: false });
+    expect((await verifyPhone(app, owner, '(201) 555-0199')).status).toBe(200);
+  });
+
+  it('caps sends per client IP and globally (SMS pumping), and refuses numbers outside the allowed countries first', async () => {
+    const calls: string[] = [];
+    const counting: SmsVerifier = {
+      name: 'mock',
+      start: async (e164) => (calls.push(e164), { providerRef: `r${calls.length}` }),
+      check: async () => 'wrong_code',
+    };
+    const perIp = makeApp({ matching: { phone: { verifier: counting, sendLimits: { perIpPerHour: 3 } } } });
+    const users = await Promise.all([1, 2].map((i) => registerUser(perIp.app, `survivor.ip${i}`, 'survivor', { phoneVerified: false })));
+    for (const p of ['(201) 555-0101', '(201) 555-0102']) expect((await start(perIp.app, users[0]!.auth, p)).status).toBe(200);
+    expect((await start(perIp.app, users[1]!.auth, '(201) 555-0103')).status).toBe(200);
+    // a fresh account from the same IP does not help
+    const r = await start(perIp.app, users[1]!.auth, '(201) 555-0104');
+    expect(r.status).toBe(429);
+    expect(r.body.code).toBe('rate_limited');
+    expect(calls).toHaveLength(3);
+    // a different client IP (behind a trusted proxy) has its own allowance
+    const proxied = makeApp({ matching: { phone: { verifier: counting, sendLimits: { perIpPerHour: 1 } } } });
+    proxied.app.set('trust proxy', 1);
+    const p1 = await registerUser(proxied.app, 'survivor.px', 'survivor', { phoneVerified: false });
+    const viaIp = (ip: string, phone: string) =>
+      request(proxied.app).post('/api/matching/verification/start').set(p1.auth).set('X-Forwarded-For', ip).send({ phone });
+    expect((await viaIp('198.51.100.7', '(201) 555-0111')).status).toBe(200);
+    expect((await viaIp('198.51.100.7', '(201) 555-0112')).body.code).toBe('rate_limited');
+    expect((await viaIp('198.51.100.8', '(201) 555-0112')).status).toBe(200);
+
+    calls.length = 0;
+    const global = makeApp({ matching: { phone: { verifier: counting, sendLimits: { globalPerHour: 2 } } } });
+    const g = await Promise.all([1, 2, 3].map((i) => registerUser(global.app, `survivor.g${i}`, 'survivor', { phoneVerified: false })));
+    expect((await start(global.app, g[0]!.auth, '(201) 555-0121')).status).toBe(200);
+    expect((await start(global.app, g[1]!.auth, '(201) 555-0122')).status).toBe(200);
+    const busy = await start(global.app, g[2]!.auth, '(201) 555-0123');
+    expect(busy.status).toBe(503);
+    expect(busy.body.code).toBe('sms_unavailable');
+    expect(calls).toHaveLength(2);
+
+    calls.length = 0;
+    for (const phone of ['+44 20 7946 0958', '+882 1234 5678']) {
+      const f = await start(global.app, g[2]!.auth, phone);
+      expect(f.status).toBe(400);
+      expect(f.body.code).toBe('phone_not_supported');
+    }
+    expect(calls).toHaveLength(0);
+    // allowed when configured
+    const uk = makeApp({ matching: { phone: { verifier: counting, allowedCountryCodes: ['1', '44'] } } });
+    const u = await registerUser(uk.app, 'survivor.uk', 'survivor', { phoneVerified: false });
+    expect((await start(uk.app, u.auth, '+44 20 7946 0958')).status).toBe(200);
+  });
+
+  it('the 5-try cap holds against concurrent checks: no more than 5 ever reach the provider', async () => {
+    let checks = 0;
+    const slow: SmsVerifier = {
+      name: 'twilio',
+      start: async () => ({ providerRef: 'VE1' }),
+      check: async () => {
+        checks++;
+        await new Promise((r) => setTimeout(r, 20));
+        return 'wrong_code';
+      },
+    };
+    const { app } = makeApp({ matching: { phone: { verifier: slow } } });
+    const s = await registerUser(app, 'survivor.burst', 'survivor', { phoneVerified: false });
+    const st = await start(app, s.auth);
+    const results = await Promise.all(Array.from({ length: 12 }, () => check(app, s.auth, st.body.challengeId, '123456')));
+    expect(checks).toBe(5);
+    expect(results.every((r) => r.status === 400)).toBe(true);
+    expect((await check(app, s.auth, st.body.challengeId, '123456')).body.code).toBe('code_expired');
+    expect(checks).toBe(5);
+  });
+
+  it('Twilio\'s own limits: a 429 on sending is rate_limited; a 429 on checking ends the challenge', async () => {
+    const responses: Array<[number, unknown]> = [
+      [200, { line_type_intelligence: { type: 'mobile' } }],
+      [429, { code: 60203 }],
+      [200, { line_type_intelligence: { type: 'mobile' } }],
+      [201, { sid: 'VE1' }],
+      [429, { code: 60202 }],
+    ];
+    const v = new TwilioVerifySmsVerifier({
+      accountSid: 'AC',
+      authToken: 't',
+      verifyServiceSid: 'VA',
+      fetchImpl: (async () => {
+        const [status, body] = responses.shift()!;
+        return new Response(JSON.stringify(body), { status });
+      }) as unknown as typeof fetch,
+    });
+    const { app } = makeApp({ matching: { phone: { verifier: v } } });
+    const s = await registerUser(app, 'survivor.tw429', 'survivor', { phoneVerified: false });
+    const r1 = await start(app, s.auth);
+    expect(r1.status).toBe(429);
+    expect(r1.body.code).toBe('rate_limited');
+    const r2 = await start(app, s.auth);
+    expect(r2.status).toBe(200);
+    expect((await check(app, s.auth, r2.body.challengeId, '123456')).body.code).toBe('code_expired');
+    // the challenge is gone: no further provider call (no response is queued; one would throw)
+    expect((await check(app, s.auth, r2.body.challengeId, '123456')).body.code).toBe('code_expired');
   });
 
   it('the demo code is never returned when the app is told not to expose it, nor by a real provider', async () => {
@@ -186,10 +302,26 @@ describe('what is kept (W19)', () => {
     const code = st.body.demoCode as string;
     expect((await check(app, s.auth, st.body.challengeId, code)).status).toBe(200);
     const db = getDb(app);
+    const token = phoneToken(hashKey, '+12015550187');
+    const read = (f: string) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f)) : Buffer.alloc(0));
+    // Right after verifying, WITHOUT a checkpoint by the test: the token is in no file at all (it is buffered in memory),
+    // so no WAL commit pairs it with her users row; and her own flag commit was checkpointed out of the WAL.
+    for (const f of ['matra.db', 'matra.db-wal']) expect(read(f).includes(Buffer.from(token)), `${f} has the token`).toBe(false);
+    expect(read('matra.db-wal').length).toBe(0);
+    // A second survivor verifies; then the buffered counts are flushed together in their own commit, and checkpointed.
+    const s2 = await registerUser(app, 'survivor.private2', 'survivor', { phoneVerified: false });
+    expect((await verifyPhone(app, s2, '(201) 555-0188')).status).toBe(200);
+    flushPhoneTokens(app);
+    const wal = read('matra.db-wal');
+    for (const id of [s.user.id, s2.user.id]) expect(wal.includes(Buffer.from(id)), 'WAL has a user id next to the tokens').toBe(false);
+    expect(wal.includes(Buffer.from(token))).toBe(false);
+    expect(read('matra.db').includes(Buffer.from(token))).toBe(true);
     const cols = (db.pragma('table_info(phone_tokens)') as Array<{ name: string }>).map((c) => c.name);
     expect(cols).toEqual(['token_hash', 'accounts']);
     expect((db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'phone_tokens'`).get() as { sql: string }).sql).toMatch(/WITHOUT ROWID/);
-    expect(db.prepare('SELECT token_hash FROM phone_tokens').all()).toEqual([{ token_hash: phoneToken(hashKey, '+12015550187') }]);
+    expect(db.prepare('SELECT token_hash FROM phone_tokens ORDER BY token_hash').all()).toEqual(
+      [token, phoneToken(hashKey, '+12015550188')].sort().map((token_hash) => ({ token_hash })),
+    );
     expect(db.prepare('SELECT matching_verified FROM users WHERE id = ?').get(s.user.id)).toEqual({ matching_verified: 1 });
     db.pragma('wal_checkpoint(TRUNCATE)');
     const bytes = Buffer.concat(fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f))));
@@ -264,6 +396,19 @@ describe('provider configuration', () => {
     });
     expect(twilio).toMatchObject({ exposeDemoCode: false, maxAccountsPerPhone: 3 });
     expect(() => loadPhoneVerification({ ...base, MATRA_PHONE_HASH_KEY: key, MATRA_SMS_MAX_ACCOUNTS_PER_PHONE: '0' })).toThrow(/positive integer/);
+    // send caps and the country allowlist (SMS pumping): defaults, overrides, and refusals
+    expect(ok).toMatchObject({ allowedCountryCodes: ['1'], sendLimits: { perIpPerHour: 10, globalPerHour: 200, globalPerDay: 1000, perAccountPerDay: 5 } });
+    const tuned = loadPhoneVerification({
+      ...base,
+      MATRA_PHONE_HASH_KEY: key,
+      MATRA_SMS_ALLOWED_COUNTRY_CODES: '1, +44',
+      MATRA_SMS_MAX_PER_IP_PER_HOUR: '4',
+      MATRA_SMS_MAX_PER_HOUR: '50',
+      MATRA_SMS_MAX_PER_DAY: '300',
+    });
+    expect(tuned).toMatchObject({ allowedCountryCodes: ['1', '44'], sendLimits: { perIpPerHour: 4, globalPerHour: 50, globalPerDay: 300 } });
+    expect(() => loadPhoneVerification({ ...base, MATRA_PHONE_HASH_KEY: key, MATRA_SMS_ALLOWED_COUNTRY_CODES: '1,*' })).toThrow(/country calling codes/);
+    expect(() => loadPhoneVerification({ ...base, MATRA_PHONE_HASH_KEY: key, MATRA_SMS_MAX_PER_DAY: '-1' })).toThrow(/MATRA_SMS_MAX_PER_DAY must be a positive integer/);
   });
 });
 
@@ -301,6 +446,36 @@ describe('Twilio Verify adapter (stubbed fetch; never run against the real servi
       await expect(v.start('+12015550100')).rejects.toMatchObject({ code: 'phone_not_supported' });
       expect(calls).toHaveLength(1);
     }
+  });
+
+  it('fails closed: no line type (add-on off, lookup error, no coverage) or anything but mobile gets no code', async () => {
+    const warns: string[] = [];
+    vi.spyOn(console, 'warn').mockImplementation((...a) => void warns.push(a.join(' ')));
+    const unchecked = [null, undefined, { type: null, error_code: 60600 }, { type: 'mobile', error_code: 60601 }, {}];
+    for (const lti of unchecked) {
+      const { v, calls } = stub([[200, lti === undefined ? {} : { line_type_intelligence: lti }]]);
+      await expect(v.start('+12015550100')).rejects.toMatchObject({ code: 'sms_unavailable' });
+      expect(calls).toHaveLength(1);
+    }
+    expect(warns.length).toBeGreaterThan(0);
+    expect(warns[0]).toMatch(/line type intelligence add-on/);
+    for (const type of ['unknown', 'landline', 'personal', 'tollFree', 'premium', 'pager', 'voicemail', 'sharedCost', 'uan']) {
+      const { v, calls } = stub([[200, { line_type_intelligence: { type, error_code: null } }]]);
+      await expect(v.start('+12015550100')).rejects.toMatchObject({ code: 'phone_not_supported' });
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  it('warns about a missing line type only once per process', async () => {
+    const warns: string[] = [];
+    vi.spyOn(console, 'warn').mockImplementation((...a) => void warns.push(a.join(' ')));
+    const { v } = stub([
+      [200, { line_type_intelligence: null }],
+      [200, { line_type_intelligence: null }],
+    ]);
+    await expect(v.start('+12015550100')).rejects.toMatchObject({ code: 'sms_unavailable' });
+    await expect(v.start('+12015550100')).rejects.toMatchObject({ code: 'sms_unavailable' });
+    expect(warns).toHaveLength(1);
   });
 
   it('VoIP lookup can be turned off; checks map Twilio statuses', async () => {

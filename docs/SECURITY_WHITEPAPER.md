@@ -274,18 +274,28 @@ use.** Name-only matching dropped. The survivor keeps her label (identifier, con
 lodge an entry, it confirms a phone number that can get texts (`POST /api/matching/verification/start` then `/check`;
 403 `phone_not_verified` otherwise). The number is canonicalised with the same strict E.164/NANP rules as identifiers.
 The challenge (number, provider reference, attempts) lives only in the app server's memory, for at most 10 minutes and
-5 wrong codes. On success the server stores `HMAC-SHA256(MATRA_PHONE_HASH_KEY, "matra/phone-token/v1|" + E.164)` with
-a count in `phone_tokens` (no user id, no timestamps, `WITHOUT ROWID`) and sets `users.matching_verified = 1`; the
-number and the code are dropped. One phone enables at most `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` accounts (default 2),
-checked only after she has proved control of the phone, so the endpoint can't be used to test whether someone else's
-number is on Matra. The hash key is held outside the database like the OPRF shares. Code requests are limited to 5 per
-account per day and 3 per phone per hour (in memory). Providers: a **mock** for development and demos that sends
-nothing and verifies nothing (the code is shown on screen; production refuses it unless `MATRA_DEMO_MODE=1`), and a
-**Twilio Verify** adapter (Twilio generates and checks the code; a Lookup line-type check refuses VoIP numbers) that is
-written to Twilio's published API but **has not been run against the real service**. This is friction against cheap
-mass accounts, not Sybil resistance: SIM farms and a few real phones still get through, and the gate is enforced by
-the app server, not by cryptography (section 5). The provider sees the number and the time; whoever holds the hash
-key and the database can test a guessed number (W19). Open questions: Q-013, Q-038.
+5 wrong codes (each attempt is charged before the provider is called, so concurrent checks can't exceed it). On
+success the server sets `users.matching_verified = 1` (its own commit, checkpointed out of the WAL, no audit event) and
+buffers `HMAC-SHA256(MATRA_PHONE_HASH_KEY, "matra/phone-token/v1|" + E.164)` in memory; the buffered counts are written
+to `phone_tokens` (no user id, no timestamps, `WITHOUT ROWID`) in a separate transaction at a random 10–60 minutes
+later, then checkpointed, so no single commit pairs a token with an account. The number and the code are dropped. One
+phone enables at most `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` accounts (default 2, counting the buffer), checked only after
+she has proved control of the phone, so it can't be used to test whether someone else's number has been used. The hash
+key is held outside the database like the OPRF shares. Code requests are capped in memory: 5 per account per day, 3 per
+(account, phone) per hour, 10 per client IP per hour (keyed by an HMAC of the IP under a per-process key) and a global
+200 per hour / 1000 per day (503 `sms_unavailable`), and only NANP numbers are accepted by default
+(`MATRA_SMS_ALLOWED_COUNTRY_CODES`), against SMS pumping. The per-phone cap is deliberately per account, so other
+accounts can neither observe nor exhaust it; the provider's own per-number limits still apply across accounts (Twilio
+answers 429, shown as `rate_limited`, which does reveal that the number was sent codes in the last few minutes).
+Providers: a **mock** for development and demos that sends nothing and verifies nothing (the code is shown on screen;
+production refuses it unless `MATRA_DEMO_MODE=1`), and a **Twilio Verify** adapter (Twilio generates and checks the
+code; a Lookup line-type check that fails closed: only numbers reported as `mobile` get a code) that is written to
+Twilio's published API but **has not been run against the real service**. This is friction against cheap mass
+accounts, not Sybil resistance: SIM farms and a few real phones still get through, and the gate is enforced by the app
+server, not by cryptography (section 5). **The phone is not unlinkable from the account:** the provider records the
+number and the time, and Matra's own timestamped activity for the account (sign-ins, when it first sealed) could be
+lined up with it; whoever holds the hash key and the database can test a guessed number (W19). Open questions: Q-013,
+Q-038.
 
 **Data migration.** Schema v5 drops all existing matching data (entries, seals, groups, counselor notes, OPRF quotas):
 the tag derivation and seal format changed, old entries cannot be converted without the plaintext identifiers, and
@@ -296,7 +306,7 @@ they only ever held demo data.
 each entry's key epoch and which counselors it is sealed to; OPRF quota counters (the account-level budget always;
 per-holder counters in in-process mode, while in remote mode each holder keeps its own counters under a pseudonymous
 subject, plus its daily totals); counselor note counts and times; whether an account confirmed a phone, and keyed
-phone hashes with counts (not linked to accounts).
+phone hashes with counts (no account id; linkable by time together with the SMS provider's records, W19).
 
 ---
 

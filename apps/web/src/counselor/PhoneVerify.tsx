@@ -2,8 +2,10 @@
  * One short step before a sealed match: confirm a phone number by text (W13 Sybil friction; server src/sms.ts).
  *
  * The server sends a code, checks it, and then forgets the number: it keeps only a scrambled fingerprint (a keyed hash)
- * in a table that isn't connected to her account, so one phone can't turn on sealed matching for lots of accounts, and a
- * yes/no flag on her account. In development and demos the code comes from a mock provider and is shown on screen.
+ * in a table with no account ids, so one phone can't turn on sealed matching for lots of accounts, and a yes/no flag on
+ * her account. That is not the same as unlinkable: the texting company records the number and the time, so its records
+ * together with ours could tie the number to her account (W19). The copy says so. In development and demos the code
+ * comes from a mock provider and is shown on screen.
  *
  * On success it seals whatever her current sealed record chose for a sealed match but couldn't seal yet
  * (space/adapters.ts retrySealedMatches) and returns to Home. She can always skip: her story is saved either way.
@@ -127,8 +129,9 @@ export function PhoneVerify() {
               texts. We send a code, check it, and then <strong>forget the number</strong>.
             </p>
             <p style={{ margin: 0 }}>
-              We keep only a scrambled fingerprint of it that isn’t connected to your account, so one phone can’t be used
-              for lots of accounts. It doesn’t have to be your main number.
+              We keep only a scrambled fingerprint of it, stored apart from your account, so one phone can’t be used for
+              lots of accounts. The texting company we use does see the number and when the code was sent, so its records
+              together with ours could connect the number to your account. It doesn’t have to be your main number.
             </p>
             <p style={{ margin: 0 }}>You can skip this. Your story is saved either way.</p>
           </section>

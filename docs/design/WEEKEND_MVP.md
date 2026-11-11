@@ -1039,6 +1039,22 @@ Built before metadata-min (§3.2 had still not landed), so:
   verified number + account count; no user id, no timestamps, WITHOUT ROWID; never decremented), `users.matching_verified`
   (0/1, no timestamp), the in-memory challenges (number, provider reference, attempts; ≤ 10 min, ≤ 5 wrong codes), the
   audit line "You confirmed a phone number…", and the SMS provider (Twilio sees the number and the time; Q-013).
+  (Superseded by the review fixes below: there is no audit line any more.)
+
+Review fixes (sms-verify review, 2026-11-11):
+- §3.4's "one transaction" is replaced: the account flag is its own commit (then `wal_checkpoint(TRUNCATE)`), and the
+  phone-token count is buffered in memory and flushed in a separate transaction 10–60 min later (random; sorted batch;
+  then TRUNCATE), so no WAL commit pairs a token with a users row. The limit counts DB + buffer. `flushPhoneTokens(app)`
+  for shutdown (index.ts) and tests. A crash loses unflushed counts (documented in W19).
+- The "You confirmed a phone number…" audit event is dropped: its millisecond timestamp for her account lined up with
+  the SMS provider's (number, time) record. The UI copy, W19 and the whitepaper no longer say the fingerprint "isn't
+  connected" to her account; they say the provider's records together with Matra's could link the two.
+- §3.4's "3 per phone-token per hour" becomes 3 per (account, phone-token) per hour: a cross-account per-phone limit
+  was an oracle (someone else asked for this number) and a lockout. Added: 10 per client IP per hour (HMAC of the IP
+  under a per-process key), a global 200/hour and 1000/day (503 `sms_unavailable`), and a country allowlist
+  (`MATRA_SMS_ALLOWED_COUNTRY_CODES`, default `1`), all against SMS pumping.
+- The Twilio Lookup check fails closed (only `mobile`); Twilio 429 on Verifications → 429 `rate_limited`, on
+  VerificationCheck → `expired`. Code attempts are charged before the provider call.
 
 Code shape:
 - `config.ts` has `loadPhoneVerification(env)` → `{ required, verifier, hashKey, maxAccountsPerPhone, exposeDemoCode }`

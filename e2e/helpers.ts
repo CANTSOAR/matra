@@ -185,6 +185,10 @@ export async function startPhoneVerify(page: Page, phone: string) {
   await page.getByRole('link', { name: 'Confirm a phone number' }).first().click();
   await expect(page.getByRole('heading', { name: 'One quick step before your sealed match' })).toBeVisible();
   await expect(page.getByText(/then forget the number/)).toBeVisible();
+  // Honest about what can still link the number to her (W19): no claim that it "isn't connected" to her account.
+  const why = page.getByRole('region', { name: 'Why we ask' });
+  await expect(why).toContainText('could connect the number to your account');
+  await expect(why).not.toContainText('isn’t connected');
   await page.getByLabel('Phone number that can get texts').fill(phone);
   await page.getByRole('button', { name: 'Text me a code' }).click();
   const demo = page.getByTestId('phone-demo-code');

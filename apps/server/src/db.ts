@@ -299,8 +299,10 @@ const MIGRATIONS: string[] = [
   `,
   // ── v7: phone verify-then-forget before sealed matching (W13, W19; src/sms.ts). phone_tokens holds only a keyed hash
   // of a verified number and how many accounts it has enabled: no user id, no timestamps, and WITHOUT ROWID so not even
-  // insertion order is kept that could be lined up with users. The count is never decremented (nothing links a row to
-  // an account). Accounts that already have sealed entries (demo data only) are grandfathered as verified, so their
+  // insertion order is kept that could be lined up with users. Rows are written in batches apart from the users flag
+  // (app.ts flushPhoneTokens), so no commit pairs a token with an account. That is NOT unlinkability: the SMS provider's
+  // (number, time) records together with the account's own activity times can still link them (W19). The count is
+  // never decremented (no row names an account). Accounts that already have sealed entries (demo data only) are grandfathered as verified, so their
   // clients can still re-seal after a key rotation.
   `
   CREATE TABLE phone_tokens (

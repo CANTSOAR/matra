@@ -19,10 +19,13 @@ import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto
 
 export type SmsCheckResult = 'approved' | 'wrong_code' | 'expired';
 
-/** A provider refused this number (`phone_not_supported`, e.g. VoIP) or could not be reached (`sms_unavailable`). */
+/**
+ * A provider refused this number (`phone_not_supported`, e.g. VoIP or not a mobile line), could not be reached or could
+ * not check the number (`sms_unavailable`), or hit its own per-number send limit (`rate_limited`).
+ */
 export class SmsError extends Error {
   constructor(
-    public code: 'phone_not_supported' | 'sms_unavailable',
+    public code: 'phone_not_supported' | 'sms_unavailable' | 'rate_limited',
     message: string,
   ) {
     super(message);
@@ -36,6 +39,21 @@ export interface SmsVerifier {
   start(phoneE164: string): Promise<{ providerRef: string; demoCode?: string }>;
   check(providerRef: string, phoneE164: string, code: string): Promise<SmsCheckResult>;
 }
+
+/**
+ * Caps on code requests (POST /api/matching/verification/start), all in memory. Each send costs money (Verify + a
+ * Lookup query), so besides the per-account limits there is a per-IP limit and a global hourly/daily cap against SMS
+ * pumping (scripted free accounts sending codes to premium-rate numbers). Env overrides: config.ts loadPhoneVerification.
+ */
+export interface PhoneSendLimits {
+  perAccountPerDay: number;
+  /** per (account, phone): never across accounts, so it can't reveal or block someone else's use of a number */
+  perAccountPhonePerHour: number;
+  perIpPerHour: number;
+  globalPerHour: number;
+  globalPerDay: number;
+}
+export const PHONE_SEND_LIMITS: PhoneSendLimits = { perAccountPerDay: 5, perAccountPhonePerHour: 3, perIpPerHour: 10, globalPerHour: 200, globalPerDay: 1000 };
 
 /** How long a code (and the in-memory challenge holding the number) lives. */
 export const SMS_CODE_TTL_MS = 10 * 60_000;
@@ -85,7 +103,7 @@ export interface TwilioConfig {
   accountSid: string;
   authToken: string;
   verifyServiceSid: string;
-  /** Refuse VoIP numbers (Twilio Lookup v2 line type intelligence) before sending. Default true. */
+  /** Send only to numbers Twilio Lookup v2 line type intelligence reports as `mobile` (fails closed). Default true. */
   rejectVoip?: boolean;
   fetchImpl?: typeof fetch;
   /** Tests only. */
@@ -95,17 +113,21 @@ export interface TwilioConfig {
 
 /**
  * Twilio Verify v2 (https://www.twilio.com/docs/verify/api). UNTESTED AGAINST THE REAL SERVICE: see the file header.
- *   start: [Lookup v2 GET /v2/PhoneNumbers/{e164}?Fields=line_type_intelligence → refuse fixedVoip / nonFixedVoip]
+ *   start: [Lookup v2 GET /v2/PhoneNumbers/{e164}?Fields=line_type_intelligence → only type `mobile` goes on]
  *          then POST /v2/Services/{sid}/Verifications  To, Channel=sms  → providerRef = the verification sid
+ *          (429: Twilio's own per-number send limit → SmsError rate_limited)
  *   check: POST /v2/Services/{sid}/VerificationCheck  VerificationSid, Code → status approved | pending | canceled…
- *          (404: the verification expired, was approved already, or ran out of attempts)
- * Line type intelligence is a paid Lookup add-on; it has to be enabled on the Twilio account.
+ *          (404: the verification expired, was approved already, or ran out of attempts; 429: too many checks → expired)
+ * Line type intelligence is a paid Lookup add-on; it has to be enabled on the Twilio account. The check fails closed:
+ * a missing result (add-on not enabled), a lookup error_code (unprovisioned, no coverage) or any type other than
+ * `mobile` (VoIP, landline, tollFree, premium, pager, personal, unknown, …) never gets a code.
  */
 export class TwilioVerifySmsVerifier implements SmsVerifier {
   readonly name = 'twilio' as const;
   private readonly fetchImpl: typeof fetch;
   private readonly verifyBase: string;
   private readonly lookupBase: string;
+  private warnedLookup = false;
   constructor(private readonly cfg: TwilioConfig) {
     this.fetchImpl = cfg.fetchImpl ?? ((...a: Parameters<typeof fetch>) => globalThis.fetch(...a));
     this.verifyBase = cfg.verifyBaseUrl ?? 'https://verify.twilio.com';
@@ -138,14 +160,27 @@ export class TwilioVerifySmsVerifier implements SmsVerifier {
     if (this.cfg.rejectVoip !== false) {
       const l = await this.call(`${this.lookupBase}/v2/PhoneNumbers/${enc}?Fields=line_type_intelligence`);
       if (l.status >= 300) throw new SmsError('sms_unavailable', 'The text message service could not check this number.');
-      const type = (l.body.line_type_intelligence as { type?: string } | null | undefined)?.type;
-      if (type === 'nonFixedVoip' || type === 'fixedVoip')
+      const lti = l.body.line_type_intelligence as { type?: string | null; error_code?: number | null } | null | undefined;
+      // No result at all, or an error_code (e.g. 60600 unprovisioned / out of coverage): we can't tell what the line
+      // is, so we don't send. Warn once, since a missing add-on would otherwise refuse everyone silently.
+      if (!lti || lti.error_code != null || !lti.type) {
+        if (!this.warnedLookup) {
+          this.warnedLookup = true;
+          console.warn(
+            `[matra] WARNING: Twilio Lookup returned no line type (${lti?.error_code != null ? `error_code ${lti.error_code}` : 'no line_type_intelligence'}); phone verification refuses numbers it cannot check. Is the line type intelligence add-on enabled?`,
+          );
+        }
+        throw new SmsError('sms_unavailable', 'The text message service could not check this number.');
+      }
+      if (lti.type === 'nonFixedVoip' || lti.type === 'fixedVoip')
         throw new SmsError('phone_not_supported', 'This looks like an internet (VoIP) number. Please use a number from a mobile carrier.');
+      if (lti.type !== 'mobile') throw new SmsError('phone_not_supported', 'We can only send codes to mobile numbers. Please use a number from a mobile carrier.');
     }
     const r = await this.call(`${this.verifyBase}/v2/Services/${encodeURIComponent(this.cfg.verifyServiceSid)}/Verifications`, {
       To: phoneE164,
       Channel: 'sms',
     });
+    if (r.status === 429) throw new SmsError('rate_limited', 'Several codes have been sent to this number recently. Please wait a while and try again.');
     if (r.status === 400) throw new SmsError('phone_not_supported', 'We couldn’t send a text to this number.');
     if (r.status >= 300 || typeof r.body.sid !== 'string') throw new SmsError('sms_unavailable', 'The text message service did not accept the request.');
     return { providerRef: r.body.sid };
@@ -156,7 +191,8 @@ export class TwilioVerifySmsVerifier implements SmsVerifier {
       VerificationSid: providerRef,
       Code: code,
     });
-    if (r.status === 404) return 'expired';
+    // 404: gone (expired, approved, out of attempts); 429: Twilio's own check limit for this verification (60202)
+    if (r.status === 404 || r.status === 429) return 'expired';
     if (r.status >= 300) throw new SmsError('sms_unavailable', 'The text message service did not accept the request.');
     if (r.body.status === 'approved') return 'approved';
     if (r.body.status === 'pending') return 'wrong_code';

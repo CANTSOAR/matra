@@ -21,7 +21,12 @@ When `NODE_ENV=production`:
   Verify** (`MATRA_SMS_PROVIDER=twilio` + `TWILIO_*`); the **mock** provider (no texts are sent, the code is shown on
   screen, nothing about the phone is verified) is refused unless `MATRA_DEMO_MODE=1`. `MATRA_PHONE_HASH_KEY` (or
   `_FILE`, outside the database directory) is required and never generated. `MATRA_REQUIRE_PHONE_VERIFICATION=0` is
-  refused.
+  refused. On the Twilio account, enable **Verify Fraud Guard** and restrict **Geo Permissions** (SMS) to the countries
+  in `MATRA_SMS_ALLOWED_COUNTRY_CODES` (default NANP only), and enable the Lookup **line type intelligence** add-on:
+  without it every number is refused (the check fails closed; the server warns once in its log). The app also caps
+  sends per IP and globally (`MATRA_SMS_MAX_PER_*`), but those caps are in memory and reset on restart; Twilio's
+  settings are the backstop against SMS pumping. Phone-token counts are written to the DB 10–60 min after each
+  verification and on SIGTERM/SIGINT; a crash loses the unwritten counts (W19).
 - The server records t, the group key and the share public keys in the database on first start and **refuses to start if they change**, unless you restart once with `MATRA_OPRF_ROTATE=1` (a deliberate rotation: a new key epoch begins, and each survivor's app re-seals her entries the next time she signs in).
 
 ### On-device voice transcription: the model files
@@ -71,7 +76,9 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 | `MATRA_DEMO_MODE` | `1` | Fictional-data demo: lets mock/simulated providers (the mock SMS provider) run in production, and turns the DEMO banner on. **Never on an instance with real data** |
 | `MATRA_SMS_PROVIDER` | `mock` | `twilio` (production default) or `mock` (development default; production only with `MATRA_DEMO_MODE=1`). Phone verification before sealed matching |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` | unset in a demo | With `MATRA_SMS_PROVIDER=twilio`: a Twilio Verify service. **Secret** (the token). The adapter is written to Twilio's published API but **has not been tested against the real service**: try it on a test number before relying on it. Twilio sees the phone number and when it was verified (a third party; legal question Q-013) |
-| `MATRA_SMS_REJECT_VOIP` | unset (on) | Twilio only: `0` turns off the Lookup line-type check that refuses VoIP numbers. The check uses the paid Lookup "line type intelligence" add-on, which must be enabled on the Twilio account |
+| `MATRA_SMS_REJECT_VOIP` | unset (on) | Twilio only: `0` turns off the Lookup line-type check. When on, only numbers Lookup reports as `mobile` get a code; VoIP, landline, toll-free, unknown and unchecked numbers are refused (fails closed). The check uses the paid Lookup "line type intelligence" add-on, which must be enabled on the Twilio account, or every number is refused |
+| `MATRA_SMS_ALLOWED_COUNTRY_CODES` | `1` | Comma-separated E.164 country calling codes that codes may be sent to (default NANP: US, Canada, …). Match Twilio's Geo Permissions |
+| `MATRA_SMS_MAX_PER_IP_PER_HOUR`, `MATRA_SMS_MAX_PER_HOUR`, `MATRA_SMS_MAX_PER_DAY` | `10`, `200`, `1000` | Code-request caps against SMS pumping: per client IP (hashed, in memory) and global; the global caps answer 503 `sms_unavailable`. Also 5 per account per day and 3 per (account, phone) per hour |
 | `MATRA_PHONE_HASH_KEY` (or `_FILE`) | random, ≥ 32 chars | HMAC key for phone tokens (verify-then-forget, W19). **Secret**, outside the database directory; required in production. Whoever holds it and the database can test whether a guessed number was used. Changing it resets the per-phone counts |
 | `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` | `2` | How many accounts one phone can enable for sealed matching. Counts are never decremented |
 | `MATRA_REQUIRE_PHONE_VERIFICATION` | unset | `0` turns the phone step off in development only; refused in production |

@@ -20,7 +20,7 @@
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, randomInt } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
@@ -80,7 +80,7 @@ import {
 import * as S from './schemas.js';
 import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimits } from './oprf.js';
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
-import { MockSmsVerifier, SMS_CODE_TTL_MS, SmsError, phoneToken, type SmsVerifier } from './sms.js';
+import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
   /** SQLite path, or ':memory:' for tests. */
@@ -116,10 +116,21 @@ export interface CreateAppOptions {
     allowKeyRotation?: boolean;
     /**
      * Phone verify-then-forget before sealed matching (W13; src/sms.ts, config.ts loadPhoneVerification). Default:
-     * required, the mock provider, an ephemeral hash key, 2 accounts per phone, demo code returned outside production.
+     * required, the mock provider, an ephemeral hash key, 2 accounts per phone, demo code returned outside production,
+     * NANP numbers only (country code 1), PHONE_SEND_LIMITS, and phone tokens flushed to the DB 10–60 min later.
      */
     requirePhoneVerification?: boolean;
-    phone?: { verifier?: SmsVerifier; hashKey?: Uint8Array; maxAccountsPerPhone?: number; exposeDemoCode?: boolean };
+    phone?: {
+      verifier?: SmsVerifier;
+      hashKey?: Uint8Array;
+      maxAccountsPerPhone?: number;
+      exposeDemoCode?: boolean;
+      /** E.164 country calling codes a code may be sent to (MATRA_SMS_ALLOWED_COUNTRY_CODES). Default ['1']. */
+      allowedCountryCodes?: string[];
+      sendLimits?: Partial<PhoneSendLimits>;
+      /** [min, max] ms before buffered phone-token counts are written to the DB (random in between). Default 10–60 min. */
+      tokenFlushDelayMs?: [number, number];
+    };
   };
 }
 
@@ -988,15 +999,26 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const phoneHashKey = phoneOpt.hashKey ?? new Uint8Array(randomBytes(32));
   const maxAccountsPerPhone = phoneOpt.maxAccountsPerPhone ?? 2;
   const exposeDemoCode = phoneOpt.exposeDemoCode ?? (sms.name === 'mock' && process.env.NODE_ENV !== 'production');
+  const allowedCountryCodes = phoneOpt.allowedCountryCodes ?? ['1'];
+  const sendLimits: PhoneSendLimits = { ...PHONE_SEND_LIMITS, ...phoneOpt.sendLimits };
   const MAX_CODE_ATTEMPTS = 5;
   const challenges = new Map<string, { userId: string; phoneE164: string; providerRef: string; expiresAt: number; attempts: number }>();
   const sweepChallenges = () => {
     const now = Date.now();
     for (const [k, c] of challenges) if (c.expiresAt <= now) challenges.delete(k);
   };
-  // keyed by account id and by phone token (never the raw number); in memory only
-  const smsStartPerAccount = new RateLimiter(5, 24 * 3_600_000);
-  const smsStartPerPhone = new RateLimiter(3, 3_600_000);
+  // Every send costs money (Verify + a Lookup query), so sends are capped per account, per (account, phone), per client
+  // IP and globally (SMS pumping / toll fraud). In memory only; keys are never the raw number or the raw IP: the IP is
+  // HMACed under a per-process random key that is never written anywhere. The per-phone limit is per ACCOUNT on purpose:
+  // a cross-account per-phone limit would tell an attacker that someone else asked for codes for that number, and let
+  // anyone who knows her number lock her out. Twilio's own per-number limits still apply (→ 429, see sms.ts).
+  const ipKey = randomBytes(32);
+  const hashIp = (req: Request) => createHmac('sha256', ipKey).update(req.ip ?? req.socket.remoteAddress ?? 'unknown').digest('base64url');
+  const smsStartPerAccount = new RateLimiter(sendLimits.perAccountPerDay, 24 * 3_600_000);
+  const smsStartPerAccountPhone = new RateLimiter(sendLimits.perAccountPhonePerHour, 3_600_000);
+  const smsStartPerIp = new RateLimiter(sendLimits.perIpPerHour, 3_600_000);
+  const smsGlobalHour = new RateLimiter(sendLimits.globalPerHour, 3_600_000);
+  const smsGlobalDay = new RateLimiter(sendLimits.globalPerDay, 24 * 3_600_000);
   const matchingVerifiedRow = db.prepare('SELECT matching_verified FROM users WHERE id = ?');
   const isPhoneVerified = (userId: string) => (matchingVerifiedRow.get(userId) as { matching_verified: number } | undefined)?.matching_verified === 1;
   /** Adult survivor AND (phone verified, or verification turned off in development). Replaces verifiedAdultSurvivor on
@@ -1019,14 +1041,25 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (!n.ok || n.kind !== 'phone')
       throw new HttpError(400, 'phone_invalid', 'We couldn’t read that as a phone number. Please check it, including the area code.');
     const e164 = n.canonical.slice('phone:'.length);
-    if (!smsStartPerAccount.hit(me.id) || !smsStartPerPhone.hit(phoneToken(phoneHashKey, e164)))
+    // E.164 country calling codes are prefix-free, so a prefix test is exact. Checked before any limit or provider call.
+    if (!allowedCountryCodes.some((cc) => e164.startsWith(`+${cc}`)))
+      throw new HttpError(400, 'phone_not_supported', 'We can’t send codes to numbers in this country yet. Please use a US or Canadian mobile number.');
+    if (
+      !smsStartPerAccount.hit(me.id) ||
+      !smsStartPerAccountPhone.hit(`${me.id}|${phoneToken(phoneHashKey, e164)}`) ||
+      !smsStartPerIp.hit(hashIp(req))
+    )
       throw new HttpError(429, 'rate_limited', 'We’ve sent several codes already. Please wait a while and try again.');
+    // Global caps last, so only sends that passed every other check count against them.
+    if (!smsGlobalHour.hit('all') || !smsGlobalDay.hit('all'))
+      throw new HttpError(503, 'sms_unavailable', 'Phone confirmation is busy right now. Please try again later.');
     sweepChallenges();
     let started: Awaited<ReturnType<SmsVerifier['start']>>;
     try {
       started = await sms.start(e164);
     } catch (e) {
-      if (e instanceof SmsError) throw new HttpError(e.code === 'phone_not_supported' ? 400 : 503, e.code, e.message);
+      if (e instanceof SmsError)
+        throw new HttpError(e.code === 'phone_not_supported' ? 400 : e.code === 'rate_limited' ? 429 : 503, e.code, e.message);
       throw e;
     }
     const challengeId = newId();
@@ -1035,10 +1068,44 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ challengeId, expiresAt: new Date(expiresAt).toISOString(), ...(exposeDemoCode && started.demoCode && { demoCode: started.demoCode }) });
   });
 
+  // Phone tokens are NOT written in the same transaction as her account flag (W19). One commit touching both would put
+  // the token's page and her users page side by side in the WAL, which a copy of the volume could line up. Instead the
+  // count is buffered here (in memory, like the challenge) and flushed in its own transaction at a random 10–60 min
+  // later, with other verifications' tokens, followed by a TRUNCATE checkpoint. The account limit counts the buffer too.
+  // Lost on a crash (a phone could then enable one account more than the limit); flushed on shutdown (index.ts).
   const phoneTokenGet = db.prepare('SELECT accounts FROM phone_tokens WHERE token_hash = ?');
-  const phoneTokenUpsert = db.prepare(
-    'INSERT INTO phone_tokens (token_hash, accounts) VALUES (?, 1) ON CONFLICT (token_hash) DO UPDATE SET accounts = accounts + 1',
+  const phoneTokenAdd = db.prepare(
+    'INSERT INTO phone_tokens (token_hash, accounts) VALUES (?, ?) ON CONFLICT (token_hash) DO UPDATE SET accounts = accounts + excluded.accounts',
   );
+  const pendingTokens = new Map<string, number>();
+  const [flushMin, flushMax] = phoneOpt.tokenFlushDelayMs ?? [10 * 60_000, 60 * 60_000];
+  let flushTimer: NodeJS.Timeout | undefined;
+  const checkpoint = () => {
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      // best effort: a busy checkpoint just leaves the frames for the next one
+    }
+  };
+  const flushPhoneTokens = () => {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = undefined;
+    if (!pendingTokens.size) return;
+    // sorted, so the order of rows in the commit says nothing about the order of verifications
+    const batch = [...pendingTokens].sort(([a], [b]) => (a < b ? -1 : 1));
+    db.transaction(() => {
+      for (const [token, n] of batch) phoneTokenAdd.run(token, n);
+    })();
+    pendingTokens.clear();
+    checkpoint();
+  };
+  const scheduleFlush = () => {
+    if (flushTimer) return;
+    flushTimer = setTimeout(flushPhoneTokens, flushMin + randomInt(0, Math.max(1, flushMax - flushMin + 1)));
+    flushTimer.unref();
+  };
+  app.locals.flushPhoneTokens = flushPhoneTokens;
+
   app.post('/api/matching/verification/check', auth, verifiedAdultSurvivor, async (req, res) => {
     const me = req.user!;
     const body = parse(S.phoneVerificationCheck, req.body);
@@ -1048,6 +1115,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (c.expiresAt <= Date.now()) {
       challenges.delete(body.challengeId);
       throw expired();
+    }
+    // Charge the attempt BEFORE the provider call, so concurrent checks beyond the cap never reach it.
+    if (c.attempts >= MAX_CODE_ATTEMPTS) {
+      challenges.delete(body.challengeId);
+      throw new HttpError(400, 'code_expired', 'That code didn’t match, too many times. Please ask for a new one.');
     }
     c.attempts++;
     let result: Awaited<ReturnType<SmsVerifier['check']>>;
@@ -1069,22 +1141,23 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(400, 'code_invalid', 'That code didn’t match. Please check it and try again.');
     }
     // Approved: forget the number now, whatever happens next. The limit is checked only after she has proved control
-    // of the phone, so this endpoint can't be used to test whether someone else's number is on Matra.
+    // of the phone, so it can't be used to test whether someone else's number has been used to verify.
     challenges.delete(body.challengeId);
+    if (isPhoneVerified(me.id)) return res.json({ verified: true }); // already verified: don't use up a slot on this phone
     const token = phoneToken(phoneHashKey, c.phoneE164);
-    db.transaction(() => {
-      if (isPhoneVerified(me.id)) return; // already verified: don't count this phone against a second account slot
-      const row = phoneTokenGet.get(token) as { accounts: number } | undefined;
-      if (row && row.accounts >= maxAccountsPerPhone)
-        throw new HttpError(
-          409,
-          'phone_limit_reached',
-          'This phone number has already been used to turn on sealed matching for as many accounts as we allow. Please try a different number.',
-        );
-      phoneTokenUpsert.run(token);
-      db.prepare('UPDATE users SET matching_verified = 1 WHERE id = ?').run(me.id);
-      audit(me.id, 'matching.phone_verified', 'You confirmed a phone number for sealed matching. The number itself was not kept.');
-    })();
+    const used = ((phoneTokenGet.get(token) as { accounts: number } | undefined)?.accounts ?? 0) + (pendingTokens.get(token) ?? 0);
+    if (used >= maxAccountsPerPhone)
+      throw new HttpError(
+        409,
+        'phone_limit_reached',
+        'This phone number has already been used to turn on sealed matching for as many accounts as we allow. Please try a different number.',
+      );
+    pendingTokens.set(token, (pendingTokens.get(token) ?? 0) + 1);
+    scheduleFlush();
+    // Only the flag, in its own commit, then checkpointed out of the WAL. No audit event: a timestamped row for her
+    // account would line up with the SMS provider's (number, time) record (W19). The page shows her the flag instead.
+    db.prepare('UPDATE users SET matching_verified = 1 WHERE id = ?').run(me.id);
+    checkpoint();
     res.json({ verified: true });
   });
 
@@ -1368,7 +1441,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       db.prepare('DELETE FROM oprf_quota WHERE user_id = ?').run(me.id);
       accountBudget.forget(me.id);
       for (const [k, c] of challenges) if (c.userId === me.id) challenges.delete(k);
-      // phone_tokens is not linked to any account, so its count is NOT decremented (W19, docs/PRIVACY_DATA_INVENTORY.md)
+      // phone_tokens has no account id, so its count is NOT decremented (W19, docs/PRIVACY_DATA_INVENTORY.md)
       pruneGroups();
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);
       db.prepare('DELETE FROM audit_events WHERE user_id = ?').run(me.id);
@@ -1453,6 +1526,11 @@ function mountWebApp(app: express.Express, webDir: string, demoBanner: boolean) 
 }
 
 /** Access the underlying database of an app created by createApp (tests, seed, admin scripts). */
+/** Writes buffered phone-token counts now (shutdown, tests). Normally they are flushed at a random later time (W19). */
+export function flushPhoneTokens(app: express.Express): void {
+  (app.locals.flushPhoneTokens as (() => void) | undefined)?.();
+}
+
 export function getDb(app: express.Express): DB {
   return app.locals.db as DB;
 }
