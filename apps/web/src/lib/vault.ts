@@ -26,6 +26,7 @@ import { envelopeHash, type ApiClient } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { MATCHING_CONSENT_LINES } from './disclosures';
 import { stripMetadata } from './metadata';
+import type { WorkingData } from './session';
 import { MATCH_PINS } from '../matchPins';
 
 /** Her personal preferences, stored only inside an encrypted 'profile' vault record. */
@@ -208,6 +209,22 @@ export function mergeEvidence(...lists: (EvidenceItem[] | undefined)[]): Evidenc
   const out = new Map<string, EvidenceItem>();
   for (const l of lists) for (const e of l ?? []) out.set(e.blobId ?? e.id, e);
   return Array.from(out.values());
+}
+
+/**
+ * The story's working copy, plus any files the in-memory working data has that it doesn't (details saved by the
+ * Evidence page after the story opened). Her draft stays the story's own; the draft-record id follows the newer save.
+ * Returns null when there is nothing new.
+ */
+export function foldInLateEvidence(story: WorkingData, mem: WorkingData | null): WorkingData | null {
+  if (!mem) return null;
+  const known = new Set(story.evidence.map((e) => e.blobId ?? e.id));
+  if (mem.evidence.every((e) => known.has(e.blobId ?? e.id))) return null;
+  return {
+    ...story,
+    evidence: mergeEvidence(story.evidence, mem.evidence),
+    savedDraftRecordId: mem.savedDraftRecordId ?? story.savedDraftRecordId,
+  };
 }
 
 // ───────────── sealed matching (escrow) ─────────────

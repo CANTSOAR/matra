@@ -246,6 +246,9 @@ test('2. evidence: JPEG GPS is stripped and hashed; PDF warns metadata kept; re-
   const pdfRow = added.locator('li', { hasText: 'texts-export.pdf' });
   await expect(pdfRow.getByText('Hidden details not removed')).toBeVisible({ timeout: 60_000 });
   await expect(pdfRow.getByText(/couldn’t remove hidden details from this PDF/)).toBeVisible();
+  // The row appears once the file is uploaded; its details are added to her draft a moment later. Wait for that (the
+  // message is cleared when the PDF is chosen, so this is the PDF's), as she would: leaving earlier used to race it.
+  await expect(page.getByText('Saved to your space and added to your draft story.')).toBeVisible();
   await shot(page, '08-evidence');
 
   // The stored copy really has no EXIF: decrypt it from the vault and download it.

@@ -6,7 +6,7 @@ import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common';
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
-import { latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
+import { foldInLateEvidence, latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
 import { lodgeMatches } from '../space/adapters';
 import { matchContactOf } from '../intake/record';
@@ -23,7 +23,7 @@ interface Boot {
 }
 
 export function Story() {
-  const { api, session, getWorkingData, setWorkingData, profile } = useRequiredSession();
+  const { api, session, getWorkingData, setWorkingData, workingVersion, profile } = useRequiredSession();
   const navigate = useNavigate();
   const [boot, setBoot] = useState<Boot | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -79,6 +79,26 @@ export function Story() {
       window.clearTimeout(saveTimer.current);
     };
   }, [api, session.masterKey, getWorkingData]);
+
+  // A file added on the Evidence page can finish saving after she has already come back to her story (the upload
+  // carries on when she leaves that page). Fold its details in when they land, so the file count is right and the next
+  // save or seal keeps the file.
+  useEffect(() => {
+    if (!boot) return;
+    let alive = true;
+    getWorkingData().then(
+      (mem) => {
+        const next = alive && workingRef.current ? foldInLateEvidence(workingRef.current, mem) : null;
+        if (!next) return;
+        workingRef.current = next;
+        setFileCount(next.evidence.length);
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [boot, workingVersion, getWorkingData]);
 
   /**
    * Save the encrypted draft to her vault now (if anything changed since the last save).

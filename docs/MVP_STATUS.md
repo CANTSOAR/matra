@@ -23,7 +23,7 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 - `npm run typecheck`: clean across all 4 workspaces.
 - `npm test`: 94 passing, 1 skipped (crypto 2, shared/server 26, web 66).
 - Later the same day, after the story space, on-device voice and counselor portal landed: `npm run e2e:prod` **9/9 passed** (voice test skipped unless built with `MATRA_VOICE_HARNESS=1`; it passes on both the CPU and the opt-in WebGPU path).
-- `npm run e2e` (morning run): **8/8 passed** on the second run. The first run failed on scenario 2 (evidence/EXIF) and the 6 tests after it didn't run. The rerun passed with no code changes, so treat scenario 2 as **flaky**. Fix it before you rely on it in a live demo.
+- `npm run e2e` (morning run): **8/8 passed** on the second run. The first run failed on scenario 2 (evidence/EXIF) and the 6 tests after it didn't run. The rerun passed with no code changes, so treat scenario 2 as **flaky**. *Fixed 2026-11-11 (see item 4 below).*
 
 ## What it still needs, in order
 
@@ -33,7 +33,7 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 2. ~~**Settle the "no AI" claim against the new story flow.**~~ *Fixed 2026-10-07.* The dump-first story space has shipped with on-device voice transcription (Whisper, run in her browser; the model, about 94 MB, downloads once from Matra's own server) and on-device suggestions (`compromise`, `chrono-node`) that she keeps, changes or sets aside. The one-pager, PRD, grant boilerplate, FAQ, meeting playbook, demo script, legal memo and email templates now all use one precise line: *"Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service."* Don't shorten it back to "no AI".
 
 3. **A dedicated project email address** (not a personal Gmail) and a public repo link. Both are placeholders in the signature block.
-4. **Fix the flaky e2e scenario 2.**
+4. ~~**Fix the flaky e2e scenario 2.**~~ *Fixed 2026-11-11.* Two races, both timing-dependent. (1) Fixed 2026-10-14: a file chosen before the Evidence page had opened her vault saved an empty draft over her story. (2) Fixed 2026-11-11: a file's details are added to her draft a moment *after* its row appears. The test (and a fast user) could leave the page and open My story inside that window. The story read the files once when it opened, so it showed "1 file" and would have sealed without the second file. Reproduced on demand by delaying that one save by 8 s. Now the open story takes in files whose details land later (`foldInLateEvidence`, unit-tested), and the test waits for the PDF's "Saved to your space" status before it leaves, as she would. `MATRA_E2E_CPU_THROTTLE=4` slows the page's CPU for flake hunting.
 5. ~~**Doc drift.**~~ *Fixed 2026-10-07.* GOVERNANCE.md §2.6 said data export was "not yet built", but it is built (the "Download my data" zip is covered by e2e scenario 3). Update it, noting that §2 changes follow GOVERNANCE §6 (this one is a factual status fix, not a change to the commitment).
 
 ### 2. Gates before any real survivor data (months; these need other people)

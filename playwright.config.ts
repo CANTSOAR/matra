@@ -8,6 +8,7 @@ import { defineConfig, devices } from '@playwright/test';
  *   npm run e2e                      (starts, wipes and seeds its own stack)
  *   MATRA_E2E_DB=/tmp/x.db npm run e2e
  *   MATRA_E2E_SCREENS=/tmp/screens npm run e2e   (where full-page screenshots go)
+ *   MATRA_E2E_CPU_THROTTLE=4 npm run e2e        (slow the page's CPU 4x, to shake out timing races)
  */
 const API_PORT = Number(process.env.MATRA_E2E_API_PORT) || 4100;
 const WEB_PORT = Number(process.env.MATRA_E2E_WEB_PORT) || 5174;
