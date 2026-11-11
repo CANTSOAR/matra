@@ -11,7 +11,9 @@
     "test": "vitest run",
     "typecheck": "tsc -p .",
     "verify-attorney": "tsx src/verify-attorney.ts",
-    "sign-roster": "tsx src/sign-roster.ts"
+    "sign-roster": "tsx src/sign-roster.ts",
+    "holder": "tsx src/holder-server.ts",
+    "oprf-ceremony": "tsx src/oprf-ceremony.ts"
   },
   "dependencies": {
     "@matra/crypto": "*",

@@ -1001,3 +1001,31 @@ Write, linking question IDs and giving no legal conclusions:
 ## 5. Deviations
 
 Implementers append here, one subsection per feature, when the code had to differ from this plan.
+
+### threshold-oprf
+
+Built before metadata-min (§3.2 had not landed when this feature ran), so:
+- `logging.ts` does not exist yet. The standalone holder logs `[holder i] METHOD <route pattern> status ms` with its own
+  tiny middleware (no ids, tokens, IPs or query strings); swap it for `requestLogger()` when metadata-min lands.
+  `docs/PRIVACY_DATA_INVENTORY.md` does not exist yet either; metadata-min should add a row for each holder's quota DB
+  (`oprf_quota`: pseudonymous subject = HMAC(pepper, user id), holder index, UTC day, day count, lifetime count).
+
+Code shape:
+- The holder is split in two files: `holder.ts` exports `createHolderApp` (tests import it) and `holder-server.ts` is
+  the process entrypoint (`npm run -w @matra/server holder`), so importing the app never starts a server.
+- `combineShareKeysForTest` returns an `OprfKeyPair` (secret + public), not bare bytes.
+- `matching.ts` also exports `matchingOprfKeys(config, pins)` (pins + `checkThresholdKeys`, run **before** anything is
+  sent to a holder), `evaluateMatchOprf(transport, keys, blind)` (parallel calls, any t, 429 surfacing) and
+  `MatchingError` (`code: 'holders_unavailable'`). The web maps both that and `ThresholdOprfError` to "Sealed matching
+  isn't available right now. Nothing was sealed."
+- `CreateAppOptions.matching.oprf = { t, shares? , remote?: { urls, publicKeys, tokenKey } }`; `loadOprfThreshold`
+  returns `{ t, m, mode, shares?, remote? }` (assignable to it) instead of top-level `urls` / `holderPublicKeys`.
+- `loadSecretBytes` gained `required`, `dbPath` (the holder checks against its own quota DB) and `generate` options.
+  Shares never use the default "≥ 32-char secret → HKDF" parser: a share must be the exact scalar f(i).
+- Holder tokens use node's built-in Ed25519 (`node:crypto`) rather than adding `@noble/curves` as a server dependency.
+- Outside production, a changed key set is accepted as a rotation with a warning (`loadMatchingSettings` sets
+  `allowKeyRotation` unless `NODE_ENV=production`), so old dev databases pinned to `oprf_pk_a/b` keep working.
+- `oprf-ceremony --token-key` also writes a holder-token seed and prints its public key (single-operator demos and
+  e2e:prod only). The ceremony helper `writeOprfCeremony` lives in `config.ts` so dev auto-setup and the CLI share it.
+- `/debug/state` on holders is left to the demo feature (§4).
+- e2e:prod runs the three holders as separate processes (the stretch item), with a fresh ceremony per run.

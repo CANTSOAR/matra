@@ -16,7 +16,7 @@ It is well above a typical student MVP. The full survivor-to-attorney loop works
 | Trauma-informed UX | **B / unvalidated** | Skip-anything, Quick Exit, triple-Esc, 15-minute idle lock, 18+ gate. **No advocate has reviewed the script yet**, which is the single biggest credibility gap |
 | Legal posture | **B+ research / F review** | Excellent memo. Zero review by licensed counsel |
 | Ops readiness | **D** | No hosted demo URL, no entity, no incident-response plan, no legal-request policy, no audit |
-| Escrow (matching) | **C, demo-only** | Survivor self-probing is closed. The operator (pepper holder) can still test guessed identifiers (W2). Correctly kept off for any pilot |
+| Escrow (matching) | **C, demo-only** | Survivor self-probing is closed. *2026-11-11 (weekend-mvp):* the OPRF key is now a 2-of-3 threshold key (Shamir shares, per-share proofs) and each holder can run as its own process; but until the holders run at separate institutions the operator still holds every share and can test guessed identifiers (W2, W14). Correctly kept off for any pilot |
 
 ### Verification run on 2026-10-07
 

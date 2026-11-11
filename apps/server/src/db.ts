@@ -283,7 +283,41 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  // ── v6: threshold OPRF (t-of-m Shamir shares replace the additive holders 'a'/'b'). Holders are now numbered
+  // "1".."m", so the quota table loses its ('a','b') CHECK. Old quotas are dropped: they counted evaluations under the
+  // old keys, which no longer exist (the key change is a rotation: new epoch, clients re-seal).
+  `
+  DROP TABLE oprf_quota;
+  CREATE TABLE oprf_quota (
+    user_id        TEXT NOT NULL,
+    holder         TEXT NOT NULL,
+    day            TEXT NOT NULL,
+    day_count      INTEGER NOT NULL,
+    lifetime_count INTEGER NOT NULL,
+    PRIMARY KEY (user_id, holder)
+  );
+  `,
 ];
+
+/**
+ * A standalone OPRF key holder's own database (src/holder.ts): just its quota counters, keyed by the app server's
+ * pseudonymous token subject. Same table shape as the app DB's oprf_quota, so SqliteQuotaStore works on both.
+ */
+export function openHolderDb(dbPath: string): DB {
+  if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('secure_delete = ON');
+  db.exec(`CREATE TABLE IF NOT EXISTS oprf_quota (
+    user_id        TEXT NOT NULL,
+    holder         TEXT NOT NULL,
+    day            TEXT NOT NULL,
+    day_count      INTEGER NOT NULL,
+    lifetime_count INTEGER NOT NULL,
+    PRIMARY KEY (user_id, holder)
+  )`);
+  return db;
+}
 
 /** Migrations (0-based index) that rebuild a referenced table and must run with foreign_keys OFF. */
 const FK_OFF = new Set([3]);

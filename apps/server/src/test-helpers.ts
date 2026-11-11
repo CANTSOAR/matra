@@ -114,7 +114,7 @@ export function matchTransport(app: express.Express, u: TestUser): MatchTranspor
   };
   return {
     config: async () => ok(await request(app).get('/api/matching/config').set(u.auth)),
-    evaluate: async (h, req) => ok(await request(app).post(`/api/matching/oprf-${h}`).set(u.auth).send(req)),
+    evaluate: async (i, req) => ok(await request(app).post(`/api/matching/oprf/${i}`).set(u.auth).send(req)),
     createEntry: async (req) => ok(await request(app).post('/api/matching/entries').set(u.auth).send(req)),
     listEntries: async () => ok(await request(app).get('/api/matching/entries').set(u.auth)),
     addSeals: async (id, req) => ok(await request(app).post(`/api/matching/entries/${id}/seals`).set(u.auth).send(req)),

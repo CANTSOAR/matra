@@ -440,12 +440,27 @@ export interface OprfEvaluateRequest { blinded: string }
 /** RFC 9497 VOPRF (ristretto255-SHA512) evaluation with its DLEQ proof against the key holder's public key. */
 export interface OprfEvaluateResponse { evaluated: string; proof: string }
 
-export interface MatchingConfig {
-  threshold: 2;
+// ── threshold OPRF ──
+/** One OPRF key holder: its index i (1..m) and base64 share public key pk_i = k_i·G (ristretto255). */
+export interface OprfHolderInfo { index: number; publicKey: string }
+/**
+ * The OPRF key k is Shamir-shared among m independent key holders; any t of them evaluate (packages/crypto
+ * threshold.ts). groupPublicKey = k·G, consistent with the holders' share keys (the client checks).
+ */
+export interface ThresholdOprfConfig {
   suite: 'ristretto255-SHA512';
   mode: 'voprf';
-  /** Public keys of the two independent OPRF key holders (base64 ristretto255 elements). */
-  keyHolders: { a: { publicKey: string }; b: { publicKey: string } };
+  t: number;
+  m: number;
+  groupPublicKey: string;
+  holders: OprfHolderInfo[];
+}
+
+export interface MatchingConfig {
+  /** The MATCH threshold: 2 distinct survivors naming the same person. Not the OPRF key threshold (oprf.t). */
+  threshold: 2;
+  /** The threshold OPRF key set. */
+  oprf: ThresholdOprfConfig;
   /** Verified counselors; a sealed entry carries one CounselorSeal per counselor. */
   counselors: CounselorProfile[];
   limits: { perDay: number; lifetime: number };
@@ -602,8 +617,9 @@ export interface ApiError { error: string; code?: string }
  GET    /api/escrow                                   -> { entries: EscrowEntry[] } (own sealed-match entries; status always 'sealed')
 
  GET    /api/matching/config                          -> MatchingConfig   (survivor)
- POST   /api/matching/oprf-a    OprfEvaluateRequest   -> OprfEvaluateResponse (verified-adult survivor; rate-limited)
- POST   /api/matching/oprf-b    OprfEvaluateRequest   -> OprfEvaluateResponse (independent key; separately rate-limited)
+ GET    /api/matching/oprf/:index/key                 -> OprfHolderInfo   (key holder i's share public key)
+ POST   /api/matching/oprf/:index OprfEvaluateRequest -> OprfEvaluateResponse (verified-adult survivor; per-holder quota;
+                                                         503 holder_unavailable when holder i is down)
  POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed')
  POST   /api/matching/entries/:id/seals AddMatchSealsRequest -> { entry: EscrowEntry } (owner only; adds seals for new counselors)
  GET    /api/matching/entries                         -> { entries: EscrowEntry[] }

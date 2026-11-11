@@ -15,13 +15,14 @@
  *   409 username_taken | already_revoked | already_sealed
  *   413 payload_too_large   415 unsupported_media_type   500 internal
  *   429 rate_limited | rate_limited_daily | rate_limited_lifetime
+ *   503 holder_unavailable (one OPRF key holder is down; any t of m are enough)
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
-import { generateOprfKey, type OprfKeyPair } from '@matra/crypto';
+import { generateOprfKey, groupKeyFromShares, fromBase64, splitOprfKey, toBase64, type ShareKey } from '@matra/crypto';
 import type {
   AttorneyProfile,
   AuditEvent,
@@ -66,7 +67,8 @@ import {
   verifyAuthKey,
 } from './auth.js';
 import * as S from './schemas.js';
-import { DEFAULT_OPRF_LIMITS, OprfKeyHolder, type HolderId, type OprfLimits } from './oprf.js';
+import { DEFAULT_OPRF_LIMITS, type OprfLimits } from './oprf.js';
+import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
 
 export interface CreateAppOptions {
   /** SQLite path, or ':memory:' for tests. */
@@ -89,14 +91,14 @@ export interface CreateAppOptions {
   /** Number of reverse-proxy hops to trust for the client IP (rate limiting). Render / Fly: 1. */
   trustProxy?: number;
   /**
-   * Sealed matching. keyA / keyB are the two independent OPRF key shares (config.ts loadOprfKey). When omitted (tests),
-   * fresh ephemeral keys are generated — matching then only works for the lifetime of this process.
+   * Sealed matching. `oprf` is the threshold OPRF key set (config.ts loadOprfThreshold): t, and either all m shares
+   * in-process or the remote holders' URLs + pinned share public keys + holder-token key. When omitted (tests), a fresh
+   * ephemeral 2-of-3 ceremony runs — matching then only works for the lifetime of this process.
    * releaseDelayHours (default 72): a group is released only once ≥ 2 distinct survivors' entries are at least this old.
    * allowKeyRotation: accept keys that differ from the ones recorded in the DB (MATRA_OPRF_ROTATE=1) → new key epoch.
    */
   matching?: {
-    keyA?: OprfKeyPair;
-    keyB?: OprfKeyPair;
+    oprf?: { t: number; shares?: ShareKey[]; remote?: RemoteHolderConfig };
     limits?: Partial<OprfLimits>;
     releaseDelayHours?: number;
     allowKeyRotation?: boolean;
@@ -375,36 +377,45 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const attorneyOnly = requireRole('attorney');
   const counselorOnly = requireRole('counselor');
 
-  // ── sealed matching: two independent OPRF key holders ──
+  // ── sealed matching: t-of-m threshold OPRF key holders (in-process, or remote processes behind this server) ──
   const limits: OprfLimits = { ...DEFAULT_OPRF_LIMITS, ...opts.matching?.limits };
-  const holders: Record<HolderId, OprfKeyHolder> = {
-    a: new OprfKeyHolder('a', opts.matching?.keyA ?? generateOprfKey(), db, limits),
-    b: new OprfKeyHolder('b', opts.matching?.keyB ?? generateOprfKey(), db, limits),
-  };
-  if (holders.a.publicKey === holders.b.publicKey) throw new Error('OPRF key shares A and B must differ');
+  const oprfOpt = opts.matching?.oprf ?? { t: 2, shares: splitOprfKey(generateOprfKey().secretKey, 2, 3) };
+  let holders: HolderPool;
+  if (oprfOpt.remote) holders = new RemoteHolderPool(oprfOpt.t, oprfOpt.remote, pepper);
+  else if (oprfOpt.shares) holders = new InProcessHolderPool(oprfOpt.t, oprfOpt.shares, db, limits);
+  else throw new Error('matching.oprf needs either shares (in-process) or remote holders');
+  // Refuses an inconsistent or degenerate key set (shares from different ceremonies, duplicates, identity keys).
+  const groupPublicKey = toBase64(groupKeyFromShares(holders.publicKeys().map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })), holders.t));
   const releaseDelayMs = Math.max(0, opts.matching?.releaseDelayHours ?? 72) * 3_600_000;
 
-  // ── key pinning in the DB (review M5): the holder public keys are recorded on first start; a silent key change would
-  // make every existing entry unmatchable (and could be used to partition survivors), so it is refused unless the
-  // operator explicitly rotates. A rotation starts a new key epoch; survivors' clients re-seal on their next sign-in.
+  // ── key pinning in the DB (review M5): t, the group key and the share public keys are recorded on first start; a
+  // silent key change would make every existing entry unmatchable (and could be used to partition survivors), so it is
+  // refused unless the operator explicitly rotates. A rotation starts a new key epoch; survivors' clients re-seal on
+  // their next sign-in. A database still carrying the additive keys (oprf_pk_a/b) counts as a key change.
   const metaGet = db.prepare('SELECT value FROM matching_meta WHERE key = ?');
   const metaSet = db.prepare('INSERT INTO matching_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
   const meta = (k: string) => (metaGet.get(k) as { value: string } | undefined)?.value;
+  const sharePks = JSON.stringify(holders.publicKeys());
   db.transaction(() => {
-    const [pkA, pkB] = [meta('oprf_pk_a'), meta('oprf_pk_b')];
-    if (pkA === undefined && pkB === undefined) {
-      metaSet.run('oprf_pk_a', holders.a.publicKey);
-      metaSet.run('oprf_pk_b', holders.b.publicKey);
+    const recorded = { t: meta('oprf_t'), pk: meta('oprf_group_pk'), shares: meta('oprf_share_pks') };
+    const legacy = meta('oprf_pk_a') !== undefined || meta('oprf_pk_b') !== undefined;
+    const record = () => {
+      metaSet.run('oprf_t', String(holders.t));
+      metaSet.run('oprf_group_pk', groupPublicKey);
+      metaSet.run('oprf_share_pks', sharePks);
+      db.prepare(`DELETE FROM matching_meta WHERE key IN ('oprf_pk_a', 'oprf_pk_b')`).run();
+    };
+    if (!legacy && recorded.t === undefined && recorded.pk === undefined && recorded.shares === undefined) {
+      record();
       metaSet.run('key_epoch', String(Number(meta('key_epoch') ?? 0) + 1));
-    } else if (pkA !== holders.a.publicKey || pkB !== holders.b.publicKey) {
+    } else if (legacy || recorded.t !== String(holders.t) || recorded.pk !== groupPublicKey || recorded.shares !== sharePks) {
       if (!opts.matching?.allowKeyRotation)
         throw new Error(
           'OPRF key holder public keys differ from the ones recorded in this database. Refusing to start: a silent key ' +
             'change breaks every sealed entry. To rotate deliberately, restart once with MATRA_OPRF_ROTATE=1.',
         );
       const epoch = Number(meta('key_epoch') ?? 1) + 1;
-      metaSet.run('oprf_pk_a', holders.a.publicKey);
-      metaSet.run('oprf_pk_b', holders.b.publicKey);
+      record();
       metaSet.run('key_epoch', String(epoch));
       db.prepare('DELETE FROM oprf_quota').run(); // new keys: re-sealing must not be blocked by old quotas
       console.warn(`[matra] OPRF keys rotated: key epoch is now ${epoch}. Survivors' clients re-seal on next sign-in.`);
@@ -954,9 +965,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const roster = signedRoster();
     const config: MatchingConfig = {
       threshold: 2,
-      suite: 'ristretto255-SHA512',
-      mode: 'voprf',
-      keyHolders: { a: { publicKey: holders.a.publicKey }, b: { publicKey: holders.b.publicKey } },
+      oprf: { suite: 'ristretto255-SHA512', mode: 'voprf', t: holders.t, m: holders.m, groupPublicKey, holders: holders.publicKeys() },
       counselors: sealableCounselors().map(toCounselorProfile),
       limits: { perDay: limits.perDay, lifetime: limits.lifetime },
       keyEpoch,
@@ -965,27 +974,34 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json(config);
   });
 
-  // Two independent evaluation endpoints, one per key share. In production each can live in its own process/host.
-  for (const h of ['a', 'b'] as const) {
-    app.get(`/api/matching/oprf-${h}/key`, (_req, res) => {
-      res.json({ publicKey: holders[h].publicKey });
-    });
-    app.post(`/api/matching/oprf-${h}`, auth, verifiedAdultSurvivor, (req, res) => {
-      const { blinded } = parse(S.oprfEvaluateRequest, req.body);
-      const r = holders[h].evaluate(req.user!.id, blinded);
-      if (!r.ok) {
-        if (r.code === 'invalid_element') throw new HttpError(400, 'invalid_request', 'blinded is not a valid group element');
-        throw new HttpError(
-          429,
-          r.code,
-          r.code === 'rate_limited_daily'
-            ? 'You’ve sealed as many identifiers as we allow in one day. You can add more tomorrow.'
-            : 'This account has reached the limit for sealed identifiers.',
-        );
-      }
-      res.json(r.response);
-    });
-  }
+  // One evaluation endpoint per key holder i (in-process, or proxied to holder i's own process). The browser only
+  // talks to this origin; this server sees blinded elements and evaluations, never identifiers or OPRF outputs.
+  const holderIndex = (req: Request) => {
+    const i = Number(req.params.index);
+    if (!Number.isInteger(i) || i < 1 || i > holders.m) throw new HttpError(404, 'not_found', 'No such key holder.');
+    return i;
+  };
+  app.get('/api/matching/oprf/:index/key', (req, res) => {
+    const i = holderIndex(req);
+    res.json(holders.publicKeys()[i - 1]);
+  });
+  app.post('/api/matching/oprf/:index', auth, verifiedAdultSurvivor, async (req, res) => {
+    const i = holderIndex(req);
+    const { blinded } = parse(S.oprfEvaluateRequest, req.body);
+    const r = await holders.evaluate(i, req.user!.id, blinded);
+    if (!r.ok) {
+      if (r.code === 'invalid_element') throw new HttpError(400, 'invalid_request', 'blinded is not a valid group element');
+      if (r.code === 'holder_unavailable') throw new HttpError(503, 'holder_unavailable', 'This key holder is not available right now.');
+      throw new HttpError(
+        429,
+        r.code,
+        r.code === 'rate_limited_daily'
+          ? 'You’ve sealed as many identifiers as we allow in one day. You can add more tomorrow.'
+          : 'This account has reached the limit for sealed identifiers.',
+      );
+    }
+    res.json(r.response);
+  });
 
   const ownEntries = db.prepare(
     `SELECT e.*, (SELECT json_group_array(counselor_id) FROM match_seals s WHERE s.entry_id = e.id) AS counselor_ids
@@ -1212,6 +1228,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       db.prepare('DELETE FROM match_seals WHERE counselor_id = ?').run(me.id);
       db.prepare('DELETE FROM counselor_notes WHERE counselor_id = ?').run(me.id);
       db.prepare('DELETE FROM counselor_profiles WHERE user_id = ?').run(me.id);
+      // in-process holders' quotas; remote holders only know a pseudonym (HMAC of the id) that nothing can link back
       db.prepare('DELETE FROM oprf_quota WHERE user_id = ?').run(me.id);
       pruneGroups();
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);

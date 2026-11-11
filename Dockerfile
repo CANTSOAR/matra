@@ -1,11 +1,13 @@
 # Matra demo / production image.
 #   docker build -t matra .
 #   docker run -p 8080:8080 -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 \
-#     -e MATRA_OPRF_KEY_A=$(openssl rand -hex 32) -e MATRA_OPRF_KEY_B=$(openssl rand -hex 32) \
+#     -e MATRA_OPRF_SHARE_1=… -e MATRA_OPRF_SHARE_2=… -e MATRA_OPRF_SHARE_3=… \
 #     -v matra-data:/app/apps/server/data matra
-# The server refuses to start in production without both OPRF key shares (env, or *_FILE paths OUTSIDE the data volume).
-# Build-time pins for the web client (recommended for any non-demo build):
-#   docker build --build-arg MATRA_OPRF_PUBKEY_A=… --build-arg MATRA_OPRF_PUBKEY_B=… --build-arg MATRA_COUNSELOR_ROSTER_PUBKEY=… -t matra .
+# The shares come from `npm run -w @matra/server oprf-ceremony` (threshold OPRF, default 2-of-3). The server refuses to
+# start in production without every share (env, or *_FILE paths OUTSIDE the data volume) or the remote-holder config.
+# Build-time pins for the web client (recommended for any non-demo build; values printed by the ceremony):
+#   docker build --build-arg MATRA_OPRF_THRESHOLD=2 --build-arg MATRA_OPRF_GROUP_PUBKEY=… \
+#     --build-arg MATRA_OPRF_SHARE_PUBKEYS=pk1,pk2,pk3 --build-arg MATRA_COUNSELOR_ROSTER_PUBKEY=… -t matra .
 # See docs/DEPLOY.md. Never put real survivor data on an instance before the pre-launch checklist is done.
 
 # ── build: install everything, build the web app, then drop dev dependencies ──
@@ -26,11 +28,13 @@ COPY apps apps
 # `npm run build` first fetches + verifies the on-device speech model into apps/web/public/models (pinned, sha256-checked).
 COPY scripts scripts
 # Sealed-matching pins baked into the web build (empty = unpinned, development behaviour). See docs/DEPLOY.md.
-ARG MATRA_OPRF_PUBKEY_A=""
-ARG MATRA_OPRF_PUBKEY_B=""
+ARG MATRA_OPRF_THRESHOLD=""
+ARG MATRA_OPRF_GROUP_PUBKEY=""
+ARG MATRA_OPRF_SHARE_PUBKEYS=""
 ARG MATRA_COUNSELOR_ROSTER_PUBKEY=""
-ENV MATRA_OPRF_PUBKEY_A=$MATRA_OPRF_PUBKEY_A \
-    MATRA_OPRF_PUBKEY_B=$MATRA_OPRF_PUBKEY_B \
+ENV MATRA_OPRF_THRESHOLD=$MATRA_OPRF_THRESHOLD \
+    MATRA_OPRF_GROUP_PUBKEY=$MATRA_OPRF_GROUP_PUBKEY \
+    MATRA_OPRF_SHARE_PUBKEYS=$MATRA_OPRF_SHARE_PUBKEYS \
     MATRA_COUNSELOR_ROSTER_PUBKEY=$MATRA_COUNSELOR_ROSTER_PUBKEY
 RUN npm run build && npm prune --omit=dev --no-audit --no-fund
 

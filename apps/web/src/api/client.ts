@@ -207,9 +207,9 @@ export class ApiClient {
   matchingConfig() {
     return this.json<MatchingConfig>('GET', '/api/matching/config');
   }
-  /** One of the two independent OPRF key holders ('a' / 'b'). */
-  oprfEvaluate(holder: 'a' | 'b', req: OprfEvaluateRequest) {
-    return this.json<OprfEvaluateResponse>('POST', `/api/matching/oprf-${holder}`, req);
+  /** OPRF key holder `index` (1..m) of the threshold OPRF; the app server relays to it. */
+  oprfEvaluate(index: number, req: OprfEvaluateRequest) {
+    return this.json<OprfEvaluateResponse>('POST', `/api/matching/oprf/${index}`, req);
   }
   createMatchEntry(req: CreateMatchEntryRequest) {
     return this.json<{ entry: EscrowEntry }>('POST', '/api/matching/entries', req);

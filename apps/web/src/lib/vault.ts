@@ -15,6 +15,7 @@ import {
   normalizeMatchIdentifier,
   refreshMatchEntries,
   submitMatchEntry,
+  ThresholdOprfError,
   generateContentKey,
   randomId,
   sha256Hex,
@@ -341,6 +342,9 @@ export async function lodgeEscrow(
         pins: MATCH_PINS,
       });
     } catch (e) {
+      // Fewer than t key holders answered (or one answered with a key other than its published one): nothing sealed.
+      if (e instanceof ThresholdOprfError || (e as { code?: string }).code === 'holders_unavailable')
+        throw new MatchingError('Sealed matching isn’t available right now. Nothing was sealed.');
       if ((e as { code?: string }).code !== 'already_sealed') throw e;
     }
     done.add(t.key);
@@ -351,7 +355,7 @@ export async function lodgeEscrow(
 function matchTransport(api: ApiClient) {
   return {
     config: () => api.matchingConfig(),
-    evaluate: (h: 'a' | 'b', req: { blinded: string }) => api.oprfEvaluate(h, req),
+    evaluate: (i: number, req: { blinded: string }) => api.oprfEvaluate(i, req),
     createEntry: (req: Parameters<ApiClient['createMatchEntry']>[0]) => api.createMatchEntry(req),
     listEntries: () => api.listMatchEntries(),
     addSeals: (id: string, req: Parameters<ApiClient['addMatchSeals']>[1]) => api.addMatchSeals(id, req),

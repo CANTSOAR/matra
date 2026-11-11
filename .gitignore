@@ -31,3 +31,6 @@ reasons.txt
 # Legal bank: local ID reservations (see scripts/legal-bank.mjs)
 docs/legal-research/questions/.ids/
 docs/legal-research/private/
+
+# Throwaway threshold-OPRF keys for e2e:prod (playwright.prod.config.ts)
+e2e/.keys/

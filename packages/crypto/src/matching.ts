@@ -8,13 +8,14 @@
  * ── Protocol (threshold t = 2) ───────────────────────────────────────────────────────────────────────
  *   x_id   = normalizeMatchIdentifier(kind, value)            e.g. "instagram:bad_guy", "phone:+12015550100"
  *   input  = utf8("matra/match/v2|" || x_id)
- *   OPRF   : RFC 9497 VOPRF, suite ristretto255-SHA512, with the server key split additively between two
- *            independent key holders A and B (k = k_A + k_B). The client blinds once, sends the same blinded element
- *            to A and B, verifies EACH holder's DLEQ proof against its published (build-time pinned) public key, refuses
- *            degenerate key pairs (pk_A = pk_B, an identity key, pk_A + pk_B = identity), adds the two evaluated
- *            elements and unblinds:  P̂ = Finalize(input, blind, Eval_A + Eval_B) = VOPRF_{k_A + k_B}(input).
- *            Neither holder alone learns anything about x_id or can compute P̂ (offline dictionary attacks over phone
- *            numbers need BOTH keys).
+ *   OPRF   : RFC 9497 VOPRF, suite ristretto255-SHA512, with the server key k Shamir-shared among m independent key
+ *            holders, any t of whom (default 2-of-3) can evaluate (./threshold.ts). The client blinds once, sends the
+ *            same blinded element to every holder, verifies EACH holder's DLEQ proof against its published (build-time
+ *            pinned) share public key, refuses inconsistent or degenerate key sets, combines any t valid evaluations
+ *            with Lagrange coefficients in the exponent and unblinds:  P̂ = Finalize(input, blind, Σ λ_i·Eval_i) =
+ *            VOPRF_k(input). Fewer than t holders learn nothing about x_id and cannot compute P̂ (offline dictionary
+ *            attacks over phone numbers need t shares). This t is the KEY threshold; the MATCH threshold (2 distinct
+ *            survivors) below is separate.
  *   KDF    : HKDF-SHA256(salt = "matra/match/v2") with distinct info labels:
  *              a  (slope)              = HKDF(P̂, "slope")     ∈ F_p, p = 2^256 + 297 (Callisto's field)
  *              k  (intercept / secret) = HKDF(P̂, "intercept") ∈ F_p; the per-perpetrator line is Y = a·X + k
@@ -39,7 +40,8 @@
  * ── Deviations from P1 (deliberate) ──────────────────────────────────────────────────────────────────
  *   • VOPRF with per-holder DLEQ proofs (P1 used a plain OPRF): a malicious key holder cannot silently return a
  *     wrong evaluation to block matches or tag a user (research A9).
- *   • Additive 2-of-2 key split, verified here: Σ Eval_i then Finalize == VOPRF under k_A + k_B (see tests).
+ *   • Shamir t-of-m key split (P1 had one key server): any t evaluations combined in the exponent then Finalize ==
+ *     VOPRF under the unsplit key (see threshold.test.ts).
  *   • Per-survivor-per-perpetrator x instead of U = H(user id) (see above).
  *   • No assignment-data (DLOC) ciphertext: Matra has one counselor tier; `state` rides inside the bundle.
  *   • The counselor key is the counselor's existing RSA-OAEP-3072 identity key (WebCrypto), not libsodium box.
@@ -78,6 +80,7 @@ import {
   wrapKeyForRecipient,
 } from './index';
 import type { NormalizedIdentifier } from './normalize';
+import { checkThresholdKeys, finalizeThresholdOprf, ThresholdOprfError, type HolderEvaluation, type ThresholdKeyConfig } from './threshold';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -92,8 +95,9 @@ export const MATCH_THRESHOLD = 2 as const;
 export const FIELD_P = (1n << 256n) + 297n;
 const FIELD_BYTES = 33;
 
-// Identifier normalization lives in ./normalize.ts (re-exported here).
+// Identifier normalization lives in ./normalize.ts, threshold OPRF in ./threshold.ts (both re-exported here).
 export * from './normalize';
+export * from './threshold';
 
 export function matchInput(canonical: string): Uint8Array {
   return enc.encode(`${MATCH_DOMAIN}|${canonical}`);
@@ -120,12 +124,6 @@ export function oprfBlindEvaluate(key: OprfKeyPair, blinded: Uint8Array): { eval
   return OPRF.voprf.blindEvaluate(key.secretKey, key.publicKey, blinded);
 }
 
-/** Test / migration helper: the effective key k_A + k_B. Never computed in production (no party holds both). */
-export function combineOprfKeys(a: OprfKeyPair, b: OprfKeyPair): OprfKeyPair {
-  const sk = Fn.toBytes(Fn.add(Fn.fromBytes(a.secretKey), Fn.fromBytes(b.secretKey)));
-  return { secretKey: sk, publicKey: oprfPublicKey(sk) };
-}
-
 export interface MatchBlind { input: Uint8Array; blind: Uint8Array; blinded: Uint8Array }
 
 /** Client: blind the canonical identifier. Keep `blind` in memory only. */
@@ -136,40 +134,24 @@ export function blindMatchIdentifier(canonical: string): MatchBlind {
 }
 
 /**
- * Key holder (deploy helper): a VOPRF key pair derived from an arbitrary high-entropy secret string (e.g. a value a
- * hosting platform generated, like Render's `generateValue`). RFC 9497 DeriveKeyPair(seed = SHA-256(secret),
- * info = "matra/oprf-key/<holder>").
+ * Deterministic VOPRF key pair from a high-entropy secret string: RFC 9497 DeriveKeyPair(seed = SHA-256(secret),
+ * info = label), e.g. label "matra/oprf-share/<i>". Used for reproducible test keys and as the "unsplit key" a dealer
+ * may start a ceremony from; a Shamir SHARE can never be derived this way (it must be f(i) for the dealt polynomial).
  */
-export function oprfKeyFromSecret(secret: string, holder: 'a' | 'b'): OprfKeyPair {
+export function oprfKeyFromSecret(secret: string, label: string): OprfKeyPair {
   if (secret.length < 32) throw new Error('OPRF key secret must be at least 32 characters');
-  return OPRF.voprf.deriveKeyPair(sha256(enc.encode(secret)), enc.encode(`matra/oprf-key/${holder}`));
+  return OPRF.voprf.deriveKeyPair(sha256(enc.encode(secret)), enc.encode(label));
 }
 
-export interface HolderEvaluation { publicKey: Uint8Array; evaluated: Uint8Array; proof: Uint8Array }
-
-/**
- * Client: verify each key holder's DLEQ proof, then combine. Returns the 64-byte OPRF output under k_A + k_B.
- * Throws if either proof is invalid (a holder used a key other than its published one), and refuses degenerate key
- * configurations that would make the "split" key meaningless: the same key presented twice (k = 2·k_A, one party
- * holds everything), an identity key, or k_B = −k_A (the combined key is 0, so the output no longer depends on any
- * secret and anyone can compute every tag offline).
- */
-export function finalizeSplitOprf(b: MatchBlind, ...holders: HolderEvaluation[]): Uint8Array {
-  if (holders.length !== 2) throw new Error('need evaluations from exactly two key holders');
-  const pks = holders.map((h) => Point.fromBytes(h.publicKey));
-  if (pks.some((p) => p.is0())) throw new Error('OPRF key holder public key is the identity');
-  if (pks[0]!.equals(pks[1]!)) throw new Error('OPRF key holders A and B must use different keys');
-  if (pks[0]!.add(pks[1]!).is0()) throw new Error('OPRF key holder keys cancel out (k_A + k_B = 0)');
-  let sum: InstanceType<typeof Point> | undefined;
-  for (const h of holders) {
-    // voprf.finalize verifies the DLEQ proof against h.publicKey (and throws if it fails); its output is discarded.
-    OPRF.voprf.finalize(b.input, b.blind, h.evaluated, b.blinded, h.publicKey, h.proof);
-    const p = Point.fromBytes(h.evaluated);
-    sum = sum ? sum.add(p) : p;
+/** Matching could not run (nothing was sealed). `holders_unavailable`: fewer than t OPRF key holders answered. */
+export class MatchingError extends Error {
+  constructor(
+    readonly code: 'holders_unavailable',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'MatchingError';
   }
-  // RFC 9497 Finalize is mode-independent (unblind + Hash(len‖input‖len‖element‖"Finalize")); the blinded element was
-  // built with the VOPRF-mode hash-to-group, so this equals VOPRF_{Σk}(input).
-  return OPRF.oprf.finalize(b.input, b.blind, sum!.toBytes());
 }
 
 // ═══════════════════════════════ per-perpetrator values ═══════════════════════════════
@@ -581,7 +563,8 @@ export function counselorsToSealTo(
 /** Network calls the survivor's client needs (implemented by the web ApiClient, and by tests with supertest/fetch). */
 export interface MatchTransport {
   config(): Promise<MatchingConfig>;
-  evaluate(holder: 'a' | 'b', req: OprfEvaluateRequest): Promise<OprfEvaluateResponse>;
+  /** OPRF evaluation by key holder `index` (1..m). */
+  evaluate(index: number, req: OprfEvaluateRequest): Promise<OprfEvaluateResponse>;
   createEntry(req: CreateMatchEntryRequest): Promise<{ entry: EscrowEntry }>;
   listEntries?(): Promise<{ entries: EscrowEntry[] }>;
   addSeals?(entryId: string, req: AddMatchSealsRequest): Promise<{ entry: EscrowEntry }>;
@@ -589,8 +572,8 @@ export interface MatchTransport {
 
 /** Build-time pins (production builds set both; see docs/SECURITY_WHITEPAPER.md §4a). */
 export interface MatchPins {
-  /** base64 public keys of OPRF key holders A and B */
-  keys?: { a: string; b: string };
+  /** threshold OPRF key set: t, the base64 group public key, and the base64 share public keys in index order 1..m */
+  oprf?: { t: number; groupPublicKey: string; holders: string[] };
   /** base64 Ed25519 public key of the organization that signs the counselor roster */
   rosterKey?: string;
 }
@@ -620,9 +603,61 @@ export async function decryptLabel(env: Envelope, masterKey: CryptoKey): Promise
   }
 }
 
-function checkPinnedKeys(config: MatchingConfig, pins?: MatchPins) {
-  if (pins?.keys && (pins.keys.a !== config.keyHolders.a.publicKey || pins.keys.b !== config.keyHolders.b.publicKey))
+/**
+ * The client's view of the threshold key set: the server's config, checked against the build-time pins (when set) and
+ * for consistency (checkThresholdKeys), before anything is sent to a holder.
+ */
+export function matchingOprfKeys(config: MatchingConfig, pins?: MatchPins): ThresholdKeyConfig {
+  const o = config.oprf;
+  if (!o || o.suite !== 'ristretto255-SHA512' || o.mode !== 'voprf') throw new Error('unsupported matching OPRF configuration');
+  if (o.holders.length !== o.m) throw new Error('matching OPRF configuration lists the wrong number of key holders');
+  const holders = [...o.holders].sort((x, y) => x.index - y.index);
+  if (
+    pins?.oprf &&
+    (pins.oprf.t !== o.t ||
+      pins.oprf.groupPublicKey !== o.groupPublicKey ||
+      pins.oprf.holders.length !== holders.length ||
+      holders.some((h, i) => h.index !== i + 1 || h.publicKey !== pins.oprf!.holders[i]))
+  )
     throw new Error('matching key holder keys do not match the keys pinned in this app');
+  const keys = {
+    t: o.t,
+    groupPublicKey: fromBase64(o.groupPublicKey),
+    holders: holders.map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })),
+  };
+  checkThresholdKeys(keys);
+  return keys;
+}
+
+/**
+ * Ask every key holder in parallel; any t valid (proof-checked) answers are enough. A rate limit (429) is surfaced
+ * as-is when it is why fewer than t answered (quotas are per holder and equal). Fewer than t answers otherwise →
+ * MatchingError('holders_unavailable'); a bad proof → ThresholdOprfError naming the holder (from finalize).
+ */
+export async function evaluateMatchOprf(t: MatchTransport, keys: ThresholdKeyConfig, b: MatchBlind): Promise<Uint8Array> {
+  const req = { blinded: toBase64(b.blinded) };
+  const settled = await Promise.allSettled(keys.holders.map((h) => t.evaluate(h.index, req)));
+  const evals: HolderEvaluation[] = [];
+  const errors: unknown[] = [];
+  settled.forEach((r, i) => {
+    if (r.status === 'rejected') return void errors.push(r.reason);
+    try {
+      evals.push({ index: keys.holders[i]!.index, evaluated: fromBase64(r.value.evaluated), proof: fromBase64(r.value.proof) });
+    } catch {
+      evals.push({ index: keys.holders[i]!.index, evaluated: new Uint8Array(0), proof: new Uint8Array(0) }); // malformed: fails its proof
+    }
+  });
+  if (evals.length < keys.t) {
+    const limited = errors.find((e) => (e as { status?: number }).status === 429);
+    if (limited) throw limited;
+    throw new MatchingError('holders_unavailable', `only ${evals.length} of ${keys.holders.length} OPRF key holders answered; ${keys.t} are needed`);
+  }
+  try {
+    return finalizeThresholdOprf(b, keys, evals);
+  } catch (e) {
+    if (e instanceof ThresholdOprfError && !e.badHolders.length) throw new MatchingError('holders_unavailable', e.message);
+    throw e;
+  }
 }
 
 /**
@@ -647,17 +682,11 @@ export async function submitMatchEntry(
   },
 ): Promise<{ entry: EscrowEntry; tag: string }> {
   const config = args.config ?? (await t.config());
-  checkPinnedKeys(config, args.pins);
+  const keys = matchingOprfKeys(config, args.pins);
   const counselors = counselorsToSealTo(config, args.pins?.rosterKey);
   if (!counselors.length) throw new Error('no counselor available to receive matches');
   const b = blindMatchIdentifier(args.identifier.canonical);
-  const req = { blinded: toBase64(b.blinded) };
-  const [ea, eb] = await Promise.all([t.evaluate('a', req), t.evaluate('b', req)]);
-  const y = finalizeSplitOprf(
-    b,
-    { publicKey: fromBase64(config.keyHolders.a.publicKey), evaluated: fromBase64(ea.evaluated), proof: fromBase64(ea.proof) },
-    { publicKey: fromBase64(config.keyHolders.b.publicKey), evaluated: fromBase64(eb.evaluated), proof: fromBase64(eb.proof) },
-  );
+  const y = await evaluateMatchOprf(t, keys, b);
   const secrets = derivePerpetratorSecrets(y);
   const x = await survivorShareX(args.masterKey, secrets.tag);
   const bundle: MatchContactBundle = {
@@ -707,7 +736,7 @@ export async function refreshMatchEntries(
   const { entries } = await t.listEntries();
   if (!entries.length) return out;
   const config = args.config ?? (await t.config());
-  checkPinnedKeys(config, args.pins);
+  matchingOprfKeys(config, args.pins);
   const counselors = counselorsToSealTo(config, args.pins?.rosterKey);
   if (!counselors.length) return out;
   for (const e of entries) {

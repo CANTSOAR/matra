@@ -31,15 +31,20 @@ function ortRuntimeFromModels(): Plugin {
 }
 
 /**
- * Build-time pins for sealed matching (docs/SECURITY_WHITEPAPER.md §4a). Production builds set all three, so the app
- * server cannot substitute OPRF keys or counselors it controls:
- *   MATRA_OPRF_PUBKEY_A / MATRA_OPRF_PUBKEY_B   base64 public keys of the two OPRF key holders
- *   MATRA_COUNSELOR_ROSTER_PUBKEY              base64 Ed25519 key of the org that signs the counselor roster
+ * Build-time pins for sealed matching (docs/SECURITY_WHITEPAPER.md §4a). Production builds set them all, so the app
+ * server cannot substitute OPRF keys or counselors it controls (values from `npm run -w @matra/server oprf-ceremony`):
+ *   MATRA_OPRF_THRESHOLD          t (default 2 when the keys below are set)
+ *   MATRA_OPRF_GROUP_PUBKEY       base64 group public key k·G of the threshold OPRF
+ *   MATRA_OPRF_SHARE_PUBKEYS      base64 share public keys of holders 1..m, comma-separated, in index order
+ *   MATRA_COUNSELOR_ROSTER_PUBKEY base64 Ed25519 key of the org that signs the counselor roster
  * Unset (development): nothing is pinned and the client logs a warning.
  */
+if (process.env.MATRA_OPRF_PUBKEY_A || process.env.MATRA_OPRF_PUBKEY_B)
+  throw new Error('MATRA_OPRF_PUBKEY_A/B were replaced by MATRA_OPRF_GROUP_PUBKEY + MATRA_OPRF_SHARE_PUBKEYS (threshold OPRF; see docs/DEPLOY.md).');
 const matchPins = {
-  oprfA: process.env.MATRA_OPRF_PUBKEY_A || '',
-  oprfB: process.env.MATRA_OPRF_PUBKEY_B || '',
+  oprfT: Number(process.env.MATRA_OPRF_THRESHOLD || 2),
+  oprfGroup: process.env.MATRA_OPRF_GROUP_PUBKEY || '',
+  oprfShares: (process.env.MATRA_OPRF_SHARE_PUBKEYS || '').split(',').map((s) => s.trim()).filter(Boolean),
   rosterKey: process.env.MATRA_COUNSELOR_ROSTER_PUBKEY || '',
 };
 

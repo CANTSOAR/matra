@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { createApp } from './app.js';
-import { WEB_DIST_DIR, loadMatchingSettings, loadOprfKey, loadOprfLimits, loadPepper, resolveDbPath } from './config.js';
+import { WEB_DIST_DIR, loadMatchingSettings, loadOprfLimits, loadOprfThreshold, loadPepper, resolveDbPath } from './config.js';
+import { RemoteHolderPool } from './holders.js';
 
 const production = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT) || 4000;
@@ -21,19 +22,29 @@ if (webDir && !fs.existsSync(webDir)) {
 const demoBanner = process.env.MATRA_DEMO_BANNER === '1';
 const trustProxy = Number(process.env.MATRA_TRUST_PROXY) || 0;
 
+// Threshold OPRF key holders: all m shares in this process (dev / single-host demo), or m remote holder processes
+// (MATRA_OPRF_HOLDER_URLS). Production refuses to start without every share or the pinned remote config, and never
+// generates shares; see config.ts loadOprfThreshold and docs/DEPLOY.md.
+const oprf = loadOprfThreshold();
+const pepper = loadPepper();
+if (oprf.remote) {
+  // Each reachable holder must serve exactly its pinned share public key; a down holder only warns (t of m suffice).
+  const { reachable } = await new RemoteHolderPool(oprf.t, oprf.remote, pepper).verifyKeys();
+  console.log(`[matra] OPRF: ${oprf.t}-of-${oprf.m} remote key holders, ${reachable} reachable`);
+} else if (production) {
+  console.warn(`[matra] WARNING: all ${oprf.m} OPRF key shares are loaded into this process: no separation against the operator (docs/threat-model.md W14).`);
+}
+
 const app = createApp({
   dbPath,
-  pepper: loadPepper(),
+  pepper,
   corsOrigins,
   autoVerifyAttorneys,
   logRequests: true,
   webDir,
   demoBanner,
   trustProxy,
-  // Both OPRF key shares are loaded into this process for the MVP. See docs/SECURITY_WHITEPAPER.md for running them
-  // as separate services with separately held keys.
-  // Production refuses to start without both keys (never generated next to the DB); see config.ts / docs/DEPLOY.md.
-  matching: { keyA: loadOprfKey('a'), keyB: loadOprfKey('b'), limits: loadOprfLimits(), ...loadMatchingSettings() },
+  matching: { oprf, limits: loadOprfLimits(), ...loadMatchingSettings() },
 });
 
 const onListen = () => {

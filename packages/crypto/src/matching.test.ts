@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ristretto255, ristretto255_oprf } from '@noble/curves/ed25519.js';
+import { ristretto255_oprf } from '@noble/curves/ed25519.js';
 import type { MatchContactBundle } from '@matra/shared';
 import * as c from './index';
 
@@ -71,46 +71,12 @@ describe('RFC 9497 test vectors (ristretto255-SHA512)', () => {
   });
 });
 
-describe('split-key VOPRF', () => {
-  it('combining two holders equals one evaluation under k_A + k_B, and a bad proof is rejected', () => {
-    const a = c.generateOprfKey();
-    const b = c.generateOprfKey();
-    const sum = c.combineOprfKeys(a, b);
-    const canonical = 'instagram:bad_guy';
-
-    const bl = c.blindMatchIdentifier(canonical);
-    const ea = c.oprfBlindEvaluate(a, bl.blinded);
-    const eb = c.oprfBlindEvaluate(b, bl.blinded);
-    const split = c.finalizeSplitOprf(bl, { publicKey: a.publicKey, ...ea }, { publicKey: b.publicKey, ...eb });
-
-    const bl2 = c.blindMatchIdentifier(canonical);
-    const es = c.oprfBlindEvaluate(sum, bl2.blinded);
-    const single = ristretto255_oprf.voprf.finalize(bl2.input, bl2.blind, es.evaluated, bl2.blinded, sum.publicKey, es.proof);
-    expect(toHex(split)).toBe(toHex(single));
-
-    // a different identifier gives a different output; a single holder's key alone gives a different output
-    const bl3 = c.blindMatchIdentifier('instagram:someone_else');
-    const other = c.finalizeSplitOprf(
-      bl3,
-      { publicKey: a.publicKey, ...c.oprfBlindEvaluate(a, bl3.blinded) },
-      { publicKey: b.publicKey, ...c.oprfBlindEvaluate(b, bl3.blinded) },
-    );
-    expect(toHex(other)).not.toBe(toHex(split));
-
-    // holder B answers with a key other than its published one → proof fails → client refuses
-    const rogue = c.generateOprfKey();
-    const bad = c.oprfBlindEvaluate(rogue, bl.blinded);
-    expect(() => c.finalizeSplitOprf(bl, { publicKey: a.publicKey, ...ea }, { publicKey: b.publicKey, ...bad })).toThrow();
-    expect(() => c.finalizeSplitOprf(bl, { publicKey: a.publicKey, ...ea })).toThrow();
-  });
-});
-
 describe('threshold sharing and counselor reconstruction', () => {
-  const a = c.generateOprfKey();
-  const b = c.generateOprfKey();
+  const shares = c.splitOprfKey(c.generateOprfKey().secretKey, 2, 3);
+  const keys = { t: 2, groupPublicKey: c.combineShareKeysForTest(shares).publicKey, holders: shares };
   const oprf = (canonical: string) => {
     const bl = c.blindMatchIdentifier(canonical);
-    return c.finalizeSplitOprf(bl, { publicKey: a.publicKey, ...c.oprfBlindEvaluate(a, bl.blinded) }, { publicKey: b.publicKey, ...c.oprfBlindEvaluate(b, bl.blinded) });
+    return c.finalizeThresholdOprf(bl, keys, shares.slice(1).map((sh) => ({ index: sh.index, ...c.oprfBlindEvaluate(sh, bl.blinded) })));
   };
   const bundle = (name: string): MatchContactBundle => ({
     v: 1,
@@ -317,43 +283,6 @@ describe('regression decoy.mts (H1): a decoy line under the real tag cannot hide
   });
 });
 
-describe('regression oprf.mts / neg.mts (M4): degenerate key-holder configurations are refused by the client', () => {
-  const a = c.generateOprfKey();
-  const run = (b: { secretKey: Uint8Array; publicKey: Uint8Array }) => {
-    const bl = c.blindMatchIdentifier('email:x@y.com');
-    return c.finalizeSplitOprf(
-      bl,
-      { publicKey: a.publicKey, ...c.oprfBlindEvaluate(a, bl.blinded) },
-      { publicKey: b.publicKey, ...c.oprfBlindEvaluate(b, bl.blinded) },
-    );
-  };
-  it('the same key presented as both holders (pk_A == pk_B) is rejected', () => {
-    expect(() => run(a)).toThrow(/different keys/);
-  });
-  it('k_B = −k_A (combined key 0: output independent of any secret) is rejected', () => {
-    const Fn = ristretto255.Point.Fn;
-    const nb = Fn.toBytes(Fn.neg(Fn.fromBytes(a.secretKey)));
-    expect(() => run({ secretKey: nb, publicKey: c.oprfPublicKey(nb) })).toThrow(/cancel out/);
-  });
-  it('an identity / zero key holder and non-canonical scalars are rejected', () => {
-    const bl = c.blindMatchIdentifier('email:x@y.com');
-    const idPk = ristretto255.Point.ZERO.toBytes();
-    expect(() =>
-      c.finalizeSplitOprf(bl, { publicKey: a.publicKey, ...c.oprfBlindEvaluate(a, bl.blinded) }, { publicKey: idPk, evaluated: idPk, proof: new Uint8Array(64) }),
-    ).toThrow(/identity/);
-    const le = (n: bigint) => Uint8Array.from({ length: 32 }, (_, i) => Number((n >> BigInt(8 * i)) & 255n));
-    const L = ristretto255.Point.Fn.ORDER;
-    for (const v of [L + 1n, (1n << 256n) - 1n, 0n]) expect(() => c.oprfPublicKey(le(v))).toThrow();
-    expect(() => c.oprfBlindEvaluate(a, idPk)).toThrow();
-  });
-  it('a key derived from a platform-generated secret is deterministic and holder-specific', () => {
-    const s = 'x'.repeat(40);
-    expect(c.toHex(c.oprfKeyFromSecret(s, 'a').publicKey)).toBe(c.toHex(c.oprfKeyFromSecret(s, 'a').publicKey));
-    expect(c.toHex(c.oprfKeyFromSecret(s, 'a').publicKey)).not.toBe(c.toHex(c.oprfKeyFromSecret(s, 'b').publicKey));
-    expect(() => c.oprfKeyFromSecret('short', 'a')).toThrow();
-  });
-});
-
 describe('survivor share x (INFO): dedicated HKDF-derived HMAC key, no fixed-IV AES', () => {
   it('is deterministic per survivor + tag, available from the master key, and refuses keys without one', async () => {
     const k = await c.deriveKeys('pass one', c.newKdfSalt(), 1000);
@@ -401,9 +330,7 @@ describe('counselor roster signing (M4)', () => {
     const config = (counselors: ReturnType<typeof profile>[], r: typeof roster | null = roster) =>
       ({
         threshold: 2,
-        suite: 'ristretto255-SHA512',
-        mode: 'voprf',
-        keyHolders: { a: { publicKey: '' }, b: { publicKey: '' } },
+        oprf: { suite: 'ristretto255-SHA512', mode: 'voprf', t: 2, m: 0, groupPublicKey: '', holders: [] as never[] },
         counselors,
         limits: { perDay: 1, lifetime: 1 },
         keyEpoch: 1,

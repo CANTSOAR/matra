@@ -62,7 +62,7 @@ All names and organizations are fictional and labelled "Demo —". For a guided 
 | `MATRA_CORS_ORIGINS` | Comma-separated allowed origins (rarely needed; the Vite dev server proxies `/api`) |
 | `MATRA_DEMO_BANNER` | `1` shows a "DEMO — do not enter real information" banner on every page (production serving) |
 | `MATRA_TRUST_PROXY` | Number of reverse-proxy hops to trust for client IPs (rate limiting), e.g. `1` on Render |
-| `MATRA_OPRF_KEY_A`, `MATRA_OPRF_KEY_B` (or `_FILE` variants) | The two sealed-matching OPRF key shares. In production run them in separate services and keep them secret; in development each is generated in `apps/server/data/oprf-key-{a,b}.key`. `MATRA_REQUIRE_OPRF_KEYS=1` makes a missing key fatal |
+| `MATRA_OPRF_SHARE_<i>` (or `_FILE` variants), `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_HOLDERS` | The sealed-matching threshold OPRF key shares (default 2-of-3), from `npm run -w @matra/server oprf-ceremony`. In production run each holder as its own process (`npm run -w @matra/server holder`; see docs/DEPLOY.md) and keep shares secret; in development a ceremony runs once into `apps/server/data/oprf-share-<i>.key`. `MATRA_REQUIRE_OPRF_KEYS=1` makes a missing share fatal |
 | `MATRA_OPRF_PER_DAY`, `MATRA_OPRF_LIFETIME` | Per-account rate limits on matching evaluations (defaults 10/day, 50 lifetime) |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | `1` auto-verifies new attorney accounts. **Development only.** Otherwise use `npm run -w @matra/server verify-attorney -- <username>` |
 
