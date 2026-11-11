@@ -24,6 +24,8 @@
  *   report.revoked   SHA-256_hex(JSON.stringify({ releaseId, status: 'revoked', revokedAt }))
  *                    None of these is written at match time: each follows a person's action after the group was
  *                    released (the anti-probing rule for escrow.sealed still holds).
+ *   account.recovered SHA-256_hex(JSON.stringify({ userId, at }))  — at = the entry's timestamp (passphrase reset
+ *                    with a recovery code; W20)
  *   account.shredded SHA-256_hex(JSON.stringify({ userId, recordIds, blobIds }))  (ids sorted ascending)
  */
 import { createHash, randomBytes } from 'node:crypto';

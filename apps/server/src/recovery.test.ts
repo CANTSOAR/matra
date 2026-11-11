@@ -17,11 +17,13 @@ import {
   wrapAccountSecret,
 } from '@matra/crypto';
 import type { Envelope, PublicUser } from '@matra/shared';
-import { getDb } from './app.js';
+import { getDb, RECOVERY_FAILED_AUDIT_CAP } from './app.js';
+import { hashAuthKey } from './auth.js';
+import { sha256Hex } from './ledger.js';
 import { createRecord, makeApp, registerUser, TEST_ITERATIONS, type TestUser } from './test-helpers.js';
 
-// Count the timing-parity path without changing what it does.
-const dummy = vi.hoisted(() => ({ calls: 0 }));
+// Count the timing-parity path without changing what it does; optionally run something during a hash (race tests).
+const dummy = vi.hoisted(() => ({ calls: 0, duringHash: null as null | (() => Promise<void>) }));
 vi.mock('./auth.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('./auth.js')>();
   return {
@@ -29,6 +31,12 @@ vi.mock('./auth.js', async (importOriginal) => {
     dummyVerify: async (k: string) => {
       dummy.calls++;
       return mod.dummyVerify(k);
+    },
+    hashAuthKey: async (k: string) => {
+      const hook = dummy.duringHash;
+      dummy.duringHash = null;
+      if (hook) await hook();
+      return mod.hashAuthKey(k);
     },
   };
 });
@@ -56,8 +64,11 @@ async function setUpRecovery(app: express.Express, u: TestUser, passphrase = u.p
   return { res, code, body };
 }
 
-/** The signed-out reset: alias + code → new passphrase (and a new code). */
-async function recover(app: express.Express, username: string, code: string, newPassphrase: string) {
+/**
+ * The signed-out reset: alias + code → new passphrase; then, as her client does once she confirms she wrote it down,
+ * a new code saved through POST /api/account/recovery with the new passphrase (`saveNewCode: false` skips that).
+ */
+async function recover(app: express.Express, username: string, code: string, newPassphrase: string, { saveNewCode = true } = {}) {
   const rk = await deriveRecoveryKeys(parseRecoveryCode(code));
   const start = await request(app).post('/api/auth/recover/start').send({ username, recoveryAuthKey: rk.authKey });
   if (start.status !== 200) return { start };
@@ -72,12 +83,15 @@ async function recover(app: express.Express, username: string, code: string, new
     kdfIterations: TEST_ITERATIONS,
     authKey: pk.authKey,
     wrappedAccountKey: await wrapAccountSecret(as, pk.kek),
-    recoveryAuthKey: nrk.authKey,
-    recoveryWrappedKey: await wrapAccountSecret(as, nrk.kek),
   };
+  const codeBody = { authKey: pk.authKey, recoveryAuthKey: nrk.authKey, recoveryWrappedKey: await wrapAccountSecret(as, nrk.kek) };
   as.fill(0);
   const finish = await request(app).post('/api/auth/recover/finish').send(finishBody);
-  return { start, finish, finishBody, newCode: next.code };
+  const saved =
+    saveNewCode && finish.status === 200
+      ? await request(app).post('/api/account/recovery').set('Authorization', `Bearer ${finish.body.token}`).send(codeBody)
+      : undefined;
+  return { start, finish, finishBody, codeBody, saved, newCode: next.code };
 }
 
 async function login(app: express.Express, username: string, passphrase: string) {
@@ -144,7 +158,10 @@ describe('recovery code', () => {
     expect(r.start.status).toBe(200);
     expect(r.finish!.status).toBe(200);
     const token = r.finish!.body.token as string;
-    expect(r.finish!.body.user.hasRecoveryCode).toBe(true);
+    // the used code is burned and no new one exists until she confirms it (then it is saved separately)
+    expect(r.finish!.body.user.hasRecoveryCode).toBe(false);
+    expect(r.saved!.status).toBe(200);
+    expect(r.saved!.body.user.hasRecoveryCode).toBe(true);
 
     // her earlier session (registration) is gone; the new one works
     expect((await request(app).get('/api/me').set(u.auth)).status).toBe(401);
@@ -161,9 +178,15 @@ describe('recovery code', () => {
     // her own activity says so, and the ledger has an entry with only an id, a hash and a time
     const audit = (await request(app).get('/api/audit').set('Authorization', `Bearer ${token}`)).body.events as Array<{ action: string; detail?: string }>;
     expect(audit.find((e) => e.action === 'auth.recovered')?.detail).toBe('Your passphrase was reset with your recovery code');
-    const led = db.prepare(`SELECT * FROM ledger WHERE type = 'account.recovered'`).all() as Array<{ subject_id: string; content_hash: string }>;
+    expect(audit.find((e) => e.action === 'recovery.used')?.detail).toBe('Your recovery code was used to start a passphrase reset');
+    const led = db.prepare(`SELECT * FROM ledger WHERE type = 'account.recovered'`).all() as Array<{
+      subject_id: string;
+      content_hash: string;
+      timestamp: string;
+    }>;
     expect(led).toHaveLength(1);
-    expect(led[0]!.content_hash).toMatch(/^[0-9a-f]{64}$/);
+    // the documented convention (ledger.ts): SHA-256_hex(JSON.stringify({ userId, at }))
+    expect(led[0]!.content_hash).toBe(sha256Hex(JSON.stringify({ userId: u.user.id, at: led[0]!.timestamp })));
     expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
 
     // a used code is burned: the old one no longer works, the new one does
@@ -274,7 +297,7 @@ describe('recovery code', () => {
       const plain = code.replace(/-/g, '');
       const codeBytes = toBase64(parseRecoveryCode(code));
       const newCodeBytes = toBase64(parseRecoveryCode(r.newCode!));
-      for (const secret of [code, plain, r.newCode!, codeBytes, newCodeBytes, body.recoveryAuthKey, r.finishBody!.recoveryAuthKey, r.finishBody!.authKey, 'brand new words here']) {
+      for (const secret of [code, plain, r.newCode!, codeBytes, newCodeBytes, body.recoveryAuthKey, r.codeBody!.recoveryAuthKey, r.finishBody!.authKey, 'brand new words here']) {
         expect(dump).not.toContain(secret);
         expect(logs.join('\n')).not.toContain(secret);
       }
@@ -291,6 +314,89 @@ describe('recovery code', () => {
       spy.mockRestore();
     }
     expect(getDb(app)).toBe(db);
+  });
+
+  it('a successful start is in her activity even if no reset follows (the wrapped secret has left)', async () => {
+    const { app } = makeApp();
+    const u = await registerUser(app, 'wren.used');
+    const { code } = await setUpRecovery(app, u);
+    const rk = await deriveRecoveryKeys(parseRecoveryCode(code));
+    expect((await request(app).post('/api/auth/recover/start').send({ username: 'wren.used', recoveryAuthKey: rk.authKey })).status).toBe(200);
+    const audit = (await request(app).get('/api/audit').set(u.auth)).body.events as Array<{ action: string; detail?: string }>;
+    expect(audit.filter((e) => e.action === 'recovery.used')).toEqual([
+      expect.objectContaining({ detail: 'Your recovery code was used to start a passphrase reset' }),
+    ]);
+    // her passphrase still works and the code is still set up: she learns of it here, and can replace it
+    expect((await login(app, 'wren.used', u.passphrase)).res.status).toBe(200);
+  });
+
+  it('a finish already past the token check changes nothing if she replaces her code meanwhile', async () => {
+    const { app } = makeApp();
+    const u = await registerUser(app, 'wren.race');
+    const { code } = await setUpRecovery(app, u);
+    let replaced: Awaited<ReturnType<typeof setUpRecovery>> | undefined;
+    // runs inside finish's scrypt of the new passphrase, after the token was accepted
+    dummy.duringHash = async () => {
+      replaced = await setUpRecovery(app, u);
+    };
+    const r = await recover(app, 'wren.race', code, 'the attacker passphrase', { saveNewCode: false });
+    expect(r.start.status).toBe(200);
+    expect(replaced!.res.status).toBe(200);
+    expect(r.finish!.status).toBe(401);
+    expect(r.finish!.body.code).toBe('invalid_credentials');
+    // her passphrase and her new code both still work; the attacker's passphrase does not
+    expect((await login(app, 'wren.race', 'the attacker passphrase')).res.status).toBe(401);
+    expect((await login(app, 'wren.race', u.passphrase)).res.status).toBe(200);
+    const rk = await deriveRecoveryKeys(parseRecoveryCode(replaced!.code));
+    expect((await request(app).post('/api/auth/recover/start').send({ username: 'wren.race', recoveryAuthKey: rk.authKey })).status).toBe(200);
+    const audit = (await request(app).get('/api/audit').set(u.auth)).body.events as Array<{ action: string }>;
+    expect(audit.some((e) => e.action === 'auth.recovered')).toBe(false);
+  });
+
+  it('only survivor accounts can set up or use a recovery code', async () => {
+    const { app, db } = makeApp();
+    for (const role of ['attorney', 'counselor'] as const) {
+      const u = await registerUser(app, `${role}.rc`, role);
+      const { res, body } = await setUpRecovery(app, u);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden_role');
+      expect((db.prepare('SELECT recovery_auth_hash FROM users WHERE id = ?').get(u.user.id) as { recovery_auth_hash: Buffer | null }).recovery_auth_hash).toBeNull();
+
+      // even with a code planted in the row (e.g. an older build), start answers as for an account without one
+      const rk = await deriveRecoveryKeys(generateRecoveryCode().bytes);
+      const { hash, salt } = await hashAuthKey(rk.authKey);
+      db.prepare('UPDATE users SET recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ? WHERE id = ?').run(
+        hash,
+        salt,
+        JSON.stringify(body.recoveryWrappedKey),
+        u.user.id,
+      );
+      const before = dummy.calls;
+      const start = await request(app).post('/api/auth/recover/start').send({ username: `${role}.rc`, recoveryAuthKey: rk.authKey });
+      expect(start.status).toBe(401);
+      expect(start.body).toEqual({ error: 'That alias and recovery code don’t match.', code: 'invalid_credentials' });
+      expect(dummy.calls - before).toBe(1);
+    }
+  });
+
+  it('wrong codes write at most RECOVERY_FAILED_AUDIT_CAP activity rows per day', async () => {
+    const { app, db } = makeApp();
+    const u = await registerUser(app, 'wren.flood');
+    await setUpRecovery(app, u);
+    const wrongKey = (await deriveRecoveryKeys(generateRecoveryCode().bytes)).authKey;
+    const count = () =>
+      (db.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'recovery.failed'`).get(u.user.id) as { n: number }).n;
+    // rows already written today (from other clients) up to one below the cap
+    const now = new Date().toISOString();
+    for (let i = 0; i < RECOVERY_FAILED_AUDIT_CAP - 1; i++)
+      db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)').run(`f${i}`, u.user.id, 'recovery.failed', 'x', now);
+    for (let i = 0; i < 3; i++)
+      expect((await request(app).post('/api/auth/recover/start').send({ username: 'wren.flood', recoveryAuthKey: wrongKey })).status).toBe(401);
+    expect(count()).toBe(RECOVERY_FAILED_AUDIT_CAP);
+    // yesterday's rows don't count against today
+    db.prepare(`UPDATE audit_events SET at = '2000-01-01T00:00:00.000Z' WHERE user_id = ? AND action = 'recovery.failed'`).run(u.user.id);
+    expect((await request(app).post('/api/auth/recover/start').send({ username: 'wren.flood', recoveryAuthKey: wrongKey })).status).toBe(401);
+    expect(count()).toBe(RECOVERY_FAILED_AUDIT_CAP + 1);
   });
 
   it('deleting the account removes the recovery columns with the user row', async () => {

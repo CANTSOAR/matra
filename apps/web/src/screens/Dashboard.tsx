@@ -20,6 +20,7 @@ const AUDIT_TEXT: Record<string, string> = {
   'recovery.replaced': 'You made a new recovery code (the old one stopped working)',
   'recovery.turned_off': 'You turned off your recovery code',
   'recovery.failed': 'Someone tried to use a recovery code that didn’t match',
+  'recovery.used': 'Your recovery code was used to start a passphrase reset',
   // The server can't tell a draft save from a seal (it only sees ciphertext) — see describeAudit for how the
   // client refines this using records it can decrypt.
   'record.created': 'You saved to your space',

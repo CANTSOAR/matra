@@ -125,8 +125,6 @@ export const recoverFinishRequest = z.object({
   kdfIterations: z.number().int().min(1_000).max(10_000_000),
   authKey: authKey32,
   wrappedAccountKey: accountKeyEnvelope,
-  recoveryAuthKey: authKey32,
-  recoveryWrappedKey: accountKeyEnvelope,
 });
 
 export const createRecordRequest = z.object({

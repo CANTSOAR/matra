@@ -451,6 +451,8 @@ const toAudit = (a: AuditRow): AuditEvent => ({
 export const HOUSEKEEPING_INTERVAL_MS = 10 * 60_000;
 /** A recovery reset (alias + code accepted) must be finished within this time, once. */
 export const RESET_TOKEN_TTL_MS = 10 * 60_000;
+/** At most this many 'recovery.failed' rows per account per UTC day, so wrong codes can't flood her activity list. */
+export const RECOVERY_FAILED_AUDIT_CAP = 10;
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
@@ -569,6 +571,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     verifiedProfiles: db.prepare(
       `SELECT p.*, u.public_key FROM attorney_profiles p JOIN users u ON u.id = p.user_id
         WHERE p.verified = 1 ORDER BY p.display_name`,
+    ),
+    recoveryFailedSince: db.prepare(
+      `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'recovery.failed' AND at >= ?`,
     ),
     insertAudit: db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)'),
     recordById: db.prepare('SELECT * FROM records WHERE id = ?'),
@@ -701,6 +706,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // ════════════ recovery code (W20) ════════════
   // The code never reaches the server: it sees recoveryAuthKey (stored as scrypt, like the passphrase auth key) and the
   // account secret wrapped under a key only the code gives. So the server can check a code; it cannot reset anyone.
+  // Survivor accounts only: for a counselor or attorney, a single code + alias would open the private key that reads
+  // sealed-match releases or shared records, a takeover path their threat model (roster, n-of-m) does not cover.
+  // Rate limits are per client and per client+alias, deliberately not per alias alone: a global per-alias limit would
+  // let anyone lock her out of her own recovery by spending it from many clients (128-bit codes need no guess limit).
 
   /** Pending resets, in memory only: sha256(token) → whose, until when, and which code started it. Single use. */
   const resetTokens = new Map<string, { userId: string; expiresAt: number; recoveryHash: Buffer }>();
@@ -720,6 +729,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   app.post('/api/account/recovery', auth, async (req, res) => {
     rateLimit(req, 'recovery-setup', req.user!.username);
+    if (req.user!.role !== 'survivor') throw new HttpError(403, 'forbidden_role', 'Recovery codes are for survivor accounts only.');
     const body = parse(S.setUpRecoveryRequest, req.body);
     const u = q.userById.get(req.user!.id) as UserRow;
     await reauth(u, body.authKey);
@@ -762,14 +772,18 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const u = q.userByName.get(body.username) as UserRow | undefined;
     // Unknown alias, no code set up, or a wrong code: the same answer after the same scrypt work (no alias probing).
     const fail = () => new HttpError(401, 'invalid_credentials', 'That alias and recovery code don’t match.');
-    if (!u || !u.recovery_auth_hash || !u.recovery_auth_salt || !u.recovery_wrapped_key) {
+    if (!u || u.role !== 'survivor' || !u.recovery_auth_hash || !u.recovery_auth_salt || !u.recovery_wrapped_key) {
       await dummyVerify(body.recoveryAuthKey);
       throw fail();
     }
     if (!(await verifyAuthKey(body.recoveryAuthKey, u.recovery_auth_salt, u.recovery_auth_hash))) {
-      audit(u.id, 'recovery.failed', 'Someone tried to use a recovery code that didn’t match');
+      const today = new Date().toISOString().slice(0, 10);
+      const { n } = q.recoveryFailedSince.get(u.id, today) as { n: number };
+      if (n < RECOVERY_FAILED_AUDIT_CAP) audit(u.id, 'recovery.failed', 'Someone tried to use a recovery code that didn’t match');
       throw fail();
     }
+    // Her secret leaves wrapped under the code's key whether or not a reset follows, so say so in her activity now.
+    audit(u.id, 'recovery.used', 'Your recovery code was used to start a passphrase reset');
     sweepResetTokens();
     const resetToken = randomBytes(32).toString('base64url');
     resetTokens.set(sha256Hex(resetToken), { userId: u.id, expiresAt: Date.now() + RESET_TOKEN_TTL_MS, recoveryHash: u.recovery_auth_hash });
@@ -782,31 +796,28 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const key = sha256Hex(body.resetToken);
     const pending = resetTokens.get(key);
     resetTokens.delete(key); // single use, whatever happens next
+    const expired = () => new HttpError(401, 'invalid_credentials', 'This reset has expired. Please enter your recovery code again.');
     const u = pending && (q.userById.get(pending.userId) as UserRow | undefined);
     if (!pending || pending.expiresAt <= Date.now() || !u || !u.recovery_auth_hash || !u.recovery_auth_hash.equals(pending.recoveryHash))
-      throw new HttpError(401, 'invalid_credentials', 'This reset has expired. Please enter your recovery code again.');
-    const [pass, rec] = await Promise.all([hashAuthKey(body.authKey), hashAuthKey(body.recoveryAuthKey)]);
+      throw expired();
+    const pass = await hashAuthKey(body.authKey);
     const now = new Date().toISOString();
     db.transaction(() => {
-      db.prepare(
+      // The used code is burned and no new one is stored here: her client shows her a new code and saves it through
+      // POST /api/account/recovery only after she confirms she wrote it down (so no code exists that nobody holds).
+      // Conditional on the code that started this reset: if she replaced or turned it off during the scrypt above,
+      // nothing changes.
+      const changed = db.prepare(
         `UPDATE users SET auth_hash = ?, auth_salt = ?, kdf_salt = ?, kdf_iterations = ?, key_version = 2, wrapped_account_key = ?,
-                          recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ? WHERE id = ?`,
-      ).run(
-        pass.hash,
-        pass.salt,
-        body.kdfSalt,
-        body.kdfIterations,
-        canonicalEnvelope(body.wrappedAccountKey),
-        rec.hash,
-        rec.salt,
-        canonicalEnvelope(body.recoveryWrappedKey),
-        u.id,
-      );
+                          recovery_auth_hash = NULL, recovery_auth_salt = NULL, recovery_wrapped_key = NULL
+          WHERE id = ? AND recovery_auth_hash = ?`,
+      ).run(pass.hash, pass.salt, body.kdfSalt, body.kdfIterations, canonicalEnvelope(body.wrappedAccountKey), u.id, pending.recoveryHash);
+      if (changed.changes !== 1) throw expired();
       // whoever was signed in with the old passphrase is signed out
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
       for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
       audit(u.id, 'auth.recovered', 'Your passphrase was reset with your recovery code');
-      appendLedger(db, 'account.recovered', u.id, sha256Hex(`account.recovered|${u.id}|${now}`), now);
+      appendLedger(db, 'account.recovered', u.id, sha256Hex(JSON.stringify({ userId: u.id, at: now })), now);
     })();
     const token = createSession(db, u.id);
     audit(u.id, 'auth.login', 'Signed in');

@@ -5,7 +5,15 @@ import { ProgressNote, STRENGTH_WIDTH } from '../components/AuthForms';
 import { ErrorNote, PageTitle } from '../components/common';
 import { RecoveryCodeCard, RecoveryCodeExplainer } from '../components/RecoveryCode';
 import { generatePassphrase, passphraseStrength } from '../lib/passphrase';
-import { friendlyError, useRequiredSession, useSession, type PendingRecoveryCode, type Progress, type RecoveryReset } from '../lib/session';
+import {
+  friendlyError,
+  RecoveryMaybeFinishedError,
+  useRequiredSession,
+  useSession,
+  type PendingRecoveryCode,
+  type Progress,
+  type RecoveryReset,
+} from '../lib/session';
 
 /**
  * Checks the "Forgot your passphrase?" form on this device, before anything is sent: an alias, and a code that parses
@@ -160,7 +168,10 @@ export function RecoverySettings() {
   );
 }
 
-/** Signed out: "Forgot your passphrase?" → alias + code → a new passphrase → a new code, shown once → her space. */
+/**
+ * Signed out: "Forgot your passphrase?" → alias + code → a new passphrase → a new code, shown once and saved only
+ * once she confirms she wrote it down → her space. Leaving before that leaves her with no code, not an unknown one.
+ */
 export function RecoverScreen() {
   const { beginRecovery } = useSession();
   const navigate = useNavigate();
@@ -171,7 +182,9 @@ export function RecoverScreen() {
   const [confirm, setConfirm] = useState('');
   const [show, setShow] = useState(false);
   const [suggestion, setSuggestion] = useState(() => generatePassphrase());
-  const [newCode, setNewCode] = useState<string | null>(null);
+  const [newCode, setNewCode] = useState<PendingRecoveryCode | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [maybeDone, setMaybeDone] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
@@ -209,16 +222,32 @@ export function RecoverScreen() {
       reset.current = null;
       setPass('');
       setConfirm('');
-      setNewCode(out.code);
+      setNewCode(out.newCode);
       setStep('newCode');
     } catch (err) {
       setError(friendlyError(err));
-      if (/enter your recovery code again/.test(String((err as Error).message))) {
+      if (err instanceof RecoveryMaybeFinishedError) {
+        reset.current = null;
+        setMaybeDone(true);
+      } else if (/enter your recovery code again/.test(String((err as Error).message))) {
         reset.current = null;
         setStep('code');
       }
     } finally {
       setProgress(null);
+    }
+  }
+
+  async function onNewCodeConfirmed() {
+    if (!newCode) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await newCode.commit();
+      navigate('/vault', { replace: true });
+    } catch (err) {
+      setError(friendlyError(err));
+      setSaving(false);
     }
   }
 
@@ -280,7 +309,20 @@ export function RecoverScreen() {
         </form>
       )}
 
-      {step === 'passphrase' && (
+      {step === 'passphrase' && maybeDone && (
+        <div className="card stack" data-testid="recover-maybe-done">
+          <p role="alert" className="error" style={{ margin: 0 }}>
+            {error}
+          </p>
+          <div className="row">
+            <Link className="btn btn-primary" to="/signin">
+              Go to sign in
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {step === 'passphrase' && !maybeDone && (
         <form className="card stack" onSubmit={onPassphrase} noValidate>
           <p className="card soft" role="status" style={{ margin: 0 }}>
             Your code was accepted. Choose a new passphrase. Your old one will stop working, and anyone signed in with it
@@ -351,13 +393,38 @@ export function RecoverScreen() {
             </button>
           </div>
           <p className="small muted" style={{ margin: 0 }}>
-            You’ll also get a new recovery code. The one you just used stops working.
+            The code you just used stops working. Next you’ll get a new recovery code to write down.
           </p>
         </form>
       )}
 
       {step === 'newCode' && newCode && (
-        <RecoveryCodeCard code={newCode} confirmLabel="Saved — go to my space" onConfirmed={() => navigate('/vault', { replace: true })} />
+        <>
+          <RecoveryCodeCard
+            code={newCode.code}
+            confirmLabel="Saved — go to my space"
+            busy={saving}
+            error={error}
+            onConfirmed={() => void onNewCodeConfirmed()}
+          />
+          <div className="stack">
+            <p className="small muted" style={{ margin: 0 }}>
+              This code is saved only when you confirm. If you skip it, you’ll have no recovery code until you make one
+              from Home.
+            </p>
+            <div>
+              <button
+                type="button"
+                className="btn btn-quiet btn-small"
+                onClick={() => navigate('/vault', { replace: true })}
+                disabled={saving}
+                data-testid="recover-skip-code"
+              >
+                Skip for now
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

@@ -79,11 +79,12 @@ export interface PendingRecoveryCode {
 
 /**
  * A signed-out reset in progress: her alias and code were accepted, and her account secret is held in memory only
- * until `finish` (or `cancel`) wipes it. `finish` sets the new passphrase, makes a NEW recovery code (the used one is
- * burned), signs her in, and returns the new code to show once.
+ * until `finish` (or `cancel`) wipes it. `finish` sets the new passphrase (the used code is burned on the server),
+ * signs her in, and returns a NEW recovery code made on this device: it is saved only when she confirms she wrote it
+ * down (`newCode.commit()`), so until then her account has no code rather than one nobody holds.
  */
 export interface RecoveryReset {
-  finish(newPassphrase: string, onProgress?: (p: Progress) => void): Promise<{ session: Session; code: string }>;
+  finish(newPassphrase: string, onProgress?: (p: Progress) => void): Promise<{ session: Session; newCode: PendingRecoveryCode }>;
   cancel(): void;
 }
 
@@ -91,6 +92,20 @@ export class SessionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SessionError';
+  }
+}
+
+/**
+ * A reset whose earlier attempt failed in transit was then refused as spent: the server may have set her new
+ * passphrase after all (her old code is burned either way), so she should try signing in with it.
+ */
+export class RecoveryMaybeFinishedError extends SessionError {
+  constructor() {
+    super(
+      'Your earlier attempt may have gone through: your new passphrase could already be set. Try signing in with it. ' +
+        'If it doesn’t work, sign in with your old passphrase, or use your recovery code again.',
+    );
+    this.name = 'RecoveryMaybeFinishedError';
   }
 }
 
@@ -416,6 +431,8 @@ export function SessionProvider({
         as?.fill(0);
         as = null;
       };
+      // set once a finish request may have reached the server without an answer (network error, 5xx)
+      let unanswered = false;
       return {
         cancel: wipe,
         finish: async (newPassphrase, progress) => {
@@ -433,6 +450,10 @@ export function SessionProvider({
             kdfIterations: DEFAULT_KDF_ITERATIONS,
             authKey: keys.authKey,
             wrappedAccountKey: await wrapAccountSecret(secret, keys.kek),
+          };
+          // the new code's material, sent only on commit (after she confirms), re-authenticated by the new passphrase
+          const codeBody = {
+            authKey: keys.authKey,
             recoveryAuthKey: nrk.authKey,
             recoveryWrappedKey: await wrapAccountSecret(secret, nrk.kek),
           };
@@ -444,14 +465,30 @@ export function SessionProvider({
           } catch (e) {
             if (e instanceof ApiError && e.status === 401) {
               wipe(); // the token is spent: she starts again with her code
+              if (unanswered) throw new RecoveryMaybeFinishedError();
               throw new SessionError('This reset has expired. Please enter your recovery code again.');
             }
+            // no answer, or a server error: it may have committed (a 4xx such as 429 is refused before the token is used)
+            if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) unanswered = true;
             throw e;
           }
           wipe();
           progress?.('unlocking');
           const session = await enter(res, masterKey);
-          return { session, code: next.code };
+          const newCode: PendingRecoveryCode = {
+            code: next.code,
+            replacing: false,
+            commit: async () => {
+              const { user } = await api.setUpRecovery(codeBody);
+              const s = sessionRef.current;
+              if (s && s.user.id === user.id) {
+                const updated = { ...s, user };
+                sessionRef.current = updated;
+                setSession(updated);
+              }
+            },
+          };
+          return { session, newCode };
         },
       };
     },

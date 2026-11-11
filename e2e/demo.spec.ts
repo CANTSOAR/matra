@@ -761,7 +761,7 @@ test('9. recovery code: set up (shown once, confirm last 4) → forgot passphras
   await page.getByTestId('recover-new-passphrase-again').fill(NEW_PASS);
   await page.getByTestId('recover-set-passphrase').click();
 
-  // a new code, shown once (the used one is burned), then into her space with everything still there
+  // a new code, shown once (the used one is burned; this one is saved when she confirms), then into her space
   await expect(page.getByTestId('recover-title')).toHaveText('Your new passphrase is set', { timeout: 90_000 });
   const newCode = (await page.getByTestId('recovery-code').textContent())!.trim();
   expect(newCode).not.toBe(code);
@@ -769,6 +769,10 @@ test('9. recovery code: set up (shown once, confirm last 4) → forgot passphras
   await page.getByTestId('recovery-confirm').click();
   await expect(page.getByTestId('home-title')).toHaveText('Welcome back, Robin.', { timeout: 60_000 });
   await expect(page.getByTestId('home-activity')).toContainText('Your passphrase was reset with your recovery code');
+  await expect(page.getByTestId('home-activity')).toContainText('Your recovery code was used to start a passphrase reset');
+  // the new code was saved only on her confirmation, with her new passphrase
+  await expect(page.getByTestId('home-recovery')).toContainText('You have a recovery code.');
+  await expect(page.getByTestId('home-activity')).toContainText('You set up a recovery code');
   await signOut(page);
 
   // the old passphrase no longer opens it

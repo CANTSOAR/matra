@@ -862,11 +862,14 @@ master key).
 - **Recover** (signed out): alias + code → `POST /api/auth/recover/start { username, recoveryAuthKey }` → on success
   `{ resetToken, recoveryWrappedKey }` (token in memory, 10 min, single use); unknown alias or wrong code → the same
   401 after `dummyVerify` (same timing), rate-limited per username and IP hash. Client unwraps `AS`, she picks a new
-  passphrase, client derives a new `ikm'`, new salt, `authKey'`, `wrappedAccountKey' = AES-GCM(KEK_pass', AS)`, and
-  **a new recovery code** (a used code is burned) → `POST /api/auth/recover/finish { resetToken, kdfSalt,
-  kdfIterations, authKey, wrappedAccountKey, recoveryAuthKey, recoveryWrappedKey }` → `AuthResponse`. All her other
-  sessions are deleted; her audit trail: "Your passphrase was reset with your recovery code"; ledger
-  `account.recovered` (hash of user id + time).
+  passphrase, client derives a new `ikm'`, new salt, `authKey'`, `wrappedAccountKey' = AES-GCM(KEK_pass', AS)` →
+  `POST /api/auth/recover/finish { resetToken, kdfSalt, kdfIterations, authKey, wrappedAccountKey }` →
+  `AuthResponse`. The used code is burned (recovery columns cleared, conditionally on the code that started the
+  reset). Her client then shows **a new recovery code** and saves it with `POST /api/account/recovery` (new
+  passphrase as re-auth) only after she confirms it (review fix: no stored code nobody has seen). A successful start
+  is audited ("Your recovery code was used to start a passphrase reset"). All her other sessions are deleted; her
+  audit trail: "Your passphrase was reset with your recovery code"; ledger `account.recovered`
+  (`SHA-256(JSON.stringify({ userId, at }))`). Survivor accounts only.
 - **Turn off**: `DELETE /api/account/recovery { authKey }` clears the recovery columns.
 - The server never sees the code, `KEK_rec`, `KEK_pass` or `AS`, so it can't recover anything itself. Someone who
   finds the paper code and knows her alias can take over her account; that is W20, and the UI says so.

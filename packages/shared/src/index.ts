@@ -787,7 +787,7 @@ export interface LoginRequest { username: string; authKey: string }
 // A code only she holds (128 bits, shown once) that unwraps her account secret so she can set a new passphrase.
 // The server stores scrypt(recoveryAuthKey) and the wrapped secret; it never sees the code or any key that opens it.
 
-/** POST /api/account/recovery (signed in): set one up, or replace the old one (which then stops working). */
+/** POST /api/account/recovery (signed in, survivors only): set one up, or replace the old one (which then stops working). */
 export interface SetUpRecoveryRequest {
   /** her current passphrase auth key (re-authentication) */
   authKey: string;
@@ -804,15 +804,16 @@ export interface RecoverStartResponse {
   resetToken: string;
   recoveryWrappedKey: Envelope;
 }
-/** Her new passphrase material, and a NEW recovery code (a used code is burned). */
+/**
+ * Her new passphrase material. The used code is burned and no new one is stored here: her client shows a new code
+ * and saves it with POST /api/account/recovery only after she confirms she has written it down.
+ */
 export interface RecoverFinishRequest {
   resetToken: string;
   kdfSalt: string;
   kdfIterations: number;
   authKey: string;
   wrappedAccountKey: Envelope;
-  recoveryAuthKey: string;
-  recoveryWrappedKey: Envelope;
 }
 
 export interface CreateRecordRequest { envelope: Envelope; ownerWrappedKey: WrappedKey; supersedes?: string }
@@ -852,8 +853,10 @@ export interface ApiError { error: string; code?: string }
  POST   /api/auth/recover/start  RecoverStartRequest  -> RecoverStartResponse (401 invalid_credentials for an unknown alias, no
                                                          code set up, or a wrong code, after the same scrypt work; 429 rate_limited)
  POST   /api/auth/recover/finish RecoverFinishRequest -> AuthResponse (401 invalid_credentials: token unknown, used, expired, or
-                                                         the code was replaced meanwhile; every other session of hers ends)
- POST   /api/account/recovery    SetUpRecoveryRequest -> { user: PublicUser } (401 invalid_credentials on a wrong passphrase)
+                                                         the code was replaced meanwhile; every other session of hers ends;
+                                                         the used code is burned and the account has no code until she saves one)
+ POST   /api/account/recovery    SetUpRecoveryRequest -> { user: PublicUser } (401 invalid_credentials on a wrong passphrase;
+                                                         403 forbidden_role for a non-survivor account)
  DELETE /api/account/recovery    TurnOffRecoveryRequest -> { user: PublicUser }
 
  POST   /api/vault/records      CreateRecordRequest   -> CreateRecordResponse
