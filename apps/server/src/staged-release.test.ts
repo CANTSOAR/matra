@@ -10,14 +10,19 @@ import type express from 'express';
 import {
   decryptBlob,
   decryptJSON,
+  generateRosterKey,
+  normalizeMatchIdentifier,
   publicKeyFingerprint,
   reconstructMatchGroup,
+  refreshMatchEntries,
+  signCounselorRoster,
+  submitMatchEntry,
   unwrapKeyWithPrivate,
   wrapKeyForRecipient,
 } from '@matra/crypto';
 import type { CounselorMatchGroup, ReportReleaseBundle, SurvivorReportRequest } from '@matra/shared';
 import { getDb } from './app.js';
-import { createRecord, makeApp, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
+import { createRecord, makeApp, matchTransport, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
 
 const groupsOf = async (app: express.Express, c: TestUser) => {
   const r = await request(app).get('/api/counselor/groups').set(c.auth);
@@ -179,8 +184,9 @@ describe('stage 2: report requests and her decision', () => {
     const before = ledgerTypes(app).length;
     const yes = await consent(app, a, req!, recA.res.body.record.id, recA.key, [{ blobId: blobA.res.body.blob.id, key: blobA.key }]);
     expect(yes.status).toBe(201);
-    expect(yes.body.release).toMatchObject({ status: 'active', recordId: recA.res.body.record.id, groupId: g.id, entryId: entryA, blobIds: [blobA.res.body.blob.id] });
+    expect(yes.body.release).toMatchObject({ status: 'active', recordId: recA.res.body.record.id, entryId: entryA, blobIds: [blobA.res.body.blob.id] });
     expect(yes.body.release.survivorId).toBeUndefined();
+    expect(yes.body.release.groupId).toBeUndefined(); // the same for everyone in the group: never shown to a survivor
     expect(ledgerTypes(app).slice(before)).toEqual(['report.released']);
     expect((await consent(app, a, req!, recA.res.body.record.id, recA.key)).body.code).toBe('request_not_pending');
 
@@ -285,7 +291,7 @@ describe('stage 2: report requests and her decision', () => {
     expect(g1!.reportRequests.find((r) => r.entryId === entryB)!.release).toBeUndefined();
     // and A, the other survivor, learns nothing about B either
     const aText = JSON.stringify([(await requestsOf(app, a)), (await request(app).get('/api/audit').set(a.auth)).body]);
-    for (const leak of [...secretsOfB, entryB]) expect(aText).not.toContain(leak);
+    for (const leak of [...secretsOfB, entryB, g.id, g.tag]) expect(aText).not.toContain(leak);
   });
 });
 
@@ -329,7 +335,12 @@ describe('revocation, withdrawal and deletion', () => {
 
   it('withdrawing her entry deletes its requests and releases; the counselor sees them vanish', async () => {
     const { app, db, loc, a, entryA, release } = await released();
+    const before = ledgerTypes(app).length;
     expect((await request(app).delete(`/api/matching/entries/${entryA}`).set(a.auth)).status).toBe(200);
+    // the live release ended with its own ledger row (only hashes stay), and her trail says so
+    expect(ledgerTypes(app).slice(before)).toEqual(['report.revoked']);
+    const trail = (await request(app).get('/api/audit').set(a.auth)).body.events as Array<{ detail: string }>;
+    expect(trail.some((e) => /no longer shared with .*you withdrew the sealed identifier/.test(e.detail))).toBe(true);
     for (const t of ['report_requests', 'report_releases', 'report_release_blobs']) expect(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get()).toEqual({ n: 0 });
     expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(loc.auth)).status).toBe(404);
     expect(await requestsOf(app, a)).toEqual([]);
@@ -375,5 +386,126 @@ describe('ledger', () => {
       'report.revoked',
     ]);
     expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
+  });
+});
+
+describe('a release outlives a re-seal, ends when the counselor can no longer hold it, and a no stays a no', () => {
+  /** A said yes (release live), B said no. */
+  async function decided(opts: { twoCounselors?: boolean } = {}) {
+    const m = await matched(opts);
+    await check(m.app, m.loc, m.g.id, 'clear');
+    await ask(m.app, m.loc, m.g.id, m.entryA);
+    await ask(m.app, m.loc, m.g.id, m.entryB);
+    const [ra] = await requestsOf(m.app, m.a);
+    const [rb] = await requestsOf(m.app, m.b);
+    const release = (await consent(m.app, m.a, ra!, m.recA.res.body.record.id, m.recA.key)).body.release as { id: string };
+    expect((await request(m.app).post(`/api/report-requests/${rb!.id}/decline`).set(m.b.auth)).status).toBe(200);
+    return { ...m, release };
+  }
+  const bundleOf = (app: express.Express, c: TestUser, id: string) => request(app).get(`/api/counselor/releases/${id}/bundle`).set(c.auth);
+
+  it('re-seal under a new key epoch, same tag: her yes and her no both carry over, with no revoke row', async () => {
+    const { app, db, loc, a, b, g, release } = await decided();
+    db.prepare('UPDATE match_entries SET key_epoch = 0').run(); // as after an epoch bump without an OPRF key change
+    const before = ledgerTypes(app).length;
+    for (const u of [a, b]) expect((await refreshMatchEntries(matchTransport(app, u), { masterKey: u.masterKey })).resealed).toBe(1);
+    expect(ledgerTypes(app).slice(before)).toEqual(['escrow.sealed', 'escrow.sealed']);
+    const newA = (db.prepare('SELECT id FROM match_entries WHERE user_id = ?').get(a.user.id) as { id: string }).id;
+    const newB = (db.prepare('SELECT id FROM match_entries WHERE user_id = ?').get(b.user.id) as { id: string }).id;
+    // same group; the release is still live and readable
+    const [g1] = await groupsOf(app, loc);
+    expect(g1!.id).toBe(g.id);
+    expect((await bundleOf(app, loc, release.id)).status).toBe(200);
+    expect((await requestsOf(app, a))[0]).toMatchObject({ entryId: newA, status: 'consented', release: { status: 'active' } });
+    expect((await requestsOf(app, b))[0]).toMatchObject({ entryId: newB, status: 'declined' });
+    // and the counselor still cannot ask B again, nor ask A for what she already has
+    expect((await ask(app, loc, g.id, newB)).body.code).toBe('she_said_no');
+    expect((await ask(app, loc, g.id, newA)).body.code).toBe('already_shared');
+  });
+
+  it('re-seal into a new tag (rotated OPRF key): Matra ends her release, ledgered and in her trail; it is not a no', async () => {
+    const { app, db, loc, a, release, entryA } = await decided();
+    const n = normalizeMatchIdentifier('email', 'someone.else@example.com');
+    if (!n.ok) throw new Error('unreachable');
+    const before = ledgerTypes(app).length;
+    await submitMatchEntry(matchTransport(app, a), {
+      masterKey: a.masterKey,
+      identifier: n,
+      contact: { name: 'Alex', methods: ['text'], phone: '+12015550123' },
+      consentStatement: 'If someone else names the same person, a counselor may contact me.',
+      label: 'email',
+      states: { incident: 'NJ' },
+      replacesEntryId: entryA,
+    });
+    expect(ledgerTypes(app).slice(before)).toEqual(['report.revoked', 'escrow.sealed']);
+    expect((await bundleOf(app, loc, release.id)).body.code).toBe('release_revoked');
+    const [mine] = await requestsOf(app, a);
+    expect(mine!.release).toMatchObject({ status: 'revoked', revokeReason: 'resealed' });
+    const trail = (await request(app).get('/api/audit').set(a.auth)).body.events as Array<{ detail: string }>;
+    expect(trail.some((e) => /no longer shared with Counselor loc\.one, Test LOC: your sealed match moved to new matching keys/.test(e.detail))).toBe(true);
+    expect(db.prepare('SELECT revoke_reason FROM report_releases WHERE id = ?').get(release.id)).toEqual({ revoke_reason: 'resealed' });
+  });
+
+  it('a conflict found after her yes revokes the release and tells her; the next counselor may ask her, but not B', async () => {
+    const { app, loc, spare, a, b, g, release, entryA, entryB } = await decided({ twoCounselors: true });
+    expect((await bundleOf(app, loc, release.id)).status).toBe(200);
+    const before = ledgerTypes(app).length;
+    expect((await check(app, loc, g.id, 'conflict')).status).toBe(200);
+    expect(ledgerTypes(app).slice(before)).toEqual(['counselor.conflict_checked', 'report.revoked']);
+    expect((await bundleOf(app, loc, release.id)).body.code).toBe('release_revoked');
+    expect((await request(app).get(`/api/counselor/releases/${release.id}/blobs/${'0'.repeat(32)}`).set(loc.auth)).body.code).toBe('release_revoked');
+    const [mine] = await requestsOf(app, a);
+    expect(mine!.release).toMatchObject({ status: 'revoked', revokeReason: 'conflict' });
+    const trail = (await request(app).get('/api/audit').set(a.auth)).body.events as Array<{ detail: string }>;
+    expect(trail.some((e) => e.detail.startsWith(`Your report is no longer shared with Counselor ${loc.user.username}, Test LOC: they can’t take on this matter`))).toBe(true);
+    // B's trail says nothing (no release of hers was touched)
+    expect(JSON.stringify((await request(app).get('/api/audit').set(b.auth)).body)).not.toMatch(/no longer shared/);
+    // the next counselor: Matra ending A's access was not A's no; B's no binds every counselor
+    expect((await check(app, spare!, g.id, 'clear')).status).toBe(200);
+    expect((await ask(app, spare!, g.id, entryA)).status).toBe(201);
+    expect((await ask(app, spare!, g.id, entryB)).body.code).toBe('she_said_no');
+  });
+
+  it('a release she revoked is a no for every counselor, not just the one she revoked', async () => {
+    const { app, loc, spare, a, g, release, entryA } = await decided({ twoCounselors: true });
+    await request(app).post(`/api/report-releases/${release.id}/revoke`).set(a.auth);
+    await check(app, loc, g.id, 'conflict');
+    await check(app, spare!, g.id, 'clear');
+    expect((await ask(app, spare!, g.id, entryA)).body.code).toBe('she_said_no');
+  });
+
+  it('read access needs the group still assigned to her and her name still on the signed roster', async () => {
+    const { app, db, loc, spare, release } = await decided({ twoCounselors: true });
+    expect((await bundleOf(app, loc, release.id)).status).toBe(200);
+    // off the signed roster (only the other counselor listed)
+    const org = generateRosterKey();
+    const roster = signCounselorRoster([{ userId: spare!.user.id, publicKey: spare!.user.publicKey }], org.secretKey);
+    db.prepare(`INSERT INTO matching_meta (key, value) VALUES ('counselor_roster', ?)`).run(JSON.stringify(roster));
+    expect((await bundleOf(app, loc, release.id)).body.code).toBe('release_revoked');
+    db.prepare(`DELETE FROM matching_meta WHERE key = 'counselor_roster'`).run();
+    expect((await bundleOf(app, loc, release.id)).status).toBe(200);
+    // no longer assigned the group
+    db.prepare('DELETE FROM match_assignments WHERE counselor_id = ?').run(loc.user.id);
+    expect((await bundleOf(app, loc, release.id)).body.code).toBe('release_revoked');
+  });
+});
+
+describe('another counselor cannot reach a counselor’s requests, releases or groups', () => {
+  it('404 on every route for a verified counselor who is not assigned; the request stays pending', async () => {
+    const { app, loc, spare, a, g, entryA, entryB, recA, blobA } = await matched({ twoCounselors: true });
+    await check(app, loc, g.id, 'clear');
+    const pendingB = (await ask(app, loc, g.id, entryB)).body.request as { id: string };
+    await ask(app, loc, g.id, entryA);
+    const ra = (await requestsOf(app, a))[0]!;
+    const release = (await consent(app, a, ra, recA.res.body.record.id, recA.key, [{ blobId: blobA.res.body.blob.id, key: blobA.key }])).body.release as { id: string };
+    const other = spare!;
+    expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(other.auth)).body.code).toBe('release_not_found');
+    expect((await request(app).get(`/api/counselor/releases/${release.id}/blobs/${blobA.res.body.blob.id}`).set(other.auth)).body.code).toBe('release_not_found');
+    expect((await request(app).get('/api/counselor/releases').set(other.auth)).body.releases).toEqual([]);
+    expect((await request(app).post(`/api/counselor/report-requests/${pendingB.id}/cancel`).set(other.auth)).body.code).toBe('request_not_found');
+    expect((await ask(app, other, g.id, entryB)).body.code).toBe('group_not_found');
+    expect((await check(app, other, g.id, 'clear')).body.code).toBe('group_not_found');
+    const [g1] = await groupsOf(app, loc);
+    expect(g1!.reportRequests.find((r) => r.id === pendingB.id)).toMatchObject({ status: 'pending' });
   });
 });

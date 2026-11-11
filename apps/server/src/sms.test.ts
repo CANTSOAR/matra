@@ -360,7 +360,7 @@ describe('what is kept (W19)', () => {
     db.pragma('user_version = 6');
     db.close();
     const db2 = openDb(file);
-    expect(db2.pragma('user_version', { simple: true })).toBe(9);
+    expect(db2.pragma('user_version', { simple: true })).toBe(10);
     const row = (id: string) => db2.prepare('SELECT matching_verified FROM users WHERE id = ?').get(id);
     expect(row(sealed.user.id)).toEqual({ matching_verified: 1 });
     expect(row(fresh.user.id)).toEqual({ matching_verified: 0 });

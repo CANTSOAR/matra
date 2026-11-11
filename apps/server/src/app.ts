@@ -51,11 +51,13 @@ import type {
   LedgerEntry,
   PublicUser,
   ReportRelease,
+  ReportRevokeReason,
   ReportReleaseBundle,
   Role,
   Share,
   ShareBundle,
   SignedCounselorRoster,
+  SurvivorReportRelease,
   SurvivorReportRequest,
   VaultRecord,
   VaultRecordMeta,
@@ -294,6 +296,7 @@ interface ReportReleaseRow {
   expires_at: string;
   first_opened_at: string | null;
   revoked_at: string | null;
+  revoke_reason: ReportRevokeReason | null;
   ledger_entry_id: string;
   /** from the request (joined) */
   group_id: string;
@@ -389,8 +392,14 @@ const toRelease = (r: ReportReleaseRow): ReportRelease => ({
   expiresAt: r.expires_at,
   ...(r.first_opened_at != null && { firstOpenedAt: r.first_opened_at }),
   ...(r.revoked_at != null && { revokedAt: r.revoked_at }),
+  ...(r.revoke_reason != null && { revokeReason: r.revoke_reason }),
   ledgerEntryId: r.ledger_entry_id,
 });
+/** The same release as the survivor sees it: without the group id, which every survivor in the group shares (W21). */
+const toSurvivorRelease = (r: ReportReleaseRow): SurvivorReportRelease => {
+  const { groupId: _groupId, ...rest } = toRelease(r);
+  return rest;
+};
 const isReleaseLive = (r: ReportReleaseRow) => r.status === 'active' && Date.parse(r.expires_at) > Date.now();
 
 /**
@@ -1391,16 +1400,64 @@ export function createApp(opts: CreateAppOptions): express.Express {
       if (ids && !ids.has(c.user_id)) throw new HttpError(403, 'counselor_not_listed', 'This counselor is not on the signed counselor list.');
     }
   };
+  // ── ending a report release on her behalf (staged release, below). Each one is a report.revoked ledger row, like her
+  // own revoke, plus a calm line in her trail so she knows; she has nothing to do. Expired releases are left as they are.
+  type LiveReleaseRef = { id: string; survivor_id: string; counselor_id: string };
+  const liveReleasesForEntry = db.prepare(
+    `SELECT rel.id, rel.survivor_id, rel.counselor_id FROM report_releases rel JOIN report_requests r ON r.id = rel.request_id
+      WHERE r.entry_id = ? AND rel.status = 'active' AND rel.expires_at > ?`,
+  );
+  const liveReleasesInGroup = db.prepare(
+    `SELECT rel.id, rel.survivor_id, rel.counselor_id FROM report_releases rel JOIN report_requests r ON r.id = rel.request_id
+      WHERE r.group_id = ? AND rel.counselor_id = ? AND rel.status = 'active' AND rel.expires_at > ?`,
+  );
+  const revokeHash = (releaseId: string, reason: ReportRevokeReason, revokedAt: string) =>
+    sha256Hex(JSON.stringify({ releaseId, status: 'revoked', reason, revokedAt }));
+  const ENDED_FOR_HER: Record<Exclude<ReportRevokeReason, 'survivor'>, string> = {
+    conflict: 'they can’t take on this matter, so Matra ended their access. You don’t need to do anything.',
+    resealed: 'your sealed match moved to new matching keys, so Matra ended this access. You don’t need to do anything.',
+    withdrawn: 'you withdrew the sealed identifier it was about.',
+  };
+  const endRelease = (rel: LiveReleaseRef, reason: Exclude<ReportRevokeReason, 'survivor'>, revokedAt: string) => {
+    appendLedger(db, 'report.revoked', rel.id, revokeHash(rel.id, reason, revokedAt), revokedAt);
+    db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = ? WHERE id = ?`).run(revokedAt, reason, rel.id);
+    audit(rel.survivor_id, 'report.revoked', `Your report is no longer shared with ${counselorLabel(rel.counselor_id)}: ${ENDED_FOR_HER[reason]}`);
+    audit(rel.counselor_id, 'counselor.release_revoked', 'Your access to a report a survivor shared with you has ended');
+  };
+  /** The entry row and its seals only (a re-seal keeps its request history; see below). */
+  const dropEntry = (entryId: string) => {
+    db.prepare('DELETE FROM match_seals WHERE entry_id = ?').run(entryId);
+    db.prepare('DELETE FROM match_entries WHERE id = ?').run(entryId);
+    queueMatcherDelete.run(entryId);
+  };
+  /** Withdrawal: her report requests and releases about this entry go with it (the counselor sees them vanish). */
   const deleteEntry = (entryId: string) => {
-    // staged release: her report requests and releases about this entry go with it (the counselor sees them vanish)
+    // a live release ends first, with its own report.revoked ledger row (the ledger keeps only hashes)
+    const ts = new Date().toISOString();
+    for (const rel of liveReleasesForEntry.all(entryId, ts) as LiveReleaseRef[]) endRelease(rel, 'withdrawn', ts);
     db.prepare(
       'DELETE FROM report_release_blobs WHERE release_id IN (SELECT id FROM report_releases WHERE request_id IN (SELECT id FROM report_requests WHERE entry_id = ?))',
     ).run(entryId);
     db.prepare('DELETE FROM report_releases WHERE request_id IN (SELECT id FROM report_requests WHERE entry_id = ?)').run(entryId);
     db.prepare('DELETE FROM report_requests WHERE entry_id = ?').run(entryId);
-    db.prepare('DELETE FROM match_seals WHERE entry_id = ?').run(entryId);
-    db.prepare('DELETE FROM match_entries WHERE id = ?').run(entryId);
-    queueMatcherDelete.run(entryId);
+    dropEntry(entryId);
+  };
+  /**
+   * A re-seal (key epoch bump) replaces her entry with a new id. Her request history moves to the new entry, so a no
+   * stays a no and a yes is not silently lost. Same tag (same OPRF key): same group, same counselor, so releases and
+   * notes carry on. New tag (rotated OPRF key): a new group, possibly another counselor, so Matra ends her live
+   * releases (ledgered, with a line in her trail) and cancels pending requests; she can be asked again in the new group
+   * only if she never said no.
+   */
+  const reSealEntry = (old: MatchEntryRow, newEntryId: string, newTag: string, ts: string) => {
+    if (old.tag !== newTag) {
+      for (const rel of liveReleasesForEntry.all(old.id, ts) as LiveReleaseRef[]) endRelease(rel, 'resealed', ts);
+      db.prepare(`UPDATE report_requests SET status = 'cancelled', decided_at = ? WHERE entry_id = ? AND status = 'pending'`).run(ts, old.id);
+    } else {
+      db.prepare('UPDATE counselor_notes SET entry_id = ? WHERE entry_id = ?').run(newEntryId, old.id);
+    }
+    db.prepare('UPDATE report_requests SET entry_id = ? WHERE entry_id = ?').run(newEntryId, old.id);
+    dropEntry(old.id);
   };
   const markMatched = db.prepare(
     `INSERT OR IGNORE INTO match_groups (id, tag, matched_at)
@@ -1412,10 +1469,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const body = parse(S.createMatchEntryRequest, req.body);
     checkSealRecipients(body.seals);
     const replaces = body.replacesEntryId ?? null;
-    if (replaces) {
-      const old = q.matchEntryById.get(replaces) as MatchEntryRow | undefined;
-      if (!old || old.user_id !== me.id) throw new HttpError(404, 'entry_not_found', 'Entry not found.');
-    }
+    const old = replaces ? (q.matchEntryById.get(replaces) as MatchEntryRow | undefined) : undefined;
+    if (replaces && (!old || old.user_id !== me.id)) throw new HttpError(404, 'entry_not_found', 'Entry not found.');
     // Only reveals HER OWN earlier submission for the same person.
     if (ownEntryForTag.get(me.id, body.tag, replaces)) throw new HttpError(409, 'already_sealed', 'You have already sealed this.');
     if ((ownEntryCount.get(me.id, replaces) as { n: number }).n >= limits.lifetime)
@@ -1424,7 +1479,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     db.transaction(() => {
       const ts = new Date().toISOString();
       // a re-seal (after a key rotation) replaces her older entry atomically
-      if (replaces) deleteEntry(replaces);
+      if (old) reSealEntry(old, id, body.tag, ts);
       const le = appendLedger(db, 'escrow.sealed', id, envelopeContentHash(body.bundle), ts);
       db.prepare(
         `INSERT INTO match_entries (id, user_id, tag, bundle, label_envelope, created_at, ledger_entry_id, key_epoch, routing_envelope, contact_bundle)
@@ -1667,7 +1722,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // identifier and states against her own conflicts records (outside Matra) and records the result here:
   //   'clear'    → the contact ciphertexts are included in her group from now on;
   //   'conflict' → the matcher reassigns the group with her excluded (for as long as the tag has entries), her pending
-  //                report requests in it are cancelled, and it never comes back to her.
+  //                report requests in it are cancelled, any report a survivor already released to her is revoked
+  //                (ledgered; a line in that survivor's trail), and it never comes back to her.
   // Each result is a ledger row (hash of group, counselor, result and statement version) and a line in her own trail.
   // Never in a survivor's trail: that would tell her (or a perpetrator posing as a survivor) that a match exists.
   const recordConflictCheck = (g: GroupRow, counselorId: string, result: 'clear' | 'conflict', statementVersion: number) => {
@@ -1685,6 +1741,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
           g.id,
           counselorId,
         );
+        // a conflict found after a survivor said yes: Matra ends that access for her, and tells her
+        for (const rel of liveReleasesInGroup.all(g.id, counselorId, ts) as LiveReleaseRef[]) endRelease(rel, 'conflict', ts);
         audit(counselorId, 'counselor.declined_group', 'Declined a matched group (conflict of interest); the matcher passes it to another counselor');
       } else {
         audit(counselorId, 'counselor.conflict_checked', 'Recorded a conflict check for a matched group: no conflict');
@@ -1729,12 +1787,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   // ── report requests (Stage 2). After a clear check, the counselor may ask ONE survivor in the group for her full
   // report, and only after confirming she has already spoken with her and she expects it (so a request is never her
-  // first sign of a match: W1). One open request per (entry, counselor). After a no (a decline, or a revoked release)
-  // the counselor cannot ask again through Matra: a no is a no.
+  // first sign of a match: W1). One open request per (entry, counselor). After her no (a decline, or a release SHE
+  // revoked) nobody can ask that entry again through Matra, whichever counselor holds the group later: a no is a no.
+  // Her history follows the entry through re-seals (reSealEntry). Releases Matra ended for her are not a no.
   const requestById = db.prepare('SELECT * FROM report_requests WHERE id = ?');
   const requestsForEntry = db.prepare(
-    `SELECT r.*, rel.status AS release_status, rel.expires_at AS release_expires_at FROM report_requests r
-       LEFT JOIN report_releases rel ON rel.request_id = r.id WHERE r.entry_id = ? AND r.counselor_id = ?`,
+    `SELECT r.*, rel.status AS release_status, rel.expires_at AS release_expires_at, rel.revoke_reason AS release_revoke_reason
+       FROM report_requests r LEFT JOIN report_releases rel ON rel.request_id = r.id WHERE r.entry_id = ?`,
   );
   const requestJoinById = db.prepare(
     `SELECT r.*, rel.id AS release_id, rel.status AS release_status, rel.expires_at AS release_expires_at, rel.first_opened_at AS release_first_opened_at
@@ -1749,10 +1808,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const body = parse(S.reportRequestCreate, req.body);
     if (!released.conflictCheck) throw new HttpError(409, 'conflict_check_required', 'Record your conflict check for this group first.');
     if (!released.entries.some((e) => e.entryId === body.entryId)) throw new HttpError(404, 'entry_not_found', 'Entry not found in this group.');
-    const earlier = requestsForEntry.all(body.entryId, me.id) as Array<ReportRequestRow & { release_status: string | null; release_expires_at: string | null }>;
-    if (earlier.some((r) => r.status === 'pending')) throw new HttpError(409, 'request_open', 'You have already asked her. She hasn’t decided yet.');
-    if (earlier.some((r) => r.status === 'declined' || r.release_status === 'revoked'))
+    const history = requestsForEntry.all(body.entryId) as Array<
+      ReportRequestRow & { release_status: string | null; release_expires_at: string | null; release_revoke_reason: string | null }
+    >;
+    if (history.some((r) => r.status === 'declined' || (r.release_status === 'revoked' && r.release_revoke_reason === 'survivor')))
       throw new HttpError(409, 'she_said_no', 'She decided not to share her report. Matra will not ask her again.');
+    const earlier = history.filter((r) => r.counselor_id === me.id);
+    if (earlier.some((r) => r.status === 'pending')) throw new HttpError(409, 'request_open', 'You have already asked her. She hasn’t decided yet.');
     if (earlier.some((r) => r.release_status === 'active' && Date.parse(r.release_expires_at!) > Date.now()))
       throw new HttpError(409, 'already_shared', 'She has already shared her report with you.');
     const id = newId();
@@ -1789,12 +1851,20 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const c = q.counselorProfileByUser.get(counselorId) as CounselorProfileRow | undefined;
     return c ? `${c.display_name}${c.organization ? `, ${c.organization}` : ''}` : 'The legal options counselor';
   };
-  /** The counselor's own active release, or 403/404 (revoked, expired, someone else's). */
+  /**
+   * The counselor's own active release, or 403/404 (revoked, expired, someone else's). She must also still hold the
+   * group (assigned by the matcher, so not passed on after a conflict) and still be on the signed roster: the same
+   * conditions her request needed when the survivor said yes.
+   */
   const liveReleaseFor = (req: Request): ReportReleaseRow => {
     const r = releaseById.get(parse(S.id, req.params.id)) as ReportReleaseRow | undefined;
     if (!r || r.counselor_id !== req.user!.id) throw new HttpError(404, 'release_not_found', 'Report not found.');
     if (r.status !== 'active') throw new HttpError(403, 'release_revoked', 'She has stopped sharing her report with you.');
     if (!isReleaseLive(r)) throw new HttpError(403, 'release_expired', 'Access to this report has ended.');
+    const g = groupById.get(r.group_id) as GroupRow | undefined;
+    const ids = rosterIds();
+    if (!g || !assignmentFor.get(g.tag, r.counselor_id) || (ids && !ids.has(r.counselor_id)))
+      throw new HttpError(403, 'release_revoked', 'This report is no longer available to you.');
     return r;
   };
 
@@ -1865,7 +1935,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         jurisdictions: c ? (JSON.parse(c.jurisdictions) as string[]) : [],
         publicKey: c ? JSON.parse(c.public_key) : {},
       },
-      ...(rel && { release: toRelease(rel) }),
+      ...(rel && { release: toSurvivorRelease(rel) }),
     };
   };
   /** Her own request (via her entry), or 404 — the same answer for someone else's request as for none. */
@@ -1936,7 +2006,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       audit(me.id, 'report.released', `You shared your report with ${counselorLabel(r.counselor_id)} (legal options counselor)`);
       audit(r.counselor_id, 'counselor.report_received', 'A survivor shared her report with you');
     })();
-    res.status(201).json({ release: toRelease(releaseById.get(id) as ReportReleaseRow), ledgerEntry });
+    res.status(201).json({ release: toSurvivorRelease(releaseById.get(id) as ReportReleaseRow), ledgerEntry });
   });
 
   app.post('/api/report-requests/:id/decline', auth, survivorOnly, (req, res) => {
@@ -1961,12 +2031,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
     let ledgerEntry!: LedgerEntry;
     db.transaction(() => {
       const revokedAt = new Date().toISOString();
-      ledgerEntry = appendLedger(db, 'report.revoked', r.id, sha256Hex(JSON.stringify({ releaseId: r.id, status: 'revoked', revokedAt })), revokedAt);
-      db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ? WHERE id = ?`).run(revokedAt, r.id);
+      ledgerEntry = appendLedger(db, 'report.revoked', r.id, revokeHash(r.id, 'survivor', revokedAt), revokedAt);
+      db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = 'survivor' WHERE id = ?`).run(revokedAt, r.id);
       audit(me.id, 'report.revoked', `You stopped sharing your report with ${counselorLabel(r.counselor_id)}`);
       audit(r.counselor_id, 'counselor.release_revoked', 'A survivor stopped sharing her report with you');
     })();
-    res.json({ release: toRelease(releaseById.get(r.id) as ReportReleaseRow), ledgerEntry });
+    res.json({ release: toSurvivorRelease(releaseById.get(r.id) as ReportReleaseRow), ledgerEntry });
   });
 
   // ════════════ audit ════════════

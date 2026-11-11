@@ -378,10 +378,14 @@ and nothing about one survivor is ever shown to another.
    roster key, otherwise compared by hand as for attorneys). On a yes her device wraps her latest sealed record's key,
    and any evidence keys she ticks (unticked by default), to the counselor's RSA key, and the server stores a release
    with her consent text (`report.released`, hashing the consent text, record, counselor, key fingerprint, evidence ids
-   and expiry, like `share.granted`). On a no (`report.declined`) the counselor sees only the decision and cannot ask
-   again. She can revoke (`report.revoked`): before the counselor first opens it, the counselor never receives it;
-   after, it stops future access only. Every opening is shown in her activity. Withdrawing the entry or deleting either
-   account deletes the requests and releases.
+   and expiry, like `share.granted`). On a no (`report.declined`) the counselor sees only the decision, and no
+   counselor can ask that entry again through Matra (the history follows the entry through re-seals). She can revoke
+   (`report.revoked`): before the counselor first opens it, the counselor never receives it; after, it stops future
+   access only. Every opening is shown in her activity. Matra also revokes a release for her, with its own
+   `report.revoked` row and a line in her activity, if the counselor later records a conflict, if her entry is
+   re-sealed under a rotated OPRF key (a new group), or if she withdraws the entry; a counselor who is no longer
+   assigned the group or no longer on the signed roster cannot read a release either. Withdrawing the entry or
+   deleting either account deletes the requests and releases (the ledger keeps only hashes).
 Open legal questions: Q-018 (conflict checks), Q-022, Q-023, Q-050 (revocation), Q-052 (non-consenting survivors). Schema
 v9 adds the tables and bumps the key epoch, so survivors' clients re-seal old entries into the split format at their
 next sign-in.

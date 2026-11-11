@@ -471,6 +471,12 @@ export interface ConflictCheckRequest {
 
 export type ReportRequestStatus = 'pending' | 'consented' | 'declined' | 'cancelled';
 export type ReportReleaseStatus = 'active' | 'revoked';
+/**
+ * Who ended a release: 'survivor' (she stopped sharing; a no, so nobody may ask that entry again), or Matra on her
+ * behalf: 'conflict' (the counselor later found a conflict), 'resealed' (her entry moved to a new matching key and so
+ * to a new group), 'withdrawn' (she withdrew the entry; the rows are then deleted, only the ledger row remains).
+ */
+export type ReportRevokeReason = 'survivor' | 'conflict' | 'resealed' | 'withdrawn';
 
 /**
  * Stage 2: the counselor asks ONE matched survivor for her full report. The survivor decides alone; the counselor
@@ -496,7 +502,7 @@ export interface SurvivorReportRequest {
   createdAt: string;
   decidedAt?: string;
   counselor: { userId: string; displayName: string; organization?: string; jurisdictions: string[]; publicKey: JsonWebKey };
-  release?: ReportRelease;
+  release?: SurvivorReportRelease;
 }
 
 /** POST /api/report-requests/:id/consent: her record key (and any evidence keys she chose) wrapped to the counselor. */
@@ -527,8 +533,15 @@ export interface ReportRelease {
   /** null until the counselor first opens it: revoking before then means she never sees it */
   firstOpenedAt?: string;
   revokedAt?: string;
+  revokeReason?: ReportRevokeReason;
   ledgerEntryId: string;
 }
+
+/**
+ * A release as the survivor sees it: no group id. The group id is the same for everyone who named the same person, so
+ * two survivors comparing it would learn they are in one group (W21).
+ */
+export type SurvivorReportRelease = Omit<ReportRelease, 'groupId'>;
 
 /** GET /api/counselor/releases/:id/bundle: like ShareBundle, without any alias. */
 export interface ReportReleaseBundle {

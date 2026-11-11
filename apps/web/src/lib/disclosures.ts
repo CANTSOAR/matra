@@ -155,7 +155,7 @@ export const REPORT_REQUEST_LINES: readonly string[] = [
   'If you say yes, only this counselor can open what you choose. It is locked on this device, for their key only.',
   'It is not shared with anyone else who named the same person, and they are never told who you are.',
   'You can stop sharing at any time. If you stop before the counselor opens it, they never see it. Once they have read it, stopping ends future access, but it can’t take back what they already read.',
-  'If you say no, the counselor only learns that you decided not to share. You never have to give a reason, and you won’t be asked again.',
+  'If you say no, the counselor only learns that you decided not to share. You never have to give a reason, and you won’t be asked again through Matra about this sealed match.',
 ];
 
 /** The exact consent text stored with a report release (and hashed into its ledger entry). */

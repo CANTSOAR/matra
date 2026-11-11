@@ -30,6 +30,7 @@ import type {
   ReportConsentRequest,
   ReportRelease,
   ReportReleaseBundle,
+  SurvivorReportRelease,
   SurvivorReportRequest,
   LoginRequest,
   MatchingConfig,
@@ -289,13 +290,13 @@ export class ApiClient {
     return this.json<{ requests: SurvivorReportRequest[] }>('GET', '/api/report-requests');
   }
   consentReportRequest(id: string, req: ReportConsentRequest) {
-    return this.json<{ release: ReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-requests/${encodeURIComponent(id)}/consent`, req);
+    return this.json<{ release: SurvivorReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-requests/${encodeURIComponent(id)}/consent`, req);
   }
   declineReportRequest(id: string) {
     return this.json<{ request: SurvivorReportRequest }>('POST', `/api/report-requests/${encodeURIComponent(id)}/decline`);
   }
   revokeReportRelease(id: string) {
-    return this.json<{ release: ReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-releases/${encodeURIComponent(id)}/revoke`);
+    return this.json<{ release: SurvivorReportRelease; ledgerEntry: LedgerEntry }>('POST', `/api/report-releases/${encodeURIComponent(id)}/revoke`);
   }
 
   // ── audit / account ──

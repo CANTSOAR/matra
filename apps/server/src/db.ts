@@ -390,6 +390,13 @@ const MIGRATIONS: string[] = [
   );
   UPDATE matching_meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'key_epoch';
   `,
+  // ── v10: who ended a report release. Only the survivor's own revoke is a "no" (nobody may ask that entry again);
+  // Matra also ends releases for her when the counselor later records a conflict, or when her entry is re-sealed into
+  // a new group or withdrawn. Every earlier revoke was hers. No key_epoch bump (nothing in the sealed format changed).
+  `
+  ALTER TABLE report_releases ADD COLUMN revoke_reason TEXT CHECK (revoke_reason IN ('survivor','conflict','resealed','withdrawn'));
+  UPDATE report_releases SET revoke_reason = 'survivor' WHERE status = 'revoked';
+  `,
 ];
 
 /**

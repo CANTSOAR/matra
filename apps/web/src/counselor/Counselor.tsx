@@ -184,7 +184,11 @@ function SharedReports({ releases, error }: { releases?: ReportRelease[]; error?
         {ended.map((r) => (
           <li key={r.id} className="small muted">
             Shared {formatDate(r.createdAt)} ·{' '}
-            {r.status === 'revoked' ? `they stopped sharing ${formatDate(r.revokedAt)}` : `access ended ${formatDate(r.expiresAt)}`}
+            {r.status !== 'revoked'
+              ? `access ended ${formatDate(r.expiresAt)}`
+              : r.revokeReason && r.revokeReason !== 'survivor'
+                ? `access ended ${formatDate(r.revokedAt)}`
+                : `they stopped sharing ${formatDate(r.revokedAt)}`}
           </li>
         ))}
       </ul>

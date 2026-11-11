@@ -109,7 +109,8 @@ Append to `MIGRATIONS` in `db.ts`; never edit or renumber an earlier entry. Rese
 | v7 | sms-verify | `phone_tokens` (WITHOUT ROWID), `users.matching_verified` |
 | v8 | matcher-service | `match_entries.routing_envelope`, `match_entries.matcher_synced`, `match_assignments` |
 | v9 | staged-release | `match_entries.contact_bundle`, `conflict_checks`, `report_requests`, `report_releases`, `report_release_blobs` |
-| v10 | recovery-code | `users.key_version`, `users.wrapped_account_key`, `users.recovery_*` |
+| v10 | staged-release (review fixes) | `report_releases.revoke_reason` ('survivor' / 'conflict' / 'resealed' / 'withdrawn') |
+| v11 | recovery-code | `users.key_version`, `users.wrapped_account_key`, `users.recovery_*` |
 
 If the order changes, take the next free number and fix this table in the same commit. Matching data has only ever
 been demo data (see `DEPLOY.md`), so a migration may drop matching rows when a format change makes them unusable, as v5
@@ -861,7 +862,7 @@ master key).
 - The server never sees the code, `KEK_rec`, `KEK_pass` or `AS`, so it can't recover anything itself. Someone who
   finds the paper code and knows her alias can take over her account; that is W20, and the UI says so.
 
-**Migration v10.** `users`: `key_version INTEGER NOT NULL DEFAULT 1`, `wrapped_account_key TEXT`,
+**Migration v11** (was v10; staged-release took v10). `users`: `key_version INTEGER NOT NULL DEFAULT 1`, `wrapped_account_key TEXT`,
 `recovery_auth_hash BLOB`, `recovery_auth_salt BLOB`, `recovery_wrapped_key TEXT`.
 
 **Types.** `PublicUser` gains `keyVersion: 1 | 2`, `wrappedAccountKey?: Envelope`, `hasRecoveryCode: boolean`
@@ -1141,12 +1142,25 @@ created/expiry/first-opened/revoked times, ledger id) and `report_release_blobs`
 
 Code shape and small deviations:
 - `POST /api/counselor/groups/:id/decline` is kept as an alias of a `conflict` check (same matcher call, ledger row and
-  trail). A `conflict` after a `clear` is allowed (a conflict found later); it cancels her pending requests but leaves
-  releases a survivor already made (the survivor can revoke them).
+  trail). A `conflict` after a `clear` is allowed (a conflict found later); it cancels her pending requests and
+  revokes every live release a survivor made to her in that group (ledger `report.revoked`, `revoke_reason
+  'conflict'`, and a calm line in that survivor's trail).
+- A counselor reads a release only while it is active and unexpired AND she still holds the group (matcher assignment
+  for its tag) AND she is still on the signed roster, if one is stored; otherwise `403 release_revoked`.
+- Matra ends a release on her behalf in three cases, each with a `report.revoked` ledger row and a line in her trail:
+  a later conflict (above), a re-seal into a new tag (rotated OPRF key, so a new group and maybe another counselor;
+  pending requests on the entry are cancelled too), and a withdrawal (the rows are then deleted). Migration v10 adds
+  `report_releases.revoke_reason` to tell these apart from her own revoke.
+- A re-seal (key epoch bump) moves her request and release history to the new entry id. With the same tag (no OPRF
+  key change) the group, counselor, conflict check, releases and the counselor's notes about her entry carry on as
+  they were.
 - `report-requests` takes `{ entryId, expected: true }`: the "she expects this" tick is part of the request body, so
   the server refuses a request without it.
-- After a no (a decline, or a revoked release) the counselor cannot ask that entry again (`409 she_said_no`); after an
-  expired release she can. A cancelled request can be re-sent.
+- After her no (a decline, or a release SHE revoked) nobody can ask that entry again, whichever counselor holds the
+  group later and across re-seals (`409 she_said_no`); a release Matra ended for her, or an expired one, is not a no.
+  A cancelled request can be re-sent. The copy says "you won't be asked again through Matra about this sealed match":
+  a new sealed entry is a new match, and Matra cannot stop contact outside it.
+- The survivor's API never returns the group id (`SurvivorReportRelease`): it is the same for everyone in the group.
 - The consent statement must contain the confirmed key fingerprint (`400 consent_fingerprint_missing`), and
   `counselorKeyFingerprint` must equal the fingerprint of the counselor key on file (`409 counselor_key_mismatch`).
   Consent also fails if the counselor is no longer verified, on the roster, or assigned the group

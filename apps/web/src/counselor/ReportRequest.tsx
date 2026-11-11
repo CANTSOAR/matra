@@ -13,7 +13,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { fromBase64, publicKeyFingerprint, verifyCounselorRoster, wrapKeyForRecipient } from '@matra/crypto';
-import type { SurvivorReportRequest, WrappedKey } from '@matra/shared';
+import type { ReportRevokeReason, SurvivorReportRequest, WrappedKey } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
 import { REPORT_REQUEST_LINES, buildReportConsentStatement } from '../lib/disclosures';
 import { friendlyError, useRequiredSession } from '../lib/session';
@@ -21,6 +21,13 @@ import { blobKeyFor, escrowLabel, finals, loadVault } from '../lib/vault';
 import { MATCH_PINS } from '../matchPins';
 
 const DAYS = 90;
+
+/** Why Matra (not she) ended a counselor's access: calm, and nothing for her to do. */
+const ENDED_NOTE: Record<Exclude<ReportRevokeReason, 'survivor'>, string> = {
+  conflict: 'They can’t take on this matter. You don’t need to do anything.',
+  resealed: 'Your sealed match moved to new matching keys. You don’t need to do anything.',
+  withdrawn: 'You withdrew the sealed identifier it was about.',
+};
 
 /** Is this counselor (this exact key) on the organization-signed roster? `null` when the build pins no roster key. */
 async function rosterVouches(api: ReturnType<typeof useRequiredSession>['api'], req: SurvivorReportRequest): Promise<boolean | null> {
@@ -147,7 +154,7 @@ export function ReportRequest() {
 
           {req.status === 'declined' && (
             <div className="card sage stack" role="status" data-testid="report-request-declined">
-              <p style={{ margin: 0 }}>You decided not to share your report. Nothing was shared, and you won’t be asked again.</p>
+              <p style={{ margin: 0 }}>You decided not to share your report. Nothing was shared, and you won’t be asked again through Matra about this sealed match.</p>
             </div>
           )}
           {req.status === 'consented' && rel && (
@@ -183,7 +190,11 @@ export function ReportRequest() {
                 </>
               ) : (
                 <p style={{ margin: 0 }}>
-                  {rel.status === 'revoked' ? `You stopped sharing on ${formatDate(rel.revokedAt)}.` : 'Access to your report has ended.'}
+                  {rel.status !== 'revoked'
+                    ? 'Access to your report has ended.'
+                    : rel.revokeReason && rel.revokeReason !== 'survivor'
+                      ? `Matra ended this counselor’s access on ${formatDate(rel.revokedAt)}. ${ENDED_NOTE[rel.revokeReason]}`
+                      : `You stopped sharing on ${formatDate(rel.revokedAt)}.`}
                 </p>
               )}
             </div>
