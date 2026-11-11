@@ -55,7 +55,7 @@ These come from GOVERNANCE.md §5, the whitepaper §6 and the threat model §6. 
 | **W5** Argon2id and a passphrase-strength floor | Not done | Code |
 | **W7** attorney-verification procedure, plus MFA or passkeys for attorneys | Manual CLI flag only | Code + partner terms |
 | **W8** device safety (residue on exit, neutral naming) | Partly done (Quick Exit, idle lock) | Code + advocate review |
-| **W11** metadata minimization (log retention, IP truncation, encrypted alias, size padding) | Not done | Code |
+| **W11** metadata minimization (log retention, IP truncation, encrypted alias, size padding) | Partly done: no IPs or user agents on disk or in logs (daily-salted in-memory hashes for rate limits), route-only request logs, web build audited for third-party requests, [data inventory](PRIVACY_DATA_INVENTORY.md). Still to do: size padding for records, encrypted alias, edge-log settings at the host | Code + hosting |
 
 ### 3. Engineering backlog that would make the audit cheaper and the pilot safer
 
@@ -63,7 +63,7 @@ Short items that you or a contributor can do now, in rough priority order:
 
 1. Attorney MFA or passkeys and a logged verification workflow (W7, N7).
 2. Argon2id via WASM and a passphrase-strength meter (W5).
-3. Metadata minimization: log retention and IP truncation (W11).
+3. Metadata minimization, the rest of W11: size padding for records and blobs, encrypted share alias (IPs and request logs are done).
 4. Published build hashes and an SRI manifest (W4).
 5. More crypto unit tests: tamper detection, wrong-key failure, key-wrap round trips and fingerprint stability. Auditors price by uncertainty, and 2 tests on the crypto package invites a higher quote.
 6. Attorney-first route (N1) and the private-draft vs sealed-statement split (N5). These are the two things lawyers are most likely to ask for.

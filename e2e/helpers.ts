@@ -13,7 +13,8 @@ const SCREENS = process.env.MATRA_E2E_SCREENS || path.resolve('e2e/.screens');
 
 /**
  * `page` that records console errors/warnings and uncaught exceptions, and fails the test if any appear.
- * Quick exit navigates to google; that host is stubbed so no real network request is made.
+ * Quick exit navigates to google; that host is stubbed so no real network request is made. Any other request that
+ * leaves the app's origin fails the test (no third-party requests, W11).
  */
 export const test = base.extend<{ consoleProblems: string[] }>({
   consoleProblems: async ({}, use) => {
@@ -39,6 +40,17 @@ export const test = base.extend<{ consoleProblems: string[] }>({
     // Flake hunting: MATRA_E2E_CPU_THROTTLE=4 slows the page's CPU 4x (Chromium only), which widens timing races.
     const throttle = Number(process.env.MATRA_E2E_CPU_THROTTLE);
     if (throttle > 1) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: throttle });
+    // W11: the app must never contact a third party (analytics, CDN, fonts…). Any request off this origin (other than the
+    // quick-exit navigation stubbed below) is recorded as a failure and aborted. Routes registered later win, so the
+    // quick-exit stub still answers its host.
+    const origin = new URL(testInfo.project.use.baseURL ?? 'http://localhost').origin;
+    await page.route(
+      (url) => url.origin !== origin && url.protocol !== 'data:' && url.protocol !== 'blob:',
+      (r) => {
+        consoleProblems.push(`[third-party request] ${r.request().method()} ${r.request().url()}`);
+        return r.abort();
+      },
+    );
     await page.route(`https://${QUICK_EXIT_HOST}/**`, (r) =>
       r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Google</title><p>weather</p>' }),
     );

@@ -62,7 +62,7 @@ const app = createApp({
   pepper,
   corsOrigins,
   autoVerifyAttorneys,
-  logRequests: true,
+  logRequests: process.env.MATRA_LOG_REQUESTS !== '0', // route pattern + status + ms only (privacy.ts)
   webDir,
   demoBanner,
   trustProxy,

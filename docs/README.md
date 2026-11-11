@@ -22,6 +22,7 @@ Matra is a survivor-controlled, zero-knowledge documentation tool with a consent
 | [research/brief-fields.md](research/brief-fields.md) | Engineering, counsel | Source research behind the incident-summary PDF and NJ VCCO draft fields |
 | [research/outreach-and-governance-playbook.md](research/outreach-and-governance-playbook.md) | Founder | Advisor outreach and governance |
 | [threat-model.md](threat-model.md) | Engineering | Known-weakness tracker (W1 to W12); a supplement to the Security Whitepaper, which is primary |
+| [PRIVACY_DATA_INVENTORY.md](PRIVACY_DATA_INVENTORY.md) | Engineering | Every field Matra stores (DB, memory, logs, holders, matcher, device), why, and for how long; no IPs or user agents (W11) |
 | [legal/](legal/README.md) | Counsel, partners | Other agreement templates: advisor agreement, attorney partner terms, pilot partner agreement, trademark policy |
 
 *Which attorney document to use:* [ATTORNEY_PARTNER_MOU_TEMPLATE.md](ATTORNEY_PARTNER_MOU_TEMPLATE.md) is the full instrument for legal-aid organizations, clinics and firms joining the partner program (verification, response times, data handling, fees). [legal/attorney-partner-terms.md](legal/attorney-partner-terms.md) is a short standard-terms version for an individual directory attorney. They cover the same duties; where they differ, the MOU controls. Counsel may merge them into one instrument before either is used.

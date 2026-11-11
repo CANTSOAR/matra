@@ -19,6 +19,9 @@
  * cover the account being shredded. (A TEMP table cannot be used here
  * because SQLite forbids triggers in `main` from referencing `temp` objects.)
  * Ledger rows are never deleted: they hold only ids, hashes and timestamps.
+ *
+ * No table stores a client IP address, user agent or request URL, and none may (W11): every column is listed with its
+ * purpose and retention in docs/PRIVACY_DATA_INVENTORY.md, and src/privacy.test.ts checks the database files.
  */
 import Database from 'better-sqlite3';
 import fs from 'node:fs';

@@ -83,7 +83,8 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 | `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` | `2` | How many accounts one phone can enable for sealed matching. Counts are never decremented |
 | `MATRA_REQUIRE_PHONE_VERIFICATION` | unset | `0` turns the phone step off in development only; refused in production |
 | `MATRA_DB_PATH` | `/app/apps/server/data/matra.db` | Must be on the persistent disk |
-| `MATRA_TRUST_PROXY` | `1` | Number of proxy hops in front of the app (Render: 1). Needed for per-IP rate limiting |
+| `MATRA_TRUST_PROXY` | `1` | Number of proxy hops in front of the app (Render: 1). Needed for per-IP rate limiting (the IP is only ever HMACed under a daily in-memory salt, never stored; see "Logs and IP addresses" below) |
+| `MATRA_LOG_REQUESTS` | unset (on) | `0` turns off request log lines. When on they are `METHOD <route pattern> status ms` only (no URL, ids, IP or user agent). Also read by the key holders |
 | `PORT` | set by the host | Default 4000 locally, 8080 in the Docker image. The server binds `0.0.0.0` in production |
 | `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_HOLDERS` | `2`, `3` | t and m of the threshold OPRF (2 ≤ t ≤ m ≤ 16). Must match the ceremony |
 | `MATRA_OPRF_SHARE_<i>` (i = 1..m) | from `oprf-ceremony` | **In-process mode.** Share i: 64 hex chars (a scalar the ceremony wrote; a platform-generated secret does **not** work — shares must come from one ceremony). Or `MATRA_OPRF_SHARE_<i>_FILE`, **outside** the database directory, a different file per share. **Secret.** Required in production. All shares in one process give no separation against the operator |
@@ -101,6 +102,21 @@ npm run e2e:prod      # the demo-path scenarios against the production build on 
 | `MATRA_ATTESTATION_PLATFORM_PUBKEY`, `MATRA_MATCHER_MEASUREMENT` | unset in a single-host demo | The matcher pins, on the **app server** and in the **web build** (Vite; Docker `--build-arg`): the platform's base64 public key and the hex measurement printed by `npm run -w @matra/matcher measure`. Both or neither. With a separate matcher, production requires them. A pinned build refuses a simulated attestation unless it was built with `MATRA_DEMO_MODE=1` |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | **unset** | Development only. On a demo, verify attorneys explicitly (see below) |
 | `MATRA_SERVE_WEB`, `MATRA_WEB_DIR` | unset | Advanced: turn web serving on or off, or serve from another directory |
+
+## Logs and IP addresses (W11)
+
+Matra's own code never writes a client IP address or user agent anywhere (database, ledger, logs); see
+[PRIVACY_DATA_INVENTORY.md](PRIVACY_DATA_INVENTORY.md). The host in front of it is a different matter, and only the
+deployer can configure it:
+
+- **Edge / load-balancer access logs.** Most platforms log the client IP and user agent of every request by default.
+  Turn that off, or set the shortest retention the platform allows, and record what the platform keeps. Unverified:
+  whether Render lets you disable its edge request logs. If it cannot be turned off, say so in the privacy notice
+  rather than claiming "no IPs".
+- **Log drains.** Do not forward stdout to a third-party log service. If you must, keep retention short; the lines carry
+  route patterns, statuses and timings only.
+- **No analytics.** Do not add analytics, error trackers or CDN snippets to the web app; `npm run build` fails if the
+  built app names an unexpected host or a known tracker (`scripts/audit-web-build.mjs`), and the CSP blocks them anyway.
 
 ## Sealed matching: keys, pins and the counselor roster
 

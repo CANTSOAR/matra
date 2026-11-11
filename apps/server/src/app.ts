@@ -85,6 +85,7 @@ import {
   requireRole,
   verifyAuthKey,
 } from './auth.js';
+import { ClientKeyer, logRequests } from './privacy.js';
 import * as S from './schemas.js';
 import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimits } from './oprf.js';
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
@@ -462,14 +463,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
     next();
   });
 
-  if (opts.logRequests) {
-    app.use((req, res, next) => {
-      const t0 = Date.now();
-      // Path only — never the query string (prelogin carries usernames) and never bodies.
-      res.on('finish', () => console.log(`${req.method} ${req.originalUrl.split('?')[0]} ${res.statusCode} ${Date.now() - t0}ms`));
-      next();
-    });
-  }
+  // Route pattern, status and duration only: never the URL (ids, usernames), bodies, IPs or user agents (privacy.ts).
+  if (opts.logRequests) app.use(logRequests('[matra]'));
 
   app.use(
     cors({
@@ -538,10 +533,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // One unit per account per distinct blinded element, whichever holders it goes to (src/oprf.ts AccountOprfBudget).
   const accountBudget = new AccountOprfBudget(new SqliteQuotaStore(db), limits);
 
-  const loginLimiterKey = new RateLimiter(10, 60_000);
-  const loginLimiterIp = new RateLimiter(60, 60_000);
+  // Per-client limits key on a daily-salted HMAC of the IP, in memory only; never the raw IP (privacy.ts, W11).
+  const clients = new ClientKeyer();
+  const loginLimiterKey = clients.limiter(10, 60_000);
+  const loginLimiterIp = clients.limiter(60, 60_000);
   const rateLimit = (req: Request, kind: string, username: unknown) => {
-    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const ip = clients.key(req);
     const u = typeof username === 'string' ? username.trim().toLowerCase().slice(0, 64) : '';
     if (!loginLimiterIp.hit(`${kind}|${ip}`) || !loginLimiterKey.hit(`${kind}|${ip}|${u}`))
       throw new HttpError(429, 'rate_limited', 'Too many attempts. Please wait a minute and try again.');
@@ -1167,14 +1164,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   };
   // Every send costs money (Verify + a Lookup query), so sends are capped per account, per (account, phone), per client
   // IP and globally (SMS pumping / toll fraud). In memory only; keys are never the raw number or the raw IP: the IP is
-  // HMACed under a per-process random key that is never written anywhere. The per-phone limit is per ACCOUNT on purpose:
+  // HMACed under a daily salt that is never written anywhere (privacy.ts ClientKeyer). The per-phone limit is per ACCOUNT on purpose:
   // a cross-account per-phone limit would tell an attacker that someone else asked for codes for that number, and let
   // anyone who knows her number lock her out. Twilio's own per-number limits still apply (→ 429, see sms.ts).
-  const ipKey = randomBytes(32);
-  const hashIp = (req: Request) => createHmac('sha256', ipKey).update(req.ip ?? req.socket.remoteAddress ?? 'unknown').digest('base64url');
   const smsStartPerAccount = new RateLimiter(sendLimits.perAccountPerDay, 24 * 3_600_000);
   const smsStartPerAccountPhone = new RateLimiter(sendLimits.perAccountPhonePerHour, 3_600_000);
-  const smsStartPerIp = new RateLimiter(sendLimits.perIpPerHour, 3_600_000);
+  const smsStartPerIp = clients.limiter(sendLimits.perIpPerHour, 3_600_000);
   const smsGlobalHour = new RateLimiter(sendLimits.globalPerHour, 3_600_000);
   const smsGlobalDay = new RateLimiter(sendLimits.globalPerDay, 24 * 3_600_000);
   const matchingVerifiedRow = db.prepare('SELECT matching_verified FROM users WHERE id = ?');
@@ -1205,7 +1200,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (
       !smsStartPerAccount.hit(me.id) ||
       !smsStartPerAccountPhone.hit(`${me.id}|${phoneToken(phoneHashKey, e164)}`) ||
-      !smsStartPerIp.hit(hashIp(req))
+      !smsStartPerIp.hit(clients.key(req))
     )
       throw new HttpError(429, 'rate_limited', 'We’ve sent several codes already. Please wait a while and try again.');
     // Global caps last, so only sends that passed every other check count against them.
@@ -1320,11 +1315,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   // The matcher's attestation, proxied so the browser keeps connect-src 'self'. Public (it says nothing about anyone);
-  // rate-limited per client (keyed by an HMAC of the IP, in memory only). Her client verifies it before sealing.
-  const attestationLimiter = new RateLimiter(60, 60_000);
+  // rate-limited per client (keyed by a daily-salted HMAC of the IP, in memory only). Her client verifies it before sealing.
+  const attestationLimiter = clients.limiter(60, 60_000);
   app.get('/api/matching/attestation', async (req, res) => {
     const { nonce } = parse(S.attestationQuery, req.query);
-    if (!attestationLimiter.hit(hashIp(req))) throw new HttpError(429, 'rate_limited', 'Too many requests. Please wait a minute and try again.');
+    if (!attestationLimiter.hit(clients.key(req))) throw new HttpError(429, 'rate_limited', 'Too many requests. Please wait a minute and try again.');
     let doc;
     try {
       doc = await matcher.attestation(nonce);
@@ -2114,8 +2109,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.status(413).json({ error: 'Payload too large', code: 'payload_too_large' });
     if (typeof e?.status === 'number' && e.status >= 400 && e.status < 500)
       return res.status(e.status).json({ error: 'Bad request', code: 'invalid_request' });
-    // Log the error message only — never request data.
-    console.error('[matra] internal error:', e?.message ?? err);
+    // Log the error message only — never request data (or an arbitrary thrown object, which could carry it).
+    console.error('[matra] internal error:', typeof e?.message === 'string' ? e.message : 'unknown');
     res.status(500).json({ error: 'Internal server error', code: 'internal' });
   });
 

@@ -118,18 +118,29 @@ export function requireRole(role: Role) {
 
 // ───────────── rate limiting ─────────────
 
-/** Fixed-window in-memory limiter. Good enough for a single-process MVP. */
+/** The longest window a limiter may use: no rate-limit entry (and no client key in it) outlives a day (W11). */
+export const MAX_RATE_LIMIT_WINDOW_MS = 24 * 3_600_000;
+
+/**
+ * Fixed-window in-memory limiter. Good enough for a single-process MVP. Never persisted; keys that name a client are
+ * keyed hashes (privacy.ts ClientKeyer), never a raw IP. Windows are capped at 24 h, and expired entries are swept at
+ * least once a minute while the limiter is in use (and whenever the map grows large), so nothing lingers.
+ */
 export class RateLimiter {
   private hits = new Map<string, { count: number; resetAt: number }>();
+  private lastSweep = 0;
   constructor(
     private readonly max: number,
     private readonly windowMs: number,
-  ) {}
+    private readonly now: () => number = Date.now,
+  ) {
+    if (!(windowMs > 0 && windowMs <= MAX_RATE_LIMIT_WINDOW_MS)) throw new Error('rate-limit window must be within 24 hours');
+  }
 
   /** Returns true if allowed. */
   hit(key: string): boolean {
-    const now = Date.now();
-    if (this.hits.size > 10_000) for (const [k, v] of this.hits) if (v.resetAt <= now) this.hits.delete(k);
+    const now = this.now();
+    if (this.hits.size > 10_000 || now - this.lastSweep >= 60_000) this.sweep(now);
     const cur = this.hits.get(key);
     if (!cur || cur.resetAt <= now) {
       this.hits.set(key, { count: 1, resetAt: now + this.windowMs });
@@ -137,5 +148,21 @@ export class RateLimiter {
     }
     cur.count++;
     return cur.count <= this.max;
+  }
+
+  /** Drop every expired entry. */
+  sweep(now = this.now()): void {
+    this.lastSweep = now;
+    for (const [k, v] of this.hits) if (v.resetAt <= now) this.hits.delete(k);
+  }
+
+  /** Forget every entry (ClientKeyer does this when its daily salt rotates). */
+  clear(): void {
+    this.hits.clear();
+  }
+
+  /** Live keys (tests: what is held in memory). */
+  keys(): string[] {
+    return [...this.hits.keys()];
   }
 }

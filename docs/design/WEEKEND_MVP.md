@@ -268,6 +268,12 @@ Q-038 and Q-039 as open questions.
 **Acceptance.** Privacy test green; e2e fixture fails on any third-party request; `grep -rn "req.ip" apps/server/src`
 shows only `clientIpKey`.
 
+**As built.** Names differ from the plan: `apps/server/src/privacy.ts` holds `ClientKeyer` (the daily salt; `key(req)` is
+the only `req.ip` read; `limiter()` makes `RateLimiter`s it empties on rotation) and `logRequests` / `requestLogLine`
+(route pattern only, used by the app server and the key holders). `RateLimiter` refuses windows over 24 h and sweeps
+expired entries at least once a minute. The web audit is `scripts/audit-web-build.mjs` (an allowlist of hosts with a
+reason each, plus a tracker denylist; run by `npm run build`), with a quick `index.html` check in `web.test.ts`.
+
 **Demo.** Inspector (§4) shows the rate-limit map as hashes with expiry times, and the request log lines.
 
 ---

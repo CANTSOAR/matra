@@ -32,6 +32,7 @@ import type { OprfKeyPair } from '@matra/crypto';
 import { openHolderDb, type DB } from './db.js';
 import { HOLDER_TOKEN_HEADER, HolderTokenVerifier, holderTokenPublicKey } from './holders.js';
 import { DEFAULT_OPRF_LIMITS, OprfKeyHolder, SqliteQuotaStore, type OprfLimits } from './oprf.js';
+import { logRequests } from './privacy.js';
 import * as S from './schemas.js';
 
 export interface HolderAppOptions {
@@ -108,13 +109,8 @@ export function createHolderApp(opts: HolderAppOptions): express.Express {
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'" });
     next();
   });
-  if (opts.logRequests)
-    app.use((req, res, next) => {
-      const t0 = Date.now();
-      // route pattern only: never ids, tokens, query strings or bodies
-      res.on('finish', () => console.log(`[holder ${opts.index}] ${req.method} ${req.route?.path ?? '(unmatched)'} ${res.statusCode} ${Date.now() - t0}ms`));
-      next();
-    });
+  // route pattern only: never ids, tokens, query strings, bodies, IPs or user agents (privacy.ts)
+  if (opts.logRequests) app.use(logRequests(`[holder ${opts.index}]`));
   app.use(express.json({ limit: '4kb' }));
 
   app.get('/health', (_req, res) => {

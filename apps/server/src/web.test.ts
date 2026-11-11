@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp, WEB_CSP } from './app.js';
+import { WEB_DIST_DIR } from './config.js';
 import { TEST_PEPPER } from './test-helpers.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matra-web-'));
@@ -60,5 +61,16 @@ describe('production web serving', () => {
   it('does not serve the web app unless webDir is set', async () => {
     const api = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER });
     expect((await request(api).get('/')).status).toBe(404);
+  });
+});
+
+// W11: the real build (when one exists) references nothing off-origin. scripts/audit-web-build.mjs (run by `npm run
+// build`) checks every shipped file; this is the cheap check that runs with the unit tests.
+describe.skipIf(!fs.existsSync(path.join(WEB_DIST_DIR, 'index.html')))('built web app', () => {
+  it('index.html loads scripts, styles, fonts and icons from this origin only', () => {
+    const html = fs.readFileSync(path.join(WEB_DIST_DIR, 'index.html'), 'utf8');
+    const refs = [...html.matchAll(/\s(?:src|href)\s*=\s*["']([^"']*)["']/gi)].map((m) => m[1]!);
+    expect(refs.length).toBeGreaterThan(0);
+    for (const r of refs) expect(r, r).not.toMatch(/^([a-z][a-z0-9+.-]*:)?\/\//i);
   });
 });

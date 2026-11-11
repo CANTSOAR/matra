@@ -289,7 +289,7 @@ later, then checkpointed, so no single commit pairs a token with an account. The
 phone enables at most `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` accounts (default 2, counting the buffer), checked only after
 she has proved control of the phone, so it can't be used to test whether someone else's number has been used. The hash
 key is held outside the database like the OPRF shares. Code requests are capped in memory: 5 per account per day, 3 per
-(account, phone) per hour, 10 per client IP per hour (keyed by an HMAC of the IP under a per-process key) and a global
+(account, phone) per hour, 10 per client IP per hour (keyed by an HMAC of the IP under a daily in-memory salt; section 5, metadata row) and a global
 200 per hour / 1000 per day (503 `sms_unavailable`), and only NANP numbers are accepted by default
 (`MATRA_SMS_ALLOWED_COUNTRY_CODES`), against SMS pumping. The per-phone cap is deliberately per account, so other
 accounts can neither observe nor exhaust it; the provider's own per-number limits still apply across accounts (Twilio
@@ -429,7 +429,8 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 | **Malicious or compromised attorney account** | Read shared records; exfiltrate them | ⚠️ | Only **verified** attorneys can receive shares (an admin CLI sets verification today). Every open and download is written to the survivor's visible audit log. **Revocation stops future server fetches but cannot recall plaintext already downloaded.** Mitigations: identity and bar verification procedures (see MOU), share expiry (**done**: default 90 days, she can choose 30 days to 1 year, renewal keeps her chosen length), scoped shares, MFA and passkeys for attorneys, and partner agreements with breach duties. |
 | **Insider (Matra staff)** | Database access; deploy code | ⚠️ | Same as a database leak plus the malicious-code risk. Mitigations: two-person code review and deploy, least-privilege production access, audit of admin actions (attorney verification), and a published security policy. |
 | **Network attacker** | Intercept traffic | ✅ (with TLS) | TLS is required in deployment, along with HSTS. Even under TLS interception, payloads are already end-to-end encrypted. Login is protected by the derived authKey (the passphrase is never sent). |
-| **Account takeover by guessing** | Online guessing | ⚠️ | Login rate limits are 10/min per username and 60/min per IP (in-memory, single process), and failed attempts are written to the user's audit log. Roadmap: persistent limiter, passkeys, alerts. |
+| **Account takeover by guessing** | Online guessing | ⚠️ | Login rate limits are 10/min per username and 60/min per IP (in-memory, single process; the IP only as a daily-salted HMAC), and failed attempts are written to the user's audit log. Roadmap: persistent limiter, passkeys, alerts. |
+| **Metadata: IP addresses and devices** | Subpoena, database thief or log reader wants to know where a survivor connected from | ✅ our code · ⚠️ host | Matra's code never writes a client IP, user agent, referrer, URL or query string to the database, ledger or logs. Per-client rate limits hold `HMAC-SHA256(salt, IP)` in memory, where the salt is random per UTC day and never written; windows are at most 24 h and the limiters are emptied when the salt rotates. Request logs are `METHOD <route pattern> status ms`. A regression test drives a full session behind a proxy and checks the DB files and logs (`apps/server/src/privacy.test.ts`). The web app makes no third-party requests (CSP `'self'`, build audit, e2e guard). **Residual:** the hosting edge logs IPs unless configured not to (DEPLOY.md); an operator who changes the server code could log them; timestamps, sizes and the share graph remain (threat model §2, W11). |
 | **Denial / destruction** | Delete data | ⚠️ | Records cannot be deleted except by the owner's crypto-shred. There is no server-side backup strategy yet. Define backup encryption and retention before the pilot. |
 
 ---
@@ -441,7 +442,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 2. **Independent security audit** of the crypto library, server, and web client. Commission a penetration test.
 3. **Client integrity:** published build hashes, SRI, a strict CSP (**done** for production serving: same-origin only, no inline script or eval; see DEPLOY.md), and an attorney key-fingerprint check in the UI (**done**, manual: see section 5).
 4. ~~**Share expiry** (VAWA "reasonably time-limited" consent)~~ (**done**: default 90 days, renewable, length in the consent text and ledger hash). Still to do: MFA or passkeys for attorneys, and a documented attorney-verification procedure.
-5. **Metadata minimization:** encrypt the survivor alias, pad sizes, set log retention, and truncate IPs.
+5. **Metadata minimization:** ~~no IP addresses or user agents on disk or in logs, route-only request logs, no third-party requests from the web app~~ (**done**, see the metadata row in section 5 and [PRIVACY_DATA_INVENTORY.md](PRIVACY_DATA_INVENTORY.md)). Still to do: encrypt the survivor alias, pad record and blob sizes, and configure the host's edge logs (DEPLOY.md).
 6. **Incident response plan** and breach-notification procedure (N.J.S.A. 56:8-163; NY GBL 899-aa).
 
 **Next phase**
