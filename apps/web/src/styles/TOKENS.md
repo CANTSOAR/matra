@@ -40,7 +40,12 @@ generous rounding. Never cutesy, never alarming. Dim is a warm dusk, not a dark 
 Legacy aliases kept for older code: `--matra-ok(-soft)` → success, `--matra-warn(-soft)` → caution,
 `--matra-care(-soft)` → sage, `--font-sans` → body font, `--font-mono`.
 
-### Contrast (WCAG 2.x, computed before the 2026-11 brightening; the new light and Dim values shift these by under 0.4 and every text pair still passes AA)
+### Contrast (WCAG 2.x, computed)
+
+The table below predates the 2026-11 brightening. Rechecked after it: light pairs moved by under 0.3 (text on bg
+14.05, muted on bg 6.01, accent on bg 5.42, accent on accent-soft 4.96, sage on sage-soft 5.00); Dim is lower than
+the old dark column but every text pair passes AA (text on bg 12.65, muted on surface 6.14, accent on surface 6.24,
+accent on accent-soft 5.58; border-strong on surface 3.63).
 
 | Pair | Light | Dim |
 |---|---|---|
