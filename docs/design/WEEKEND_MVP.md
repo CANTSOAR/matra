@@ -846,7 +846,9 @@ master key).
   "matra/kek")`, `ikm` from PBKDF2 as today (W5 unchanged; Argon2id for the passphrase stays future work). Login: derive
   `ikm`, `authKey` as today; after login, unwrap `AS` with `KEK_pass`, import master (non-extractable AES-GCM) and
   matchX (HMAC), register in `MATCH_KEYS`. Version 1 accounts keep today's derivation.
-- **Recovery code**: 16 random bytes (128 bits) + 1 checksum byte (first byte of SHA-256 of the 16), Crockford base32 →
+- **Recovery code**: 16 random bytes (128 bits) + 1 checksum byte (*as built: CRC-8, polynomial 0x07, not the first
+  byte of SHA-256; a degree-8 CRC detects every burst of ≤ 8 bits, so every single-character typo is caught, which the
+  test below requires and a truncated hash can't guarantee*), Crockford base32 →
   28 characters, shown as 7 groups of 4 (`7KQ2-M9XD-…`). Parsing: uppercase, strip spaces and hyphens, Crockford
   aliases (O→0, I/L→1), checksum must match (catches typos before any network call).
 - From the code: `rk = HKDF-SHA256(code bytes, salt = "matra/recovery/v1", info = …)`: `recoveryAuthKey = rk("auth")`

@@ -42,6 +42,10 @@ Retention key: **account** = until the account is deleted (crypto-shred, `POST /
 | created_at | account creation time | account |
 | age_confirmed_18, age_confirmed_at | survivor's 18+ self-attestation and when it was given | account |
 | matching_verified | 1 once a phone was confirmed for sealed matching (no number, no time) | account |
+| key_version | 1 = vault keys derived from the passphrase; 2 = an account secret wrapped under keys (recovery code, W20) | account |
+| wrapped_account_key | key version 2: her account secret, encrypted under a key from her passphrase (server cannot open) | account |
+| recovery_auth_hash, recovery_auth_salt | scrypt of the auth key derived from her recovery code; checks a code without seeing it | until she replaces or turns off the code, or deletes her account |
+| recovery_wrapped_key | her account secret, encrypted under a key from her recovery code (server cannot open) | same as above |
 
 ### sessions
 | Column | What / why | Retention |
@@ -112,6 +116,7 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 | Phone verification challenge (account id, E.164 number, provider ref) | to check the code she types | ≤ 10 minutes, then swept within 10 minutes |
 | Mock SMS provider's pending codes (development / demo only): MACs of the code and number | to check the code | ≤ 10 minutes |
 | Pending phone tokens | written to `phone_tokens` in a later batch, apart from the account flag | until the next flush |
+| Recovery reset tokens: SHA-256 of the token, account id, expiry, the code hash that started it | lets her finish a reset after her recovery code was accepted | single use; ≤ 10 minutes, then swept within 10 minutes; dropped when the code is replaced or the account deleted |
 
 ## 3. Logs (stdout)
 

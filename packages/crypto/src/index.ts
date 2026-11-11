@@ -3,9 +3,15 @@
  * implement the zero-knowledge vault.
  *
  * Key hierarchy
- *   passphrase ──PBKDF2-SHA256(600k, salt)──► 512 bits
+ *   passphrase ──PBKDF2-SHA256(600k, salt)──► 512 bits (ikm)
  *        ├─ HKDF("matra/auth")   → authKey   (sent to server, which stores only a slow hash)
- *        └─ HKDF("matra/master") → masterKey (AES-256-GCM, never leaves the device)
+ *        ├─ key version 1: HKDF("matra/master") → masterKey (AES-256-GCM, never leaves the device)
+ *        │                 HKDF("matra/match-x") → matchKey (HMAC, sealed-match share x-coordinates)
+ *        └─ key version 2: HKDF("matra/kek") → KEK_pass, which unwraps the account secret
+ *   account secret AS (64 bytes) = master (32) ‖ matchX (32). For an account that moves from version 1 to 2, AS is
+ *   exactly the bytes version 1 derived, so nothing is re-encrypted. In version 2 the server stores
+ *   AES-GCM(KEK_pass, AS) and, if she set one up, AES-GCM(KEK_rec, AS) where KEK_rec comes from her recovery code
+ *   (./recovery.ts). Changing the passphrase then only re-wraps AS.
  *   masterKey wraps: the user's RSA-OAEP private key, and every per-record / per-blob key.
  *   Sharing: a record key is re-wrapped to the attorney's RSA public key.
  */
@@ -78,11 +84,26 @@ export function newKdfSalt(): string {
   return toBase64(randomBytes(16));
 }
 
-export async function deriveKeys(
+/** Size of the account secret AS = master key bytes (32) ‖ match-x key bytes (32). */
+export const ACCOUNT_SECRET_BYTES = 64;
+
+/** What a passphrase gives on its own, before the server has said which key version the account uses. */
+export interface PassphraseKeys {
+  /** base64; send to server for authentication */
+  authKey: string;
+  /** the PBKDF2 output as a non-extractable HKDF key (version 1 derives the vault keys from it) */
+  ikm: CryptoKey;
+  /** KEK_pass: AES-256-GCM, non-extractable; wraps the account secret in key version 2 */
+  kek: CryptoKey;
+}
+
+const hkdf = (info: string) => ({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode(info) });
+
+export async function derivePassphraseKeys(
   passphrase: string,
   kdfSaltB64: string,
   iterations = DEFAULT_KDF_ITERATIONS,
-): Promise<DerivedKeys> {
+): Promise<PassphraseKeys> {
   const base = await subtle.importKey('raw', enc.encode(passphrase.normalize('NFKC')), 'PBKDF2', false, ['deriveBits']);
   const bits = await subtle.deriveBits(
     { name: 'PBKDF2', hash: 'SHA-256', salt: fromBase64(kdfSaltB64) as BufferSource, iterations },
@@ -90,15 +111,88 @@ export async function deriveKeys(
     512,
   );
   const ikm = await subtle.importKey('raw', bits, 'HKDF', false, ['deriveBits', 'deriveKey']);
-  const hk = (info: string) => ({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode(info) });
-  const authBits = await subtle.deriveBits(hk('matra/auth'), ikm, 256);
-  const masterKey = await subtle.deriveKey(hk('matra/master'), ikm, { name: 'AES-GCM', length: 256 }, false, [
+  new Uint8Array(bits).fill(0);
+  const authBits = await subtle.deriveBits(hkdf('matra/auth'), ikm, 256);
+  const kek = await subtle.deriveKey(hkdf('matra/kek'), ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  return { authKey: toBase64(authBits), ikm, kek };
+}
+
+/**
+ * Key version 1's account secret as bytes: the same HKDF outputs deriveKeys imports as keys (WebCrypto deriveKey of a
+ * 256-bit key equals deriveBits(256) with the same parameters; crypto.test.ts checks it). Used once, when an account
+ * moves to version 2. The caller wipes the result.
+ */
+export async function legacyAccountSecret(ikm: CryptoKey): Promise<Uint8Array> {
+  const out = new Uint8Array(ACCOUNT_SECRET_BYTES);
+  out.set(new Uint8Array(await subtle.deriveBits(hkdf('matra/master'), ikm, 256)), 0);
+  out.set(new Uint8Array(await subtle.deriveBits(hkdf('matra/match-x'), ikm, 256)), 32);
+  return out;
+}
+
+/** Import an account secret as the (non-extractable) vault keys, and register the pair for matchKeyFor. */
+export async function importAccountSecret(accountSecret: Uint8Array): Promise<{ masterKey: CryptoKey; matchKey: CryptoKey }> {
+  if (accountSecret.length !== ACCOUNT_SECRET_BYTES) throw new Error('Account secret must be 64 bytes');
+  const masterKey = await subtle.importKey('raw', accountSecret.slice(0, 32) as BufferSource, { name: 'AES-GCM', length: 256 }, false, [
     'encrypt',
     'decrypt',
   ]);
-  const matchKey = await subtle.deriveKey(hk('matra/match-x'), ikm, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign']);
+  const matchKey = await subtle.importKey('raw', accountSecret.slice(32) as BufferSource, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, [
+    'sign',
+  ]);
   MATCH_KEYS.set(masterKey, matchKey);
-  return { authKey: toBase64(authBits), masterKey, matchKey };
+  return { masterKey, matchKey };
+}
+
+/** AES-256-GCM(kek, AS): what the server stores as wrapped_account_key (KEK_pass) or recovery_wrapped_key (KEK_rec). */
+export async function wrapAccountSecret(accountSecret: Uint8Array, kek: CryptoKey): Promise<Envelope> {
+  if (accountSecret.length !== ACCOUNT_SECRET_BYTES) throw new Error('Account secret must be 64 bytes');
+  return encryptBytes(accountSecret, kek);
+}
+
+/** Throws if the KEK is wrong or the envelope was changed (GCM tag). The caller wipes the result. */
+export async function unwrapAccountSecret(wrapped: Envelope, kek: CryptoKey): Promise<Uint8Array> {
+  const as = await decryptBytes(wrapped, kek);
+  if (as.length !== ACCOUNT_SECRET_BYTES) {
+    as.fill(0);
+    throw new Error('Not an account secret');
+  }
+  return as;
+}
+
+/**
+ * The vault keys for an account. Version 1 (no `wrappedAccountKey`): derived from the passphrase, as since the first
+ * release. Version 2: AS unwrapped with KEK_pass (throws on a wrong passphrase), imported, and wiped.
+ */
+export async function unlockAccount(
+  keys: PassphraseKeys,
+  wrappedAccountKey?: Envelope,
+): Promise<{ masterKey: CryptoKey; matchKey: CryptoKey }> {
+  if (wrappedAccountKey) {
+    const as = await unwrapAccountSecret(wrappedAccountKey, keys.kek);
+    try {
+      return await importAccountSecret(as);
+    } finally {
+      as.fill(0);
+    }
+  }
+  const masterKey = await subtle.deriveKey(hkdf('matra/master'), keys.ikm, { name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ]);
+  const matchKey = await subtle.deriveKey(hkdf('matra/match-x'), keys.ikm, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign']);
+  MATCH_KEYS.set(masterKey, matchKey);
+  return { masterKey, matchKey };
+}
+
+/** Passphrase → auth key + vault keys in one step. Pass `wrappedAccountKey` for a key-version-2 account. */
+export async function deriveKeys(
+  passphrase: string,
+  kdfSaltB64: string,
+  iterations = DEFAULT_KDF_ITERATIONS,
+  wrappedAccountKey?: Envelope,
+): Promise<DerivedKeys> {
+  const keys = await derivePassphraseKeys(passphrase, kdfSaltB64, iterations);
+  return { authKey: keys.authKey, ...(await unlockAccount(keys, wrappedAccountKey)) };
 }
 
 // ───────────── symmetric content encryption ─────────────
@@ -217,3 +311,4 @@ export async function publicKeyFingerprint(jwk: JsonWebKey): Promise<string> {
 // The old "blind escrow" (client PBKDF2 hash + server HMAC pepper) was replaced by the Callisto-style protocol in
 // ./matching.ts: a split-key RFC 9497 VOPRF, per-perpetrator Shamir shares, and counselor-only threshold decryption.
 export * from './matching';
+export * from './recovery';

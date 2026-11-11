@@ -52,7 +52,7 @@ These come from GOVERNANCE.md §5, the whitepaper §6 and the threat model §6. 
 | Published incident-response plan and law-enforcement request guide | Not written | You (templates exist elsewhere; counsel reviews) |
 | **W3** attorney key substitution: out-of-band fingerprint check | Partly done (manual fingerprint in the UI; she must confirm it before sharing) | Code |
 | **W4** malicious client code: published build hashes, SRI, reproducible builds | CSP done; the rest isn't | Code |
-| **W5** Argon2id and a passphrase-strength floor | Not done | Code |
+| **W5** Argon2id and a passphrase-strength floor | Not done. *2026-11-11 (weekend-mvp):* an optional recovery code only she holds (128 random bits, shown once, confirm-last-4) can now set a new passphrase; the server stores only a scrypt hash and wrapped keys and cannot reset anyone (W20). It does not change W5: the passphrase is still PBKDF2 | Code |
 | **W7** attorney-verification procedure, plus MFA or passkeys for attorneys | Manual CLI flag only | Code + partner terms |
 | **W8** device safety (residue on exit, neutral naming) | Partly done (Quick Exit, idle lock) | Code + advocate review |
 | **W11** metadata minimization (log retention, IP truncation, encrypted alias, size padding) | Partly done: no IPs or user agents on disk or in logs (daily-salted in-memory hashes for rate limits), route-only request logs (app server, key holders, matcher), expired sessions swept every 10 minutes, web build audited for third-party requests, [data inventory](PRIVACY_DATA_INVENTORY.md). Still to do: size padding for records, encrypted alias, edge-log settings at the host | Code + hosting |
@@ -73,7 +73,7 @@ Short items that you or a contributor can do now, in rough priority order:
 ### 4. Leave alone for now
 
 - Escrow beyond the demo. Keep it off until OPRF plus a threshold key and a counselor model exist. In conversations, present it as a research question, not a feature.
-- NY expansion, Spanish, Shamir recovery. Do these after the NJ pilot.
+- NY expansion, Spanish, Shamir recovery (recovery shares with people she trusts; the single recovery code she holds herself is built, W20). Do these after the NJ pilot.
 
 ## How to talk about readiness in one sentence
 

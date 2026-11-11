@@ -355,12 +355,14 @@ describe('what is kept (W19)', () => {
     // (and undo the later migrations, which run again after v7)
     db.exec(
       'ALTER TABLE match_entries DROP COLUMN routing_envelope; ALTER TABLE match_entries DROP COLUMN matcher_synced; DROP TABLE match_assignments; DROP TABLE matcher_pending_deletes;' +
-        ' ALTER TABLE match_entries DROP COLUMN contact_bundle; DROP TABLE conflict_checks; DROP TABLE report_requests; DROP TABLE report_releases; DROP TABLE report_release_blobs;',
+        ' ALTER TABLE match_entries DROP COLUMN contact_bundle; DROP TABLE conflict_checks; DROP TABLE report_requests; DROP TABLE report_releases; DROP TABLE report_release_blobs;' +
+        ' ALTER TABLE users DROP COLUMN key_version; ALTER TABLE users DROP COLUMN wrapped_account_key; ALTER TABLE users DROP COLUMN recovery_auth_hash;' +
+        ' ALTER TABLE users DROP COLUMN recovery_auth_salt; ALTER TABLE users DROP COLUMN recovery_wrapped_key;',
     );
     db.pragma('user_version = 6');
     db.close();
     const db2 = openDb(file);
-    expect(db2.pragma('user_version', { simple: true })).toBe(10);
+    expect(db2.pragma('user_version', { simple: true })).toBe(11);
     const row = (id: string) => db2.prepare('SELECT matching_verified FROM users WHERE id = ?').get(id);
     expect(row(sealed.user.id)).toEqual({ matching_verified: 1 });
     expect(row(fresh.user.id)).toEqual({ matching_verified: 0 });

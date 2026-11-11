@@ -282,6 +282,16 @@ export interface PublicUser {
   /** Private key encrypted under the user's master key — only the user can open it. */
   wrappedPrivateKey: Envelope;
   createdAt: string;
+  /**
+   * 1: the vault keys are derived from the passphrase. 2: they are an account secret wrapped under a key from the
+   * passphrase (`wrappedAccountKey`), so a recovery code can wrap it too (crypto: index.ts, recovery.ts). Returned only
+   * to the user herself (register, login, /api/me, recovery).
+   */
+  keyVersion: 1 | 2;
+  /** Key version 2: AES-GCM(KEK_pass, account secret). Opaque to the server. */
+  wrappedAccountKey?: Envelope;
+  /** Whether a recovery code is set up (the code itself never reaches the server). */
+  hasRecoveryCode: boolean;
 }
 
 export interface AttorneyProfile {
@@ -773,6 +783,38 @@ export interface RegisterRequest {
 export interface AuthResponse { token: string; user: PublicUser }
 export interface LoginRequest { username: string; authKey: string }
 
+// ── recovery code ──
+// A code only she holds (128 bits, shown once) that unwraps her account secret so she can set a new passphrase.
+// The server stores scrypt(recoveryAuthKey) and the wrapped secret; it never sees the code or any key that opens it.
+
+/** POST /api/account/recovery (signed in): set one up, or replace the old one (which then stops working). */
+export interface SetUpRecoveryRequest {
+  /** her current passphrase auth key (re-authentication) */
+  authKey: string;
+  /** required when moving from key version 1 to 2; refused otherwise */
+  wrappedAccountKey?: Envelope;
+  recoveryAuthKey: string;
+  recoveryWrappedKey: Envelope;
+}
+/** DELETE /api/account/recovery */
+export interface TurnOffRecoveryRequest { authKey: string }
+export interface RecoverStartRequest { username: string; recoveryAuthKey: string }
+export interface RecoverStartResponse {
+  /** single use, 10 minutes, held in server memory only */
+  resetToken: string;
+  recoveryWrappedKey: Envelope;
+}
+/** Her new passphrase material, and a NEW recovery code (a used code is burned). */
+export interface RecoverFinishRequest {
+  resetToken: string;
+  kdfSalt: string;
+  kdfIterations: number;
+  authKey: string;
+  wrappedAccountKey: Envelope;
+  recoveryAuthKey: string;
+  recoveryWrappedKey: Envelope;
+}
+
 export interface CreateRecordRequest { envelope: Envelope; ownerWrappedKey: WrappedKey; supersedes?: string }
 export interface CreateRecordResponse { record: VaultRecordMeta; ledgerEntry: LedgerEntry }
 
@@ -807,6 +849,12 @@ export interface ApiError { error: string; code?: string }
  POST   /api/auth/login         LoginRequest          -> AuthResponse
  POST   /api/auth/logout                              -> { ok: true }
  GET    /api/me                                       -> { user: PublicUser, attorneyProfile?: AttorneyProfile, counselorProfile?: CounselorProfile }
+ POST   /api/auth/recover/start  RecoverStartRequest  -> RecoverStartResponse (401 invalid_credentials for an unknown alias, no
+                                                         code set up, or a wrong code, after the same scrypt work; 429 rate_limited)
+ POST   /api/auth/recover/finish RecoverFinishRequest -> AuthResponse (401 invalid_credentials: token unknown, used, expired, or
+                                                         the code was replaced meanwhile; every other session of hers ends)
+ POST   /api/account/recovery    SetUpRecoveryRequest -> { user: PublicUser } (401 invalid_credentials on a wrong passphrase)
+ DELETE /api/account/recovery    TurnOffRecoveryRequest -> { user: PublicUser }
 
  POST   /api/vault/records      CreateRecordRequest   -> CreateRecordResponse
  GET    /api/vault/records                            -> { records: VaultRecordMeta[] }

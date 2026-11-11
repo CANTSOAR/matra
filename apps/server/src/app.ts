@@ -15,6 +15,7 @@
  *       | counselor_not_found | group_not_found | request_not_found | release_not_found
  *   403 … | counselor_not_listed (seal to a counselor missing from the signed roster)
  *   400 phone_invalid | phone_not_supported | code_invalid | code_expired
+ *   401 … invalid_credentials also for a wrong recovery code and an unknown, used or expired reset token
  *   409 username_taken | already_revoked | already_sealed | phone_limit_reached
  *   413 payload_too_large   415 unsupported_media_type   500 internal
  *   429 rate_limited | rate_limited_daily | rate_limited_lifetime
@@ -206,6 +207,11 @@ interface UserRow {
   public_key: string;
   wrapped_private_key: string;
   created_at: string;
+  key_version: 1 | 2;
+  wrapped_account_key: string | null;
+  recovery_auth_hash: Buffer | null;
+  recovery_auth_salt: Buffer | null;
+  recovery_wrapped_key: string | null;
 }
 interface ProfileRow {
   user_id: string;
@@ -321,6 +327,9 @@ const toPublicUser = (u: UserRow): PublicUser => ({
   publicKey: JSON.parse(u.public_key),
   wrappedPrivateKey: JSON.parse(u.wrapped_private_key),
   createdAt: u.created_at,
+  keyVersion: u.key_version,
+  ...(u.wrapped_account_key != null && { wrappedAccountKey: JSON.parse(u.wrapped_account_key) }),
+  hasRecoveryCode: u.recovery_auth_hash != null,
 });
 
 const toProfile = (p: ProfileRow): AttorneyProfile => ({
@@ -440,6 +449,8 @@ const toAudit = (a: AuditRow): AuditEvent => ({
 
 /** How often createApp drops expired sessions, SMS challenges and in-memory limiter entries (W11). */
 export const HOUSEKEEPING_INTERVAL_MS = 10 * 60_000;
+/** A recovery reset (alias + code accepted) must be finished within this time, once. */
+export const RESET_TOKEN_TTL_MS = 10 * 60_000;
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
@@ -685,6 +696,121 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const p = q.profileByUser.get(u.id) as ProfileRow | undefined;
     const c = q.counselorProfileByUser.get(u.id) as CounselorProfileRow | undefined;
     res.json({ user: toPublicUser(u), ...(p && { attorneyProfile: toProfile(p) }), ...(c && { counselorProfile: toCounselorProfile(c) }) });
+  });
+
+  // ════════════ recovery code (W20) ════════════
+  // The code never reaches the server: it sees recoveryAuthKey (stored as scrypt, like the passphrase auth key) and the
+  // account secret wrapped under a key only the code gives. So the server can check a code; it cannot reset anyone.
+
+  /** Pending resets, in memory only: sha256(token) → whose, until when, and which code started it. Single use. */
+  const resetTokens = new Map<string, { userId: string; expiresAt: number; recoveryHash: Buffer }>();
+  const sweepResetTokens = (now = Date.now()) => {
+    for (const [k, t] of resetTokens) if (t.expiresAt <= now) resetTokens.delete(k);
+  };
+  const recoveryLimiter = clients.limiter(10, 15 * 60_000); // per client: a wrong code is a typo, not a hobby
+  app.locals.resetTokens = resetTokens;
+
+  /** Re-authenticate with the passphrase auth key before changing what can open her account. */
+  const reauth = async (u: UserRow, authKey: string) => {
+    if (!(await verifyAuthKey(authKey, u.auth_salt, u.auth_hash))) {
+      audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
+      throw new HttpError(401, 'invalid_credentials', 'That passphrase is incorrect.');
+    }
+  };
+
+  app.post('/api/account/recovery', auth, async (req, res) => {
+    rateLimit(req, 'recovery-setup', req.user!.username);
+    const body = parse(S.setUpRecoveryRequest, req.body);
+    const u = q.userById.get(req.user!.id) as UserRow;
+    await reauth(u, body.authKey);
+    if (u.key_version === 1 && !body.wrappedAccountKey)
+      throw new HttpError(400, 'invalid_request', 'wrappedAccountKey: required to move this account to key version 2');
+    if (u.key_version === 2 && body.wrappedAccountKey)
+      throw new HttpError(400, 'invalid_request', 'wrappedAccountKey: this account already has one');
+    const { hash, salt } = await hashAuthKey(body.recoveryAuthKey);
+    const replacing = u.recovery_auth_hash != null;
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE users SET key_version = 2, wrapped_account_key = COALESCE(?, wrapped_account_key),
+                          recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ? WHERE id = ?`,
+      ).run(body.wrappedAccountKey ? canonicalEnvelope(body.wrappedAccountKey) : null, hash, salt, canonicalEnvelope(body.recoveryWrappedKey), u.id);
+      // a reset started with the old code must not finish with it
+      for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
+      audit(u.id, replacing ? 'recovery.replaced' : 'recovery.set_up', replacing ? 'Made a new recovery code (the old one stopped working)' : 'Set up a recovery code');
+    })();
+    res.json({ user: toPublicUser(q.userById.get(u.id) as UserRow) });
+  });
+
+  app.delete('/api/account/recovery', auth, async (req, res) => {
+    rateLimit(req, 'recovery-setup', req.user!.username);
+    const body = parse(S.turnOffRecoveryRequest, req.body);
+    const u = q.userById.get(req.user!.id) as UserRow;
+    await reauth(u, body.authKey);
+    db.transaction(() => {
+      db.prepare('UPDATE users SET recovery_auth_hash = NULL, recovery_auth_salt = NULL, recovery_wrapped_key = NULL WHERE id = ?').run(u.id);
+      for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
+      audit(u.id, 'recovery.turned_off', 'Turned off the recovery code');
+    })();
+    res.json({ user: toPublicUser(q.userById.get(u.id) as UserRow) });
+  });
+
+  app.post('/api/auth/recover/start', async (req, res) => {
+    rateLimit(req, 'recover', req.body?.username);
+    if (!recoveryLimiter.hit(`recover|${clients.key(req)}`))
+      throw new HttpError(429, 'rate_limited', 'Too many attempts. Please wait a few minutes and try again.');
+    const body = parse(S.recoverStartRequest, req.body);
+    const u = q.userByName.get(body.username) as UserRow | undefined;
+    // Unknown alias, no code set up, or a wrong code: the same answer after the same scrypt work (no alias probing).
+    const fail = () => new HttpError(401, 'invalid_credentials', 'That alias and recovery code don’t match.');
+    if (!u || !u.recovery_auth_hash || !u.recovery_auth_salt || !u.recovery_wrapped_key) {
+      await dummyVerify(body.recoveryAuthKey);
+      throw fail();
+    }
+    if (!(await verifyAuthKey(body.recoveryAuthKey, u.recovery_auth_salt, u.recovery_auth_hash))) {
+      audit(u.id, 'recovery.failed', 'Someone tried to use a recovery code that didn’t match');
+      throw fail();
+    }
+    sweepResetTokens();
+    const resetToken = randomBytes(32).toString('base64url');
+    resetTokens.set(sha256Hex(resetToken), { userId: u.id, expiresAt: Date.now() + RESET_TOKEN_TTL_MS, recoveryHash: u.recovery_auth_hash });
+    res.json({ resetToken, recoveryWrappedKey: JSON.parse(u.recovery_wrapped_key) });
+  });
+
+  app.post('/api/auth/recover/finish', async (req, res) => {
+    rateLimit(req, 'recover-finish', '');
+    const body = parse(S.recoverFinishRequest, req.body);
+    const key = sha256Hex(body.resetToken);
+    const pending = resetTokens.get(key);
+    resetTokens.delete(key); // single use, whatever happens next
+    const u = pending && (q.userById.get(pending.userId) as UserRow | undefined);
+    if (!pending || pending.expiresAt <= Date.now() || !u || !u.recovery_auth_hash || !u.recovery_auth_hash.equals(pending.recoveryHash))
+      throw new HttpError(401, 'invalid_credentials', 'This reset has expired. Please enter your recovery code again.');
+    const [pass, rec] = await Promise.all([hashAuthKey(body.authKey), hashAuthKey(body.recoveryAuthKey)]);
+    const now = new Date().toISOString();
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE users SET auth_hash = ?, auth_salt = ?, kdf_salt = ?, kdf_iterations = ?, key_version = 2, wrapped_account_key = ?,
+                          recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ? WHERE id = ?`,
+      ).run(
+        pass.hash,
+        pass.salt,
+        body.kdfSalt,
+        body.kdfIterations,
+        canonicalEnvelope(body.wrappedAccountKey),
+        rec.hash,
+        rec.salt,
+        canonicalEnvelope(body.recoveryWrappedKey),
+        u.id,
+      );
+      // whoever was signed in with the old passphrase is signed out
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+      for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
+      audit(u.id, 'auth.recovered', 'Your passphrase was reset with your recovery code');
+      appendLedger(db, 'account.recovered', u.id, sha256Hex(`account.recovered|${u.id}|${now}`), now);
+    })();
+    const token = createSession(db, u.id);
+    audit(u.id, 'auth.login', 'Signed in');
+    res.json({ token, user: toPublicUser(q.userById.get(u.id) as UserRow) });
   });
 
   // ════════════ vault: records ════════════
@@ -1187,6 +1313,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       /* DB closed */
     }
     sweepChallenges();
+    sweepResetTokens();
     for (const l of memoryLimiters) l.sweep();
   };
   housekeeping();
@@ -2099,6 +2226,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       db.prepare('DELETE FROM oprf_quota WHERE user_id = ?').run(me.id);
       accountBudget.forget(me.id);
       for (const [k, c] of challenges) if (c.userId === me.id) challenges.delete(k);
+      for (const [k, t] of resetTokens) if (t.userId === me.id) resetTokens.delete(k);
       // phone_tokens has no account id, so its count is NOT decremented (W19, docs/PRIVACY_DATA_INVENTORY.md)
       pruneGroups();
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);

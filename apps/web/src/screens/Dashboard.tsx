@@ -14,6 +14,12 @@ const AUDIT_TEXT: Record<string, string> = {
   'auth.login': 'Signed in',
   'auth.logout': 'Signed out',
   'auth.login_failed': 'Someone tried to sign in with the wrong passphrase',
+  'auth.reauth_failed': 'Someone tried to change your recovery code with the wrong passphrase',
+  'auth.recovered': 'Your passphrase was reset with your recovery code',
+  'recovery.set_up': 'You set up a recovery code',
+  'recovery.replaced': 'You made a new recovery code (the old one stopped working)',
+  'recovery.turned_off': 'You turned off your recovery code',
+  'recovery.failed': 'Someone tried to use a recovery code that didn’t match',
   // The server can't tell a draft save from a seal (it only sees ciphertext) — see describeAudit for how the
   // client refines this using records it can decrypt.
   'record.created': 'You saved to your space',
@@ -169,6 +175,12 @@ export function Dashboard() {
   return (
     <div className="stack-xl">
       <Greeting firstVisit={firstVisit} name={profile?.preferredName} alias={session.user.username} />
+      {firstVisit && !session.user.hasRecoveryCode && (
+        <p className="card soft" style={{ margin: 0 }} data-testid="recovery-offer">
+          Forgetting a passphrase happens. You can make a recovery code that only you keep, now or any time from Home.{' '}
+          <Link to="/vault/recovery">Set one up</Link> — or skip it; it’s optional.
+        </p>
+      )}
 
       {/* ── where things are ── */}
       <section className="stack" aria-labelledby="where">
@@ -426,6 +438,21 @@ export function Dashboard() {
             ))}
           </ul>
         )}
+      </section>
+
+      {/* ── recovery code (W20) ── */}
+      <section className="card stack" aria-labelledby="recovery" data-testid="home-recovery">
+        <div className="section-title">
+          <h2 id="recovery">Recovery code</h2>
+          <Link className="btn btn-small" to="/vault/recovery" data-testid="recovery-link">
+            {session.user.hasRecoveryCode ? 'Manage' : firstVisit ? 'Set it up now' : 'Set one up'}
+          </Link>
+        </div>
+        <p className="small muted" style={{ margin: 0 }}>
+          {session.user.hasRecoveryCode
+            ? 'You have a recovery code. Only you hold it; if you forget your passphrase, it lets you set a new one.'
+            : 'If you forget your passphrase, a recovery code that only you keep lets you set a new one. It’s optional.'}
+        </p>
       </section>
 
       <ExportCard>

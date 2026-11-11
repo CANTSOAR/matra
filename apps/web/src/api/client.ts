@@ -40,7 +40,12 @@ import type {
   PhoneVerificationStatus,
   PreloginResponse,
   PublicUser,
+  RecoverFinishRequest,
+  RecoverStartRequest,
+  RecoverStartResponse,
   RegisterRequest,
+  SetUpRecoveryRequest,
+  TurnOffRecoveryRequest,
   Share,
   ShareBundle,
   VaultRecord,
@@ -146,6 +151,20 @@ export class ApiClient {
   }
   me() {
     return this.json<{ user: PublicUser; attorneyProfile?: AttorneyProfile; counselorProfile?: CounselorProfile }>('GET', '/api/me');
+  }
+
+  // ── recovery code ──
+  setUpRecovery(req: SetUpRecoveryRequest) {
+    return this.json<{ user: PublicUser }>('POST', '/api/account/recovery', req);
+  }
+  turnOffRecovery(req: TurnOffRecoveryRequest) {
+    return this.json<{ user: PublicUser }>('DELETE', '/api/account/recovery', req);
+  }
+  recoverStart(req: RecoverStartRequest) {
+    return this.json<RecoverStartResponse>('POST', '/api/auth/recover/start', req);
+  }
+  recoverFinish(req: RecoverFinishRequest) {
+    return this.json<AuthResponse>('POST', '/api/auth/recover/finish', req);
   }
 
   // ── vault ──

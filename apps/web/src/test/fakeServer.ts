@@ -13,6 +13,8 @@ export function fakeAuthFetch({ deleteFails = false }: { deleteFails?: boolean }
     publicKey: r.publicKey,
     wrappedPrivateKey: r.wrappedPrivateKey,
     createdAt: new Date(0).toISOString(),
+    keyVersion: 1,
+    hasRecoveryCode: false,
   });
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://x');

@@ -42,6 +42,7 @@ export type LedgerType =
   | 'report.released'
   | 'report.declined'
   | 'report.revoked'
+  | 'account.recovered'
   | 'account.shredded';
 
 export function sha256Hex(data: string | Uint8Array): string {

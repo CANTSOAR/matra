@@ -400,6 +400,17 @@ const MIGRATIONS: string[] = [
   ALTER TABLE report_releases ADD COLUMN revoke_reason TEXT CHECK (revoke_reason IN ('survivor','conflict','resealed','withdrawn'));
   UPDATE report_releases SET revoke_reason = 'survivor' WHERE status = 'revoked';
   `,
+  // ── v11: recovery code (W20). key_version 1 = vault keys derived from the passphrase (every account so far); 2 = an
+  // account secret wrapped under a passphrase key (wrapped_account_key) and, optionally, under a key from a recovery
+  // code only she holds (recovery_wrapped_key). The server keeps scrypt(recoveryAuthKey) like auth_hash: it can check a
+  // code, never derive one or unwrap anything. No data changes; an account moves to 2 when she sets up a code.
+  `
+  ALTER TABLE users ADD COLUMN key_version INTEGER NOT NULL DEFAULT 1 CHECK (key_version IN (1, 2));
+  ALTER TABLE users ADD COLUMN wrapped_account_key TEXT;            -- Envelope JSON: AES-GCM(KEK_pass, account secret)
+  ALTER TABLE users ADD COLUMN recovery_auth_hash BLOB;             -- scrypt(recoveryAuthKey, recovery_auth_salt)
+  ALTER TABLE users ADD COLUMN recovery_auth_salt BLOB;
+  ALTER TABLE users ADD COLUMN recovery_wrapped_key TEXT;           -- Envelope JSON: AES-GCM(KEK_rec, account secret)
+  `,
 ];
 
 /**

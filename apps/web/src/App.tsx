@@ -29,6 +29,8 @@ const Evidence = page(() => import('./screens/Evidence'), 'Evidence');
 const Brief = page(() => import('./screens/Brief'), 'Brief');
 const Share = page(() => import('./screens/Share'), 'Share');
 const DeleteAccount = page(() => import('./screens/DeleteAccount'), 'DeleteAccount');
+const RecoverySettings = page(() => import('./screens/Recovery'), 'RecoverySettings');
+const RecoverScreen = page(() => import('./screens/Recovery'), 'RecoverScreen');
 const SurvivorMatching = page(() => import('./counselor/SurvivorMatching'), 'SurvivorMatching');
 const PhoneVerify = page(() => import('./counselor/PhoneVerify'), 'PhoneVerify');
 const AttorneyCases = page(() => import('./attorney/Attorney'), 'AttorneyCases');
@@ -50,6 +52,7 @@ export function AppRoutes() {
         <Route path="safety" element={<SafetyTips />} />
         <Route path="start" element={<StartScreen />} />
         <Route path="signin" element={<SignInScreen />} />
+        <Route path="recover" element={<Lazy><RecoverScreen /></Lazy>} />
 
         <Route path="vault" element={<RequireSession role="survivor"><Lazy><Dashboard /></Lazy></RequireSession>} />
         <Route path="vault/story" element={<RequireSession role="survivor"><Lazy><Story /></Lazy></RequireSession>} />
@@ -60,6 +63,7 @@ export function AppRoutes() {
         <Route path="vault/matching/verify" element={<RequireSession role="survivor"><Lazy><PhoneVerify /></Lazy></RequireSession>} />
         <Route path="vault/requests/:id" element={<RequireSession role="survivor"><Lazy><ReportRequest /></Lazy></RequireSession>} />
         <Route path="vault/delete" element={<RequireSession role="survivor"><Lazy><DeleteAccount /></Lazy></RequireSession>} />
+        <Route path="vault/recovery" element={<RequireSession role="survivor"><Lazy><RecoverySettings /></Lazy></RequireSession>} />
 
         <Route path="attorney" element={<AttorneyLanding />} />
         <Route path="attorney/register" element={<AttorneyRegisterScreen />} />

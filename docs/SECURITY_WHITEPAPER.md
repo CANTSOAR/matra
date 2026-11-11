@@ -52,11 +52,25 @@
     ├── HKDF-SHA256(info="matra/auth")    ──► authKey (256 bit) ──► sent at login
     │                                              server stores scrypt(authKey, salt)
     │                                              (N=16384, r=8, p=1) — never the authKey
+    │
+    │  key version 1 (every account until she sets up a recovery code):
     ├── HKDF-SHA256(info="matra/match-x") ──► matchKey (HMAC-SHA256, non-extractable;
     │                                              sealed-matching x-coordinates, section 4a)
-    └── HKDF-SHA256(info="matra/master")  ──► masterKey (AES-256-GCM, non-extractable,
-                                                in memory only)
-             │
+    ├── HKDF-SHA256(info="matra/master")  ──► masterKey (AES-256-GCM, non-extractable,
+    │                                                in memory only)
+    │
+    │  key version 2 (an account with a recovery code, or one that was reset with it):
+    └── HKDF-SHA256(info="matra/kek")     ──► KEK_pass (AES-256-GCM)
+                                                 │ unwraps wrapped_account_key (server)
+                                                 ▼
+                    account secret AS (64 bytes) = masterKey bytes (32) ‖ matchKey bytes (32)
+                                                 ▲
+                                                 │ unwraps recovery_wrapped_key (server)
+ recovery code (16 random bytes, shown once) ──HKDF-SHA256(salt="matra/recovery/v1")──┬─ "kek"  ──► KEK_rec
+                                                                                      └─ "auth" ──► recoveryAuthKey
+                                                                         server stores scrypt(recoveryAuthKey, salt)
+
+ masterKey (either version)
              ├── wraps ► RSA-OAEP-3072 (SHA-256) identity private key  (stored wrapped on server)
              ├── wraps ► per-record content key  K_r  (AES-256-GCM, random)  ──► record ciphertext
              └── wraps ► per-blob content key    K_b  (AES-256-GCM, random)  ──► evidence ciphertext
@@ -69,8 +83,15 @@
 - The server never sees the passphrase, the masterKey, any content key, or any plaintext record.
 - Knowing the authKey (for example, from a stolen login exchange) does not reveal the masterKey, because HKDF provides domain separation.
 - `GET /api/auth/prelogin` returns a deterministic fake salt for unknown usernames, which limits username enumeration.
-- **No password reset exists.** A forgotten passphrase means the data is permanently unrecoverable. This is inherent to zero knowledge (see the roadmap for recovery options).
+- **No operator reset exists.** The server can't reset anyone's passphrase: nothing it stores opens a vault. Without a recovery code, a forgotten passphrase means the data is permanently unrecoverable. This is inherent to zero knowledge.
 - AES-GCM uses a random 96-bit IV per encryption. Every key is random and per-object, so nonce reuse is not a practical concern at MVP scale.
+
+**Recovery code (optional; threat model W20)**
+- Moving to key version 2 re-encrypts nothing: for an existing account AS is exactly the bytes version 1 derived (WebCrypto `deriveKey` of a 256-bit key equals `deriveBits(256)` with the same HKDF parameters; `packages/crypto/src/recovery.test.ts` checks it). Version 1 accounts keep their derivation until she sets up a code.
+- The code is 128 bits from the platform CSPRNG plus a CRC-8 check byte, shown as 28 Crockford base32 characters in groups of 4. The check byte only catches typing mistakes (every single-character typo is detected) before any network call; it is not a secret and not a hash of anything secret. The code is **not** stretched with PBKDF2 or Argon2id: it already has 128 bits of entropy, and slow hashing protects human-chosen secrets (the passphrase, W5).
+- Set up and replace (signed in) re-authenticate with the passphrase authKey; a new code replaces the stored hash and wrapped key, so the old code stops working. Turning it off deletes both.
+- Reset (signed out): alias + recoveryAuthKey → a single-use 10-minute reset token (memory only) and the KEK_rec-wrapped AS; her client unwraps AS, derives a new passphrase salt, authKey and KEK_pass, makes a **new** code, and sends only the new hashes' inputs and wrapped keys. The server replaces them, ends every other session, and appends `account.recovered` to the ledger (her id, a hash, a time). A wrong code, an unknown alias and an alias without a code get the same 401 after the same scrypt work.
+- Whoever holds the code and knows her alias can take over the account. Shamir recovery shares held by people she trusts are later work (section 6, Q-043).
 
 **Evidence handling**
 - Images are **re-encoded client-side to strip EXIF and GPS metadata** before hashing and encryption. The `sha256` stored inside the encrypted record is the hash of the *stripped* bytes, which an examiner can re-verify.
@@ -448,7 +469,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 **Next phase**
 7. **External timestamp anchoring** of the ledger head: an RFC 3161 Time-Stamp Authority, and/or periodic publication to a public, append-only log. This turns "trust our server clock" into third-party-verifiable time evidence.
 8. **Plaintext commitments** or a key-committing AEAD for sealed records (section 4).
-9. **Recovery without operator access:** Shamir secret sharing of a recovery key among the survivor and one or more trusted advocates (for example, 2-of-3). The survivor would be fully informed of the risks if an advocate is compromised or compelled.
+9. **Recovery without operator access:** done for one secret (an optional recovery code only she holds, section 3, W20). Next: Shamir secret sharing of the recovery key among the survivor and one or more trusted advocates (for example, 2-of-3), so no single paper opens the account. The survivor would be fully informed of the risks if an advocate is compromised or compelled (Q-043).
 10. **Passkeys (WebAuthn)** for login and possibly key wrapping (PRF extension).
 11. A native or packaged client to reduce the malicious-JavaScript risk.
 12. Optional encrypted storage of **original** evidence files alongside stripped copies.
@@ -458,7 +479,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 
 ## 7. What we tell survivors (plain language)
 - "We can't read what you write. Not even our staff can."
-- "If you forget your passphrase, nobody can recover your information. Not us, not anyone."
+- "If you forget your passphrase, we can't recover your information. If you made a recovery code, it lets you set a new passphrase. Only you have it: anyone who has it and knows your alias could get into your account, so keep it somewhere only you can reach. Without one, nobody can recover your information. Not us, not anyone."
 - "A court can order **you** to share your records. We can't be forced to, because we can't open them."
 - "Anything you give police will be shared with the defense."
 - "Every saved version is kept. If you're ever asked to hand over your records, that can include earlier versions."

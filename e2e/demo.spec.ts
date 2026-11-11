@@ -708,3 +708,84 @@ test('8. delete everything: explained first (lawyer caution, what stays), typed 
   await page.getByRole('button', { name: 'Unlock' }).click();
   await expect(page.getByRole('alert')).toHaveText('That alias and passphrase don’t match. Check for typos and try again.', { timeout: 60_000 });
 });
+
+test('9. recovery code: set up (shown once, confirm last 4) → forgot passphrase → alias + code → new passphrase → same space; old passphrase and old code stop working', async ({ page }) => {
+  const alias = `heron-rec-${RUN}`;
+  const NEW_PASS = 'e2e copper meadow lantern river nine';
+  await registerSurvivor(page, alias);
+  await expect(page.getByTestId('recovery-offer')).toBeVisible();
+
+  // something only her keys can open: an encrypted profile record with the name she chose
+  await page.getByRole('button', { name: 'Tell us what to call you' }).click();
+  await page.getByLabel('What should we call you?').fill('Robin');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByTestId('home-title')).toHaveText('Welcome, Robin.');
+
+  // set up: her passphrase again, then the code, shown once
+  await page.getByTestId('recovery-link').click();
+  await expect(page.getByTestId('recovery-title')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('recovery-status')).toHaveText('You don’t have a recovery code yet.');
+  await page.getByTestId('recovery-passphrase').fill(SURVIVOR_PASS);
+  await page.getByTestId('recovery-set-up').click();
+  const codeBox = page.getByTestId('recovery-code');
+  await expect(codeBox).toBeVisible({ timeout: 90_000 });
+  const code = (await codeBox.textContent())!.trim();
+  expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){6}$/);
+  await shot(page, '18-recovery-code');
+  // the wrong tail is refused, the right one saves it
+  await page.getByTestId('recovery-confirm-input').fill('????');
+  await page.getByTestId('recovery-confirm').click();
+  await expect(page.getByText(/Those aren’t the last 4 characters/)).toBeVisible();
+  await page.getByTestId('recovery-confirm-input').fill(code.slice(-4));
+  await page.getByTestId('recovery-confirm').click();
+  await expect(page.getByTestId('recovery-done')).toHaveText('Your recovery code is set up.');
+  await expect(page.getByTestId('recovery-status')).toHaveText('You have a recovery code.');
+
+  // she forgets her passphrase
+  await page.getByRole('link', { name: '← Home' }).click();
+  await expect(page.getByTestId('home-title')).toBeVisible();
+  await signOut(page);
+  await page.getByRole('link', { name: 'Sign in' }).first().click();
+  await page.getByTestId('forgot-passphrase').click();
+  await expect(page.getByTestId('recover-title')).toHaveText('Set a new passphrase', { timeout: 60_000 });
+  await page.getByTestId('recover-alias').fill(alias);
+  // a typo is caught on this device, before anything is sent
+  const typo = code.slice(0, -1) + (code.at(-1) === '0' ? '1' : '0');
+  await page.getByTestId('recover-code').fill(typo);
+  await page.getByTestId('recover-continue').click();
+  await expect(page.getByText(/mistyped/)).toBeVisible();
+  await page.getByTestId('recover-code').fill(code.toLowerCase().replace(/-/g, ' '));
+  await page.getByTestId('recover-continue').click();
+  await expect(page.getByTestId('recover-new-passphrase')).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('recover-new-passphrase').fill(NEW_PASS);
+  await page.getByTestId('recover-new-passphrase-again').fill(NEW_PASS);
+  await page.getByTestId('recover-set-passphrase').click();
+
+  // a new code, shown once (the used one is burned), then into her space with everything still there
+  await expect(page.getByTestId('recover-title')).toHaveText('Your new passphrase is set', { timeout: 90_000 });
+  const newCode = (await page.getByTestId('recovery-code').textContent())!.trim();
+  expect(newCode).not.toBe(code);
+  await page.getByTestId('recovery-confirm-input').fill(newCode.slice(-4));
+  await page.getByTestId('recovery-confirm').click();
+  await expect(page.getByTestId('home-title')).toHaveText('Welcome back, Robin.', { timeout: 60_000 });
+  await expect(page.getByTestId('home-activity')).toContainText('Your passphrase was reset with your recovery code');
+  await signOut(page);
+
+  // the old passphrase no longer opens it
+  await page.getByRole('link', { name: 'Sign in' }).first().click();
+  await page.getByLabel('Alias').fill(alias);
+  await page.getByLabel('Passphrase').fill(SURVIVOR_PASS);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('alert')).toHaveText('That alias and passphrase don’t match. Check for typos and try again.', { timeout: 60_000 });
+
+  // nor does the old code
+  await page.getByTestId('forgot-passphrase').click();
+  await page.getByTestId('recover-alias').fill(alias);
+  await page.getByTestId('recover-code').fill(code);
+  await page.getByTestId('recover-continue').click();
+  await expect(page.getByRole('alert')).toHaveText('That alias and recovery code don’t match. Check both for typos and try again.', { timeout: 60_000 });
+
+  // the new passphrase does
+  await signIn(page, alias, NEW_PASS);
+  await expect(page.getByTestId('home-title')).toHaveText('Welcome back, Robin.');
+});

@@ -103,6 +103,32 @@ export const loginRequest = z.object({
 
 export const preloginQuery = z.object({ username });
 
+// ── recovery code ──
+const authKey32 = base64(128).refine((s) => b64Len(s) >= 16 && b64Len(s) <= 64, 'authKey must be 16-64 bytes');
+/** AES-GCM of the 64-byte account secret: 64 + 16 (tag) bytes. */
+export const accountKeyEnvelope = envelope.extend({ ct: base64(128).refine((s) => b64Len(s) === 80, 'wrapped account key must be 80 bytes') });
+
+export const setUpRecoveryRequest = z.object({
+  authKey: base64(128),
+  wrappedAccountKey: accountKeyEnvelope.optional(),
+  recoveryAuthKey: authKey32,
+  recoveryWrappedKey: accountKeyEnvelope,
+});
+
+export const turnOffRecoveryRequest = z.object({ authKey: base64(128) });
+
+export const recoverStartRequest = z.object({ username, recoveryAuthKey: base64(128) });
+
+export const recoverFinishRequest = z.object({
+  resetToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'invalid reset token'),
+  kdfSalt: base64(128).refine((s) => b64Len(s) >= 16, 'kdfSalt must be at least 16 bytes'),
+  kdfIterations: z.number().int().min(1_000).max(10_000_000),
+  authKey: authKey32,
+  wrappedAccountKey: accountKeyEnvelope,
+  recoveryAuthKey: authKey32,
+  recoveryWrappedKey: accountKeyEnvelope,
+});
+
 export const createRecordRequest = z.object({
   envelope,
   ownerWrappedKey,

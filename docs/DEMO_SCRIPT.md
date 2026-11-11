@@ -126,7 +126,7 @@ No. Nonprofit, grant-funded. No referral fees and no fee sharing; NJ RPC 5.4, 7.
 Today, an admin verifies manually. The pilot adds bar-record checks, organizational attestation, MFA or passkeys, annual re-verification, and the MOU. Every access is visible to the survivor, and shares will expire.
 
 **"What if she forgets her passphrase?"**
-Her data is gone. That's the cost of us being unable to read it. On the roadmap: optional recovery shares held by an advocate she trusts.
+If she made a recovery code, she can set a new passphrase with it ("Forgot your passphrase?" on the sign-in screen). It's optional, shown once, and only she has it: we store a hash of a key derived from it and her keys encrypted under it, so we can't reset anyone ourselves. Anyone who finds the code and knows her alias could get in, and the screen tells her that. Without a code her data is gone; that's the cost of us being unable to read it. Later: recovery shares held by people she trusts, so no single paper opens it (Q-043).
 
 **"What if her abuser has her phone or forces her to unlock it?"**
 Cryptography can't stop coercion. Quick Exit, auto-lock, and safety planning help. We recommend a safe device. This is a key area where we want advocates' guidance.
