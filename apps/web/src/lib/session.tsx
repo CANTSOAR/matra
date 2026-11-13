@@ -29,7 +29,7 @@ import {
 import type { AttorneyProfile, AuthResponse, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
-import { getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
+import { UnreadableVaultError, getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 import { mirror } from '../dev/mirror';
 
@@ -662,7 +662,7 @@ export function useRequiredSession(): SessionCtx & { session: Session } {
 }
 
 export function friendlyError(e: unknown): string {
-  if (e instanceof SessionError) return e.message;
+  if (e instanceof SessionError || e instanceof UnreadableVaultError) return e.message;
   if (e instanceof ApiError) {
     // 409 from register is the alias; other conflicts (e.g. phone_limit_reached) carry their own message
     if (e.status === 409 && (!e.code || e.code === 'username_taken')) return 'Someone already uses that alias. Please try another one.';

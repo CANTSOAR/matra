@@ -15,6 +15,7 @@ import { Link, useParams } from 'react-router-dom';
 import { fromBase64, publicKeyFingerprint, verifyCounselorRoster, wrapKeyForRecipient } from '@matra/crypto';
 import type { ReportRevokeReason, SurvivorReportRequest, WrappedKey } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
+import { UnreadableNote } from '../components/UnreadableNote';
 import { REPORT_REQUEST_LINES, buildReportConsentStatement } from '../lib/disclosures';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { blobKeyFor, escrowLabel, finals, loadVault } from '../lib/vault';
@@ -53,7 +54,8 @@ export function ReportRequest() {
       entry ? escrowLabel(entry.labelEnvelope, session.masterKey) : Promise.resolve(undefined),
     ]);
     const current = finals(records).find((r) => !r.supersededBy);
-    return { req, fingerprint, vouched, label, current };
+    // saved versions that couldn't be opened: `current` may be older than her newest sealed account, so sharing stays off
+    return { req, fingerprint, vouched, label, current, unreadable: records.unreadable };
   }, [api, id, session.masterKey]);
   const [withEvidence, setWithEvidence] = useState(false);
   const [fpConfirmed, setFpConfirmed] = useState(false);
@@ -91,7 +93,7 @@ export function ReportRequest() {
   }
 
   async function share() {
-    if (!d || !req || !d.current || !keyOk || !agreed) return;
+    if (!d || !req || !d.current || !keyOk || !agreed || d.unreadable > 0) return;
     const record = d.current;
     const blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }> = [];
     if (withEvidence && evidence.length) {
@@ -210,6 +212,7 @@ export function ReportRequest() {
                   ))}
                 </ul>
               </section>
+              <UnreadableNote count={d.unreadable} />
               {!d.current ? (
                 <div className="card stack">
                   <p style={{ margin: 0 }}>
@@ -280,7 +283,7 @@ export function ReportRequest() {
                 {d.current && (
                   <button
                     className="btn btn-primary"
-                    disabled={!keyOk || !agreed || !!st.busy}
+                    disabled={!keyOk || !agreed || !!st.busy || d.unreadable > 0}
                     onClick={() => void act('yes', share, 'Locking your report for this counselor, on your device…')}
                   >
                     Yes, share my report

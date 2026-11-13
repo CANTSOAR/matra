@@ -36,7 +36,10 @@ export function ExportCard({
       downloadBytes(out.zip, out.fileName, 'application/zip');
       setDone(
         `Downloaded ${out.fileName}: ${plural(out.recordCount, 'saved version')} and ${plural(out.evidenceCount, 'evidence file')}.` +
-          (out.problems.length ? ` ${out.problems.length} file(s) had a problem — see evidence/manifest.json.` : ''),
+          (out.problems.length ? ` ${out.problems.length} file(s) had a problem. See evidence/manifest.json.` : '') +
+          (out.unreadableRecords
+            ? ` ${plural(out.unreadableRecords, 'saved version')} couldn’t be opened just now, so ${out.unreadableRecords === 1 ? 'it isn’t' : 'they aren’t'} in this download. You could try again in a moment.`
+            : ''),
       );
       setConfirming(false);
     } catch (e) {

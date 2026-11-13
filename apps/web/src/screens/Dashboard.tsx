@@ -4,6 +4,7 @@ import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/sha
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { escrowLabel, finals, hasUnsealedMatches, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { UnreadableNote } from '../components/UnreadableNote';
 import { PhoneStepCard } from '../components/PhoneStepCard';
 import { ExportCard } from '../components/ExportCard';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
@@ -328,6 +329,7 @@ export function Dashboard() {
         {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
         {!vault.loading && !vault.error && (
           <>
+            <UnreadableNote count={vault.data?.unreadable} />
             {hasDraft && (
               <p className="small">
                 {working.data ? (

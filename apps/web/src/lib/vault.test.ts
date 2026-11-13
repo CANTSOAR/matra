@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { EvidenceItem, IntakeRecord } from '@matra/shared';
 import type { ApiClient } from '../api/client';
 import { draftToRecord, emptyDraft } from '../intake';
-import { MatchingError, PHONE_VERIFICATION_NEEDED, foldInLateEvidence, hasUnsealedMatches, lodgeEscrow } from './vault';
+import { DEFAULT_KDF_ITERATIONS, deriveKeys, newKdfSalt } from '@matra/crypto';
+import { MatchingError, PHONE_VERIFICATION_NEEDED, foldInLateEvidence, hasUnsealedMatches, loadVault, lodgeEscrow, resumeFrom, sealPayload, unreadableNotice } from './vault';
 import type { WorkingData } from './session';
 
 const file = (blobId: string): EvidenceItem => ({
@@ -14,6 +15,43 @@ const file = (blobId: string): EvidenceItem => ({
   sha256: '0'.repeat(64),
   blobId,
   metadataStripped: true,
+});
+
+describe('loadVault: records that fail to open are counted, not dropped silently', () => {
+  it('reports how many saved versions could not be opened, so a resumed draft is never silently an older one', async () => {
+    const { masterKey } = await deriveKeys('vault test passphrase words', newKdfSalt(), Math.min(DEFAULT_KDF_ITERATIONS, 1000));
+    const records: any[] = [];
+    const api = {
+      async createRecord(req: any) {
+        const rec = { id: `r${records.length + 1}`, ownerId: 'u1', supersedes: req.supersedes, contentHash: 'h',
+          createdAt: new Date(Date.UTC(2026, 0, 1, 0, records.length)).toISOString(), ledgerEntryId: 'l', envelope: req.envelope, ownerWrappedKey: req.ownerWrappedKey };
+        records.push(rec);
+        return { record: rec, ledgerEntry: { seq: records.length, timestamp: rec.createdAt } };
+      },
+      async listRecords() {
+        return { records };
+      },
+      async getRecord(id: string) {
+        if (id === 'r2') throw new Error('network');
+        const r = records.find((x) => x.id === id);
+        // r3's ciphertext was damaged: it no longer decrypts
+        return { record: id === 'r3' ? { ...r, envelope: { ...r.envelope, ct: r.envelope.ct.slice(0, -8) + 'AAAAAAA=' } } : r };
+      },
+    } as unknown as ApiClient;
+    const draft = (n: number) => ({ answers: { n } }) as unknown as NonNullable<WorkingData['draft']>;
+    const first = await sealPayload(api, masterKey, { kind: 'draft', draft: draft(1), savedAt: '2026-01-01T00:00:00Z' });
+    const second = await sealPayload(api, masterKey, { kind: 'draft', draft: draft(2), savedAt: '2026-01-01T00:01:00Z' }, first.record.id);
+    await sealPayload(api, masterKey, { kind: 'draft', draft: draft(3), savedAt: '2026-01-01T00:02:00Z' }, second.record.id);
+
+    const vault = await loadVault(api, masterKey, { withLedger: false });
+    expect(vault.map((r) => r.meta.id)).toEqual(['r1']);
+    expect(vault.unreadable).toBe(2);
+    // what she would resume from is the oldest version: the screen must say so
+    expect(resumeFrom(vault).draft).toEqual(draft(1));
+    expect(unreadableNotice(vault.unreadable)).toMatch(/couldn’t open 2 saved versions.*may not be your newest save/);
+    expect(unreadableNotice(1)).toMatch(/one saved version/);
+    expect(unreadableNotice(0)).toBeNull();
+  });
 });
 
 describe('foldInLateEvidence', () => {

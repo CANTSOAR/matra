@@ -92,21 +92,52 @@ export async function openRecord(api: ApiClient, masterKey: CryptoKey, id: strin
 }
 
 /**
+ * The opened records, newest first, plus how many saved versions could not be opened (fetch or decryption failed).
+ * Those are still listed by the server; they are left out here, so whatever is "latest" may be an older version.
+ * Screens that resume or summarize her space show `unreadable` with unreadableNotice.
+ */
+export type LoadedVault = OpenedRecord[] & { unreadable: number };
+
+/**
  * Load and decrypt every record in the vault, newest first, marking superseded versions.
- * Profile (preferences) records are left out unless `includeProfile` is set.
+ * Profile (preferences) records are left out unless `includeProfile` is set. A record that fails to open is counted in
+ * `unreadable` (never dropped silently): she must not resume from an older version without being told.
  */
 export async function loadVault(
   api: ApiClient,
   masterKey: CryptoKey,
   { includeProfile = false, withLedger = true }: { includeProfile?: boolean; withLedger?: boolean } = {},
-): Promise<OpenedRecord[]> {
+): Promise<LoadedVault> {
   const { records } = await api.listRecords();
   const opened = await Promise.all(records.map((r) => openRecord(api, masterKey, r.id, withLedger).catch(() => null)));
+  const unreadable = opened.filter((x) => x === null).length;
   const list = opened.filter((x): x is OpenedRecord => !!x && (includeProfile || x.payload.kind !== 'profile'));
   const supersededBy = new Map<string, string>();
   for (const r of list) if (r.meta.supersedes) supersededBy.set(r.meta.supersedes, r.meta.id);
   for (const r of list) r.supersededBy = supersededBy.get(r.meta.id);
-  return list.sort((a, b) => b.meta.createdAt.localeCompare(a.meta.createdAt));
+  list.sort((a, b) => b.meta.createdAt.localeCompare(a.meta.createdAt));
+  return Object.assign(list, { unreadable });
+}
+
+/**
+ * Refusing to save from a partial vault: some saved versions couldn't be opened, so saving now would put an older
+ * version on top of her newest. The message is unreadableNotice's calm wording (friendlyError shows it as is).
+ */
+export class UnreadableVaultError extends Error {
+  constructor(readonly unreadable: number) {
+    super(unreadableNotice(unreadable) ?? 'Some saved versions of your space could not be opened just now.');
+    this.name = 'UnreadableVaultError';
+  }
+}
+
+/** Calm words for saved versions that couldn't be opened (null when there are none). */
+export function unreadableNotice(n: number): string | null {
+  if (!(n > 0)) return null;
+  return (
+    `We couldn’t open ${n === 1 ? 'one saved version' : `${n} saved versions`} of your space just now. ` +
+    `${n === 1 ? 'It is' : 'They are'} still stored, but what you see here may not be your newest save. ` +
+    'Before you continue, you could try again in a moment, or sign out and back in.'
+  );
 }
 
 export function latestOf(list: OpenedRecord[], kind: VaultPayload['kind']): OpenedRecord | undefined {
