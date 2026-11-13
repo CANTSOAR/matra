@@ -273,7 +273,7 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
         ...(m.soughtCare || has(m.date) ? [row('Date of care', formatDate(m.date))] : []),
         row('Forensic exam (SANE / evidence kit) completed', m.forensicExamCompleted === undefined ? NOT_PROVIDED : yesNo(m.forensicExamCompleted)),
         ...(m.toxicologyTest ? [row('Toxicology (alcohol / drug) testing', survivorAnswered(m.toxicologyTest))] : []),
-        ...(m.fiveYearHoldKit ? [row('Kit held without a police report (anonymous / Five-Year Hold)', survivorAnswered(m.fiveYearHoldKit))] : []),
+        ...(m.fiveYearHoldKit ? [row('Kit held without a police report (anonymous / "Hold" kit)', survivorAnswered(m.fiveYearHoldKit))] : []),
         ...(m.kitReportedToPolice ? [row('Kit reported to police', survivorAnswered(m.kitReportedToPolice))] : []),
         vrow('Injuries', m.injuries),
       ],

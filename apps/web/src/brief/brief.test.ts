@@ -255,6 +255,12 @@ describe('VCCO worksheet content', () => {
     expect(t).toContain('May 14, 2027');
     expect(t).toContain('$275/hour');
   });
+  it('calls an unreported kit a "Hold" kit, not a "Five-Year Hold" kit (AG Directive 2023-1)', () => {
+    expect(joined(vccoSections(sampleRecord, at))).toContain('unreported (“Hold”) kit');
+    expect(joined(briefSections(sampleRecord, sampleBriefOptions))).toContain('Kit held without a police report (anonymous / "Hold" kit)');
+    for (const t of [joined(vccoSections(sampleRecord, at)), joined(briefSections(sampleRecord, sampleBriefOptions))])
+      expect(t).not.toMatch(/five-year/i);
+  });
   it('uses the agency type she chose, not keywords in the agency name', () => {
     const withPolice: IntakeRecord = {
       ...sampleRecord,

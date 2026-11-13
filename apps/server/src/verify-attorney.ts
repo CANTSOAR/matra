@@ -7,12 +7,16 @@
  * attorney's key against the signed directory: W3) show the change at once. Without the key it says to run
  * sign-roster: until then a newly verified attorney shows as "can't confirm" in pinned builds, and a revoked one is
  * still in the signed directory but no longer listed or shareable (the server checks the flag). Honors MATRA_DB_PATH.
+ * --revoke also signs the account out everywhere, and the attorney routes refuse it from then on; survivors with a
+ * live share to that attorney are told in their activity that access is paused (their shares are not revoked: only
+ * she changes her consent). See attorney-verification.ts.
  */
 import fs from 'node:fs';
 import { rosterPublicKey, toBase64 } from '@matra/crypto';
 import { openDb } from './db.js';
 import { resolveDbPath } from './config.js';
 import { orgSigningKeyFromEnv, signOrgLists, storeOrgLists } from './org-signing.js';
+import { setVerified } from './attorney-verification.js';
 
 const args = process.argv.slice(2);
 const username = args.find((a) => !a.startsWith('--'))?.trim().toLowerCase();
@@ -33,19 +37,15 @@ if (orgKey && process.env.MATRA_COUNSELOR_ROSTER_PUBKEY && toBase64(rosterPublic
   process.exit(1);
 }
 const db = openDb(resolveDbPath());
-const v = revoke ? 0 : 1;
-const a = db
-  .prepare(`UPDATE attorney_profiles SET verified = ? WHERE user_id = (SELECT id FROM users WHERE username = ? AND role = 'attorney')`)
-  .run(v, username);
-const c = db
-  .prepare(`UPDATE counselor_profiles SET verified = ? WHERE user_id = (SELECT id FROM users WHERE username = ? AND role = 'counselor')`)
-  .run(v, username);
-if (a.changes + c.changes === 0) {
+const result = setVerified(db, username, !revoke);
+if (!result) {
   db.close();
   console.error(`No attorney or counselor account named "${username}".`);
   process.exit(1);
 }
-console.log(`${a.changes ? 'Attorney' : 'Counselor'} "${username}" is now ${revoke ? 'UNVERIFIED' : 'VERIFIED'}.`);
+console.log(`${result.role === 'attorney' ? 'Attorney' : 'Counselor'} "${username}" is now ${revoke ? 'UNVERIFIED' : 'VERIFIED'}.`);
+if (revoke) console.log(`Signed out of ${result.sessionsEnded} session(s).`);
+if (result.survivorsNotified) console.log(`Told ${result.survivorsNotified} survivor(s) with a live share, in their activity, that access is ${revoke ? 'paused' : 'back on'}.`);
 if (orgKey) {
   const lists = signOrgLists(db, orgKey);
   orgKey.fill(0);

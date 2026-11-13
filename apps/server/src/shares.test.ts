@@ -10,6 +10,7 @@ import { checkAttorneyKey, generateRosterKey, publicKeyFingerprint, toBase64 } f
 import type { AttorneysResponse } from '@matra/shared';
 import { createRecord, defaultProfile, makeApp, registerUser, uploadBlob } from './test-helpers.js';
 import { signOrgLists, storeOrgLists } from './org-signing.js';
+import { setVerified } from './attorney-verification.js';
 
 const binary = (res: any, cb: (e: Error | null, b: Buffer) => void) => {
   const chunks: Buffer[] = [];
@@ -197,6 +198,78 @@ describe('shares', () => {
 
     await request(app).post(`/api/shares/${share.id}/revoke`).set(jane.auth);
     expect((await request(app).post(`/api/shares/${share.id}/renew`).set(jane.auth)).status).toBe(409);
+    expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
+  });
+});
+
+describe('unverifying an attorney pauses access to existing shares', () => {
+  it('refuses an unverified attorney on the list, bundle and blob routes; re-verifying restores access', async () => {
+    const { app, db } = makeApp();
+    const jane = await registerUser(app, 'jane.unv');
+    const atty = await registerUser(app, 'atty.unv', 'attorney');
+    const { res: recRes, key: recKey } = await createRecord(app, jane, { narrative: 'paused words' });
+    const { res: blobRes, key: blobKey } = await uploadBlob(app, jane, new TextEncoder().encode('photo'));
+    const blobId = blobRes.body.blob.id;
+    const pub = atty.user.publicKey;
+    const FP = await publicKeyFingerprint(pub);
+    const created = await request(app)
+      .post('/api/shares')
+      .set(jane.auth)
+      .send({
+        recordId: recRes.body.record.id,
+        attorneyId: atty.user.id,
+        recipientWrappedKey: await wrapKeyForRecipient(recKey, pub),
+        blobs: [{ blobId, recipientWrappedKey: await wrapKeyForRecipient(blobKey, pub) }],
+        consentStatement: consentFor(FP),
+        attorneyKeyFingerprint: FP,
+        scope: ['record', 'evidence'],
+        survivorAlias: 'J.',
+      });
+    expect(created.status).toBe(201);
+    const shareId = created.body.share.id;
+    const routes = (auth: { Authorization: string }) => [
+      request(app).get('/api/shares').set(auth),
+      request(app).get(`/api/shares/${shareId}/bundle`).set(auth),
+      request(app).get(`/api/vault/blobs/${blobId}`).set(auth),
+    ];
+    for (const r of await Promise.all(routes(atty.auth))) expect(r.status).toBe(200);
+
+    // The routes check the flag themselves (not only the session sweep below).
+    db.prepare('UPDATE attorney_profiles SET verified = 0 WHERE user_id = ?').run(atty.user.id);
+    for (const r of await Promise.all(routes(atty.auth))) {
+      expect(r.status).toBe(403);
+      expect(r.body.code).toBe('attorney_not_verified');
+    }
+    db.prepare('UPDATE attorney_profiles SET verified = 1 WHERE user_id = ?').run(atty.user.id);
+
+    // verify-attorney --revoke: signs the attorney out everywhere and tells the survivor; her share is not revoked
+    expect(setVerified(db, 'atty.unv', false)).toMatchObject({ role: 'attorney', changed: true, survivorsNotified: 1 });
+    expect((await request(app).get('/api/shares').set(atty.auth)).status).toBe(401);
+    const login = await request(app).post('/api/auth/login').send({ username: 'atty.unv', authKey: atty.authKey });
+    expect(login.status).toBe(200);
+    const again = { Authorization: `Bearer ${login.body.token}` };
+    for (const r of await Promise.all(routes(again))) {
+      expect(r.status).toBe(403);
+      expect(r.body.code).toBe('attorney_not_verified');
+    }
+    const hers = (await request(app).get('/api/shares').set(jane.auth)).body.shares;
+    expect(hers).toHaveLength(1);
+    expect(hers[0]).toMatchObject({ status: 'active', attorneyVerified: false });
+    const janeEvents = (await request(app).get('/api/audit').set(jane.auth)).body.events as Array<{ action: string; detail?: string }>;
+    const notice = janeEvents.find((e) => e.action === 'attorney.unverified');
+    expect(notice?.detail).toMatch(/no longer verified by Matra.*paused/);
+    // revoking twice changes nothing and writes no second notice
+    expect(setVerified(db, 'atty.unv', false)).toMatchObject({ changed: false, survivorsNotified: 0 });
+    expect(((await request(app).get('/api/audit').set(jane.auth)).body.events as Array<{ action: string }>).filter((e) => e.action === 'attorney.unverified')).toHaveLength(1);
+
+    // re-verified: access is back, and she is told
+    expect(setVerified(db, 'atty.unv', true)).toMatchObject({ changed: true, sessionsEnded: 0, survivorsNotified: 1 });
+    for (const r of await Promise.all(routes(again))) expect(r.status).toBe(200);
+    expect((await request(app).get('/api/shares').set(jane.auth)).body.shares[0]).toMatchObject({ attorneyVerified: true });
+    const after = (await request(app).get('/api/audit').set(jane.auth)).body.events as Array<{ action: string }>;
+    expect(after.map((e) => e.action)).toContain('attorney.reverified');
+    // the attorney's own list never carries the flag
+    expect((await request(app).get('/api/shares').set(again)).body.shares[0]).not.toHaveProperty('attorneyVerified');
     expect((await request(app).get('/api/ledger/verify')).body.ok).toBe(true);
   });
 });

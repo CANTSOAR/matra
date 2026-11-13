@@ -150,7 +150,7 @@ describe('ledger proof lookup (the in-browser checker, /verify)', () => {
     for (const contentHashes of [[rec.record.contentHash.slice(0, 16)], [rec.record.id], [], Array(33).fill('a'.repeat(64))])
       expect((await request(app).post('/api/ledger/proof').send({ contentHashes })).status).toBe(400);
     // share, account and other non-content entries are not answered, even by their exact hash
-    expect((await request(app).post('/api/account/delete').set(b.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(b.auth).send({ authKey: b.authKey })).status).toBe(200);
     const shredded = db.prepare(`SELECT content_hash FROM ledger WHERE type = 'account.shredded'`).get() as { content_hash: string };
     expect((await request(app).post('/api/ledger/proof').send({ contentHashes: [shredded.content_hash] })).body.entries).toEqual([]);
   });

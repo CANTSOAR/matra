@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
+import { UnreadableNote } from '../components/UnreadableNote';
 import {
   BriefPreview,
   downloadPdf,
@@ -67,6 +68,8 @@ export function Brief() {
       </PageTitle>
       {vault.loading && <Loading label="Opening your space…" />}
       {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
+      {/* before she downloads a summary or the VCCO draft: the version here may not be her newest */}
+      <UnreadableNote count={vault.data?.unreadable} />
       {!vault.loading && !vault.error && sealed.length === 0 && (
         <div className="card stack">
           <p>Once your story is sealed, you can prepare a summary here. There’s no rush.</p>

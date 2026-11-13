@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { ProgressNote } from '../components/AuthForms';
 import { ErrorNote, PageTitle } from '../components/common';
 import { ExportCard } from '../components/ExportCard';
 import { KeyNotice } from '../components/KeyNotice';
 import { NOTICES } from '../lib/disclosures';
-import { useRequiredSession } from '../lib/session';
+import { SessionError, useRequiredSession, type Progress } from '../lib/session';
 
 /** What she types to confirm (case and spaces don't matter). */
 export const DELETE_CONFIRM_WORD = 'DELETE';
@@ -14,17 +15,21 @@ export function confirmMatches(typed: string): boolean {
 }
 
 /**
- * "Delete everything" (PRD M9): a crypto-shred of her account, after she has read what it means (Memo §2 "Deletion and
- * spoliation"; Succession and Data Promise D2). Nothing happens until the typed confirmation and the last button.
+ * "Delete everything" (PRD M9): deletes her account from the live database, after she has read what it means (Memo §2
+ * "Deletion and spoliation"; Succession and Data Promise D2). Not a crypto-shred: a backup made earlier still opens with
+ * her passphrase, and the page says so. Nothing happens until the typed confirmation, her passphrase (checked on this
+ * device and again by the server, so an open session alone can't delete everything) and the last button.
  * Afterwards everything in memory is wiped and she lands on the public home page.
  */
 export function DeleteAccount() {
-  const { api, lock } = useRequiredSession();
+  const { deleteAccount, lock } = useRequiredSession();
   const navigate = useNavigate();
   const [typed, setTyped] = useState('');
+  const [pass, setPass] = useState('');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const ready = confirmMatches(typed);
+  const ready = confirmMatches(typed) && pass.length > 0;
   const deleted = useRef(false);
   const lockRef = useRef(lock);
   lockRef.current = lock;
@@ -41,12 +46,15 @@ export function DeleteAccount() {
     setBusy(true);
     setError(null);
     try {
-      await api.deleteAccount();
-    } catch {
-      setError('We couldn’t delete your space just now. Nothing was deleted. Please try again.');
+      await deleteAccount(pass, setProgress);
+    } catch (err) {
+      // a wrong passphrase says so (and that nothing was deleted); anything else keeps the calm generic message
+      setError(err instanceof SessionError ? err.message : 'We couldn’t delete your space just now. Nothing was deleted. Please try again.');
       setBusy(false);
+      setProgress(null);
       return;
     }
+    setPass('');
     // Leave the signed-in screens first, then forget the keys, the session and any draft held in memory. The wipe
     // waits until this screen has unmounted: router navigations are transitions, and wiping first would let the
     // sign-in guard redirect to "Welcome back" instead of the public home.
@@ -73,7 +81,7 @@ export function DeleteAccount() {
         <h2 id="del-what">What gets deleted</h2>
         <ul className="bullets">
           <li>Every version of your story, your drafts, and your evidence files.</li>
-          <li>The locked copies on our server, and the keys that unlock them. Without those keys, they can’t be opened.</li>
+          <li>The locked copies on our server, and the locked keys stored with them.</li>
           <li>Your sealed matches, any sharing with attorneys, your activity list, and your sign-in.</li>
         </ul>
         <p style={{ margin: 0 }}>
@@ -91,6 +99,11 @@ export function DeleteAccount() {
           <li>
             <strong>Files you downloaded yourself</strong>, like a summary PDF or a “Download my data” file. Delete those
             on your device.
+          </li>
+          <li>
+            <strong>Any backup of our server made before you delete.</strong> It would still hold a locked copy of your
+            space until it is replaced. That copy opens only with your passphrase (or your recovery code, if you had
+            one), so keep those private.
           </li>
           <li>
             <strong>Matra’s tamper-evident record.</strong> It keeps short fingerprints (hashes) of what was saved, and a
@@ -115,6 +128,17 @@ export function DeleteAccount() {
             data-testid="delete-confirm-input"
           />
         </label>
+        <label className="field">
+          <span>To make sure it’s you, type your passphrase</span>
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            data-testid="delete-passphrase"
+          />
+        </label>
+        <ProgressNote p={progress} />
         {error && <ErrorNote>{error}</ErrorNote>}
         <div className="row">
           <button className="btn btn-danger" type="submit" disabled={!ready || busy} data-testid="delete-account">

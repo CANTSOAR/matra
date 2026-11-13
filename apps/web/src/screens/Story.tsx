@@ -6,7 +6,19 @@ import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common';
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
-import { MatchingError, foldInLateEvidence, latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
+import {
+  MatchingError,
+  UnreadableVaultError,
+  foldInLateEvidence,
+  latestOf,
+  loadVault,
+  mergeEvidence,
+  resumeFrom,
+  sealPayload,
+  shortHash,
+  uploadEvidence,
+} from '../lib/vault';
+import { UnreadableNote } from '../components/UnreadableNote';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
 import { lodgeMatches } from '../space/adapters';
 import { matchContactOf } from '../intake/record';
@@ -21,6 +33,8 @@ interface Boot {
   previousFinalId?: string;
   previousEscrowed: string[];
   hasSealed: boolean;
+  /** saved versions that couldn't be opened: what she resumed from may not be her newest save */
+  unreadable: number;
 }
 
 export function Story() {
@@ -33,6 +47,10 @@ export function Story() {
   const [vaultSave, setVaultSave] = useState<{ phase: SavePhase; at?: number }>({ phase: 'idle' });
   // Autosave bookkeeping. `stopped` is set by Quick exit / lock (wipe) and while sealing: nothing is saved after it.
   const auto = useRef({ lastAt: 0, lastJson: '', inFlight: null as Promise<void> | null, timer: undefined as number | undefined, failures: 0, stopped: false });
+  // Some saved versions couldn't be opened, so the draft she resumed may be older than her newest save. Nothing is
+  // saved or sealed until she chooses to keep writing from it. Kept apart from `stopped`, which a failed seal resets.
+  const [onHold, setOnHold] = useState(false);
+  const onHoldRef = useRef(false);
   const [pastSafety, setPastSafety] = useState(false);
   const pastSafetyRef = useRef(false);
   pastSafetyRef.current = pastSafety;
@@ -68,11 +86,16 @@ export function Story() {
       setPastSafety(!!working.draft && safetyStage(working.draft) === 'done');
       setMode(working.draft?.space?.mode === 'interview' ? 'interview' : 'space');
       setFileCount(working.evidence.length);
+      if (vault.unreadable > 0) {
+        onHoldRef.current = true;
+        setOnHold(true);
+      }
       setBoot({
         working,
         previousFinalId: final?.meta.id,
         previousEscrowed: final?.payload.escrowedHashes ?? [],
         hasSealed: !!final,
+        unreadable: vault.unreadable,
       });
     })().catch((e) => alive && setBootError(friendlyError(e)));
     return () => {
@@ -107,7 +130,7 @@ export function Story() {
    */
   async function saveToVault(): Promise<void> {
     const a = auto.current;
-    if (a.stopped) return;
+    if (a.stopped || onHoldRef.current) return;
     window.clearTimeout(a.timer);
     a.timer = undefined;
     while (a.inFlight) await a.inFlight;
@@ -155,7 +178,7 @@ export function Story() {
   /** Coalesce: one pending save at a time, a moment after the change and at least a minute after the last save. */
   function scheduleSave(delay?: number) {
     const a = auto.current;
-    if (a.stopped) return;
+    if (a.stopped || onHoldRef.current) return;
     if (a.timer !== undefined) {
       if (delay === undefined) return;
       window.clearTimeout(a.timer);
@@ -258,6 +281,9 @@ export function Story() {
    */
   async function onComplete(intake: IntakeRecord): Promise<void> {
     if (!boot) throw new Error('Your vault is still opening.');
+    // "Keep writing" only resumes draft saves. Sealing (and lodging match entries) reads the earlier sealed version
+    // from this partial vault, so it waits until every saved version opens again.
+    if (boot.unreadable > 0) throw new UnreadableVaultError(boot.unreadable);
     window.clearTimeout(saveTimer.current);
     // No draft autosave while (or after) sealing: the sealed version must be the newest.
     const a = auto.current;
@@ -308,6 +334,13 @@ export function Story() {
     }
   }
 
+  /** Her choice to carry on from the version that opened: saving starts again, and her next save is her newest. */
+  function keepWriting() {
+    onHoldRef.current = false;
+    setOnHold(false);
+    if (pastSafetyRef.current) scheduleSave();
+  }
+
   const statusLine = <SaveStatus phase={vaultSave.phase} at={vaultSave.at} onSaveNow={() => void saveToVault()} />;
 
   if (sealed) {
@@ -345,6 +378,21 @@ export function Story() {
       {!boot && !bootError && <Loading label="Opening your draft…" />}
       {boot && (
         <>
+          <UnreadableNote count={boot.unreadable} />
+          {onHold && (
+            <div className="card soft stack" data-testid="story-on-hold">
+              <p className="small" style={{ margin: 0 }}>
+                Saving is paused, so an older version isn’t saved over your newest one. Reloading the page may fix this.
+                If it doesn’t, you can keep writing from the version that opened. Your next save then becomes your newest
+                version.
+              </p>
+              <div>
+                <button type="button" className="btn btn-small" onClick={keepWriting}>
+                  Keep writing from the version that opened
+                </button>
+              </div>
+            </div>
+          )}
           {boot.hasSealed && (
             <p className="card soft small">
               You already have a sealed account. If you seal again, it’s kept as a new version — the earlier one stays
@@ -363,7 +411,7 @@ export function Story() {
               onSwitchToInterview={(d) => switchMode(d, 'interview')}
               onCheckpoint={onCheckpoint}
               hasSealed={boot.hasSealed}
-              saveStatus={statusLine}
+              saveStatus={onHold ? undefined : statusLine}
             />
           ) : (
             <>
@@ -376,7 +424,7 @@ export function Story() {
                   ← Back to the open story space
                 </button>
               </p>
-              {pastSafety && <div className="space-root space-status-row">{statusLine}</div>}
+              {pastSafety && !onHold && <div className="space-root space-status-row">{statusLine}</div>}
               {fileCount > 0 && <p className="small muted">{fileCount} evidence file(s) will be attached when you seal.</p>}
               <IntakeChat
                 key="interview"
