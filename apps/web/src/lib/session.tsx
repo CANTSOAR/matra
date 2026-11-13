@@ -142,6 +142,22 @@ interface SessionCtx {
   deleteAccount(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
 }
 
+/** The most PBKDF2 rounds she will run (the server's own limit); more would only freeze her browser. */
+const MAX_KDF_ITERATIONS = 10_000_000;
+
+/**
+ * The server tells her client how many PBKDF2 rounds to run on her passphrase (prelogin). A lower count would make the
+ * auth key her client then sends, and the keys it unlocks, cheaper to guess offline, so a malicious or broken server
+ * could weaken her passphrase. Refuse anything below DEFAULT_KDF_ITERATIONS before deriving or sending anything.
+ */
+export function checkKdfIterations(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < DEFAULT_KDF_ITERATIONS || n > MAX_KDF_ITERATIONS)
+    throw new SessionError(
+      'This app stopped before using your passphrase: the server asked for weaker protection than it should. Nothing was sent. Please try again later.',
+    );
+  return n;
+}
+
 const Ctx = createContext<SessionCtx | null>(null);
 
 export function SessionProvider({
@@ -301,7 +317,7 @@ export function SessionProvider({
       onProgress?.('contacting');
       const pre = await api.prelogin(name);
       onProgress?.('deriving');
-      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, checkKdfIterations(pre.kdfIterations));
       onProgress?.('contacting');
       let res;
       try {
@@ -331,7 +347,7 @@ export function SessionProvider({
   const accountSecretFromPassphrase = useCallback(
     async (s: Session, passphrase: string, wrongText = 'That passphrase isn’t right. Check for typos and try again.') => {
       const pre = await api.prelogin(s.user.username);
-      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, checkKdfIterations(pre.kdfIterations));
       const wrong = () => new SessionError(wrongText);
       let as: Uint8Array;
       try {

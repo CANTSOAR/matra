@@ -82,7 +82,7 @@
 **Properties**
 - The server never sees the passphrase, the masterKey, any content key, or any plaintext record.
 - Knowing the authKey (for example, from a stolen login exchange) does not reveal the masterKey, because HKDF provides domain separation.
-- `GET /api/auth/prelogin` returns a deterministic fake salt for unknown usernames, which limits username enumeration.
+- `GET /api/auth/prelogin` returns a deterministic fake salt for unknown usernames, which limits username enumeration. It also returns the PBKDF2 iteration count; her client refuses a count below 600,000 (or above 10,000,000) before deriving or sending anything, so a malicious or broken server cannot make her send an auth key that is cheaper to guess. In production the server refuses to register or reset a passphrase with fewer than 600,000 iterations (other environments allow 1,000, for tests).
 - **No operator reset exists.** The server can't reset anyone's passphrase: nothing it stores opens a vault. Without a recovery code, a forgotten passphrase means the data is permanently unrecoverable. This is inherent to zero knowledge.
 - AES-GCM uses a random 96-bit IV per encryption. Every key is random and per-object, so nonce reuse is not a practical concern at MVP scale.
 

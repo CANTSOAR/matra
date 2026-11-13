@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
 import {
+  DEFAULT_KDF_ITERATIONS,
   generateOprfKey,
   groupKeyFromShares,
   fromBase64,
@@ -160,6 +161,12 @@ export interface CreateAppOptions {
    * and not production unless MATRA_DEMO_MODE=1).
    */
   inspector?: boolean;
+  /**
+   * Fewest PBKDF2 rounds a client may register (or reset) a passphrase with. Default: DEFAULT_KDF_ITERATIONS (600,000)
+   * in production; 1,000 elsewhere, so tests can register accounts quickly. Her client refuses fewer than
+   * DEFAULT_KDF_ITERATIONS from prelogin anyway (apps/web/src/lib/session.tsx checkKdfIterations).
+   */
+  minKdfIterations?: number;
 }
 
 /**
@@ -647,9 +654,16 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json(fakeKdfSalt(pepper, username));
   });
 
+  const minKdfIterations = opts.minKdfIterations ?? (process.env.NODE_ENV === 'production' ? DEFAULT_KDF_ITERATIONS : 1_000);
+  const assertKdfIterations = (n: number) => {
+    if (n < minKdfIterations)
+      throw new HttpError(400, 'invalid_request', `kdfIterations: must be at least ${minKdfIterations}`);
+  };
+
   app.post('/api/auth/register', async (req, res) => {
     rateLimit(req, 'register', req.body?.username);
     const body = parse(S.registerRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
     if (q.userByName.get(body.username))
       throw new HttpError(409, 'username_taken', 'That username is not available.');
     const { hash, salt } = await hashAuthKey(body.authKey);
@@ -828,6 +842,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.post('/api/auth/recover/finish', async (req, res) => {
     rateLimit(req, 'recover-finish', '');
     const body = parse(S.recoverFinishRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
     const key = sha256Hex(body.resetToken);
     const pending = resetTokens.get(key);
     resetTokens.delete(key); // single use, whatever happens next
