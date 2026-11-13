@@ -8,7 +8,7 @@ import { NOTICES } from '../lib/disclosures';
 import { shareLengthSentence } from '../lib/shareTerms';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { blobKeyFor, finals, loadVault, type OpenedRecord } from '../lib/vault';
-import { MATCH_PINS } from '../matchPins';
+import { MATCH_PINS, attorneyShareable } from '../matchPins';
 
 type Scope = ShareT['scope'][number];
 const SCOPE_LABEL: Record<Scope, string> = {
@@ -40,8 +40,8 @@ export function buildConsentStatement(p: {
   ].join('\n');
 }
 
-/** May she share with this attorney's key? Verified by the org-signed directory, or (development builds) unpinned. */
-const canShare = (c: AttorneyKeyCheck) => c.status === 'verified' || c.status === 'unpinned';
+/** May she share with this attorney's key? Verified by the org-signed directory, or unpinned in dev/demo builds only. */
+const canShare = (c: AttorneyKeyCheck) => attorneyShareable(c);
 
 /** The attorney as the signed directory names them (the server's copy of the name can't override it). */
 function signedAttorney(a: AttorneyProfile, c: AttorneyKeyCheck): AttorneyProfile {
@@ -85,7 +85,7 @@ function AttorneyCard({ a, check, onChoose }: { a: AttorneyProfile; check: Attor
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <h3 style={{ margin: 0 }}>{shown.displayName}</h3>
             {check.status === 'verified' && <span className="badge ok">Verified by Matra</span>}
-            {check.status === 'unpinned' && <span className="badge ok">Verified attorney</span>}
+            {check.status === 'unpinned' && canShare(check) && <span className="badge ok">Verified attorney</span>}
             {!canShare(check) && <span className="badge warn">Can’t confirm right now</span>}
           </div>
           {shown.organization && <p style={{ margin: 0 }}>{shown.organization}</p>}
@@ -304,7 +304,7 @@ function Consent({
             {check.organization ? `, ${check.organization}` : ''}. Your file will be locked so only this key can open it.
           </p>
         )}
-        {check.status === 'unpinned' && (
+        {check.status === 'unpinned' && keyOk && (
           <p className="card warn small" style={{ margin: 0 }}>
             <strong>Development version:</strong> this copy of the app has no Matra signing key to check the attorney’s
             key against, so it uses the key the server sent. Real versions check it for you.
