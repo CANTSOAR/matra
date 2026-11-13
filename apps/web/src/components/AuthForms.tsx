@@ -409,6 +409,9 @@ export function SignInForm({ role }: { role: Role }) {
           data-testid="signin-passphrase"
         />
       </label>
+      <p className="small muted" style={{ margin: 0 }} data-testid="signin-shared-device">
+        On a shared or borrowed device, say no if the browser offers to save your passphrase.
+      </p>
       <ProgressNote p={progress} />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row">

@@ -339,6 +339,10 @@ export interface TextStep extends BaseStep {
   label: string;
   hint?: string;
   inputType?: 'text' | 'tel' | 'email';
+  /**
+   * Leave unset: the input then gets autocomplete="off". Her name, phone and email here must not feed the browser's
+   * saved autofill profile, which anyone else using the device could see (the sign-in form keeps username/password).
+   */
   autoComplete?: string;
 }
 export interface LongTextStep extends BaseStep {
@@ -514,7 +518,6 @@ export const STEPS: ScriptStep[] = [
     say: ["Let's start with you.", 'What name would you like me to use for you?'],
     label: 'Name to use for you',
     hint: 'This can be a nickname.',
-    autoComplete: 'nickname',
   },
   {
     id: 'about.legalName',
@@ -522,7 +525,6 @@ export const STEPS: ScriptStep[] = [
     kind: 'text',
     say: ['If you are comfortable, what is your full legal name?', 'Police or a lawyer may need it later. You can leave it for now.'],
     label: 'Full legal name',
-    autoComplete: 'name',
   },
   {
     id: 'about.dob',
@@ -564,7 +566,6 @@ export const STEPS: ScriptStep[] = [
     say: ['What phone number is safe to use?'],
     label: 'Safe phone number',
     inputType: 'tel',
-    autoComplete: 'tel',
   },
   {
     id: 'about.email',
@@ -574,7 +575,6 @@ export const STEPS: ScriptStep[] = [
     say: ['What email address is safe to use?'],
     label: 'Safe email address',
     inputType: 'email',
-    autoComplete: 'email',
   },
   {
     id: 'about.contactNotes',

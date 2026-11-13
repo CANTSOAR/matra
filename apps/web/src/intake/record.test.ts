@@ -252,6 +252,13 @@ describe('script', () => {
     expect(all).not.toMatch(/\bwhy\b/);
   });
 
+  it('never lets the browser autofill or save her name, phone or email (shared devices)', () => {
+    for (const s of STEPS) {
+      if (s.kind === 'text') expect(s.autoComplete ?? 'off', s.id).toBe('off');
+      for (const f of 'fields' in s && Array.isArray(s.fields) ? s.fields : []) expect(f.autoComplete ?? 'off', `${s.id}.${f.key}`).toBe('off');
+    }
+  });
+
   it('states the current NJ exam window and kit name (AG Directives 2024-02 and 2023-1)', () => {
     const info = STEPS.find((s) => s.id === 'medical.examInfo')!.say.join(' ');
     expect(info).toMatch(/usually possible up to 7 days after, sometimes longer/);

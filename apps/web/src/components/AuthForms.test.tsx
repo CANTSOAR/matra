@@ -3,7 +3,24 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { SessionProvider } from '../lib/session';
-import { CreateAccountForm } from './AuthForms';
+import { CreateAccountForm, SignInForm } from './AuthForms';
+
+describe('SignInForm', () => {
+  it('keeps the browser’s username/password autofill, and says not to let a shared browser save the passphrase', () => {
+    render(
+      <SessionProvider fetchImpl={vi.fn() as unknown as typeof fetch}>
+        <MemoryRouter>
+          <SignInForm role="survivor" />
+        </MemoryRouter>
+      </SessionProvider>,
+    );
+    expect(screen.getByTestId('signin-username')).toHaveAttribute('autocomplete', 'username');
+    expect(screen.getByTestId('signin-passphrase')).toHaveAttribute('autocomplete', 'current-password');
+    expect(screen.getByTestId('signin-shared-device')).toHaveTextContent(
+      'On a shared or borrowed device, say no if the browser offers to save your passphrase.',
+    );
+  });
+});
 
 describe('CreateAccountForm (survivor) — 18+ gate', () => {
   it('requires "I am 18 or older" before the vault can be created', async () => {
