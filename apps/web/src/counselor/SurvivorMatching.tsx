@@ -20,6 +20,7 @@ export function SurvivorMatching() {
     const { entries } = await api.listEscrow();
     return Promise.all(entries.map(async (e) => ({ entry: e, label: await escrowLabel(e.labelEnvelope, session.masterKey) })));
   }, [api, session.masterKey]);
+  const phone = useAsync(() => api.phoneVerificationStatus(), [api]);
 
   return (
     <div className="stack-lg">
@@ -37,6 +38,27 @@ export function SurvivorMatching() {
           </p>
         ))}
       </section>
+      {phone.data?.required && (
+        <section className="card stack" aria-label="Phone confirmation" data-testid="matching-phone">
+          {phone.data.verified ? (
+            <p className="small" style={{ margin: 0 }}>
+              You’ve confirmed a phone number for sealed matching. The number itself wasn’t kept.
+            </p>
+          ) : (
+            <>
+              <p style={{ margin: 0 }}>
+                Before a sealed match can be turned on, we ask you to confirm a phone number once. We forget the number
+                right after.
+              </p>
+              <div className="row">
+                <Link className="btn btn-small" to="/vault/matching/verify">
+                  Confirm a phone number
+                </Link>
+              </div>
+            </>
+          )}
+        </section>
+      )}
       <section className="card stack" aria-labelledby="sealed" data-testid="matching-entries">
         <h2 id="sealed">Sealed identifiers</h2>
         {entries.loading && <Loading />}

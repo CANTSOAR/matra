@@ -29,10 +29,16 @@ const Evidence = page(() => import('./screens/Evidence'), 'Evidence');
 const Brief = page(() => import('./screens/Brief'), 'Brief');
 const Share = page(() => import('./screens/Share'), 'Share');
 const DeleteAccount = page(() => import('./screens/DeleteAccount'), 'DeleteAccount');
+const RecoverySettings = page(() => import('./screens/Recovery'), 'RecoverySettings');
+const RecoverScreen = page(() => import('./screens/Recovery'), 'RecoverScreen');
 const SurvivorMatching = page(() => import('./counselor/SurvivorMatching'), 'SurvivorMatching');
+const PhoneVerify = page(() => import('./counselor/PhoneVerify'), 'PhoneVerify');
 const AttorneyCases = page(() => import('./attorney/Attorney'), 'AttorneyCases');
 const AttorneyCase = page(() => import('./attorney/Attorney'), 'AttorneyCase');
 const CounselorPortal = page(() => import('./counselor/Counselor'), 'CounselorPortal');
+const CounselorReport = page(() => import('./counselor/CounselorReport'), 'CounselorReport');
+const ReportRequest = page(() => import('./counselor/ReportRequest'), 'ReportRequest');
+const VerifyPage = page(() => import('./verify/VerifyPage'), 'VerifyPage');
 
 /** A calm placeholder while a screen's code arrives. */
 function Lazy({ children }: { children: ReactNode }) {
@@ -47,6 +53,8 @@ export function AppRoutes() {
         <Route path="safety" element={<SafetyTips />} />
         <Route path="start" element={<StartScreen />} />
         <Route path="signin" element={<SignInScreen />} />
+        <Route path="recover" element={<Lazy><RecoverScreen /></Lazy>} />
+        <Route path="verify" element={<Lazy><VerifyPage /></Lazy>} />
 
         <Route path="vault" element={<RequireSession role="survivor"><Lazy><Dashboard /></Lazy></RequireSession>} />
         <Route path="vault/story" element={<RequireSession role="survivor"><Lazy><Story /></Lazy></RequireSession>} />
@@ -54,7 +62,10 @@ export function AppRoutes() {
         <Route path="vault/brief" element={<RequireSession role="survivor"><Lazy><Brief /></Lazy></RequireSession>} />
         <Route path="vault/share" element={<RequireSession role="survivor"><Lazy><Share /></Lazy></RequireSession>} />
         <Route path="vault/matching" element={<RequireSession role="survivor"><Lazy><SurvivorMatching /></Lazy></RequireSession>} />
+        <Route path="vault/matching/verify" element={<RequireSession role="survivor"><Lazy><PhoneVerify /></Lazy></RequireSession>} />
+        <Route path="vault/requests/:id" element={<RequireSession role="survivor"><Lazy><ReportRequest /></Lazy></RequireSession>} />
         <Route path="vault/delete" element={<RequireSession role="survivor"><Lazy><DeleteAccount /></Lazy></RequireSession>} />
+        <Route path="vault/recovery" element={<RequireSession role="survivor"><Lazy><RecoverySettings /></Lazy></RequireSession>} />
 
         <Route path="attorney" element={<AttorneyLanding />} />
         <Route path="attorney/register" element={<AttorneyRegisterScreen />} />
@@ -64,12 +75,24 @@ export function AppRoutes() {
 
         <Route path="counselor" element={<CounselorSignIn />} />
         <Route path="counselor/matches" element={<RequireCounselor><Lazy><CounselorPortal /></Lazy></RequireCounselor>} />
+        <Route path="counselor/reports/:id" element={<RequireCounselor><Lazy><CounselorReport /></Lazy></RequireCounselor>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );
 }
+
+/**
+ * The one deep link: the incident summary PDF prints "<app>/verify" (the file checker, public). Read once at start-up;
+ * the address bar then goes back to "/" like every other page.
+ */
+function startPath(): string {
+  if (typeof window === 'undefined' || window.location.pathname !== '/verify') return '/';
+  window.history.replaceState(null, '', '/');
+  return '/verify';
+}
+const START = startPath();
 
 /**
  * MemoryRouter on purpose: in-app navigation never touches the browser URL or history,
@@ -79,7 +102,7 @@ export function AppRoutes() {
 export default function App() {
   return (
     <SessionProvider>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[START]}>
         <AppRoutes />
       </MemoryRouter>
     </SessionProvider>

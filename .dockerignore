@@ -4,6 +4,7 @@
 **/*.db
 **/*.db-*
 apps/server/data
+apps/matcher/data
 e2e
 test-results
 playwright-report
@@ -13,3 +14,5 @@ reasons.txt
 .env
 .env.*
 **/.DS_Store
+.stack
+.demo

@@ -6,21 +6,32 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DEFAULT_KDF_ITERATIONS,
+  RecoveryCodeError,
   decryptJSON,
   deriveKeys,
+  derivePassphraseKeys,
+  deriveRecoveryKeys,
   encryptJSON,
   generateContentKey,
   generateIdentity,
+  generateRecoveryCode,
+  importAccountSecret,
+  legacyAccountSecret,
   newKdfSalt,
+  parseRecoveryCode,
+  unlockAccount,
+  unwrapAccountSecret,
   unwrapKeyWithMaster,
   unwrapPrivateKey,
+  wrapAccountSecret,
   wrapKeyWithMaster,
 } from '@matra/crypto';
-import type { AttorneyProfile, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
+import type { AttorneyProfile, AuthResponse, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
+import { mirror } from '../dev/mirror';
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
 
@@ -56,10 +67,46 @@ export interface RegisterInput {
   preferredName?: string;
 }
 
+/**
+ * A recovery code made on this device and shown to her, not yet sent. `commit()` sends only what the server stores
+ * (a hash input and wrapped keys); the code itself and the account secret never leave this device, and the secret is
+ * already wiped from memory by the time this exists. Until she commits, her old code (if any) keeps working.
+ */
+export interface PendingRecoveryCode {
+  code: string;
+  replacing: boolean;
+  commit(): Promise<void>;
+}
+
+/**
+ * A signed-out reset in progress: her alias and code were accepted, and her account secret is held in memory only
+ * until `finish` (or `cancel`) wipes it. `finish` sets the new passphrase (the used code is burned on the server),
+ * signs her in, and returns a NEW recovery code made on this device: it is saved only when she confirms she wrote it
+ * down (`newCode.commit()`), so until then her account has no code rather than one nobody holds.
+ */
+export interface RecoveryReset {
+  finish(newPassphrase: string, onProgress?: (p: Progress) => void): Promise<{ session: Session; newCode: PendingRecoveryCode }>;
+  cancel(): void;
+}
+
 export class SessionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SessionError';
+  }
+}
+
+/**
+ * A reset whose earlier attempt failed in transit was then refused as spent: the server may have set her new
+ * passphrase after all (her old code is burned either way), so she should try signing in with it.
+ */
+export class RecoveryMaybeFinishedError extends SessionError {
+  constructor() {
+    super(
+      'Your earlier attempt may have gone through: your new passphrase could already be set. Try signing in with it. ' +
+        'If it doesn’t work, sign in with your old passphrase, or use your recovery code again.',
+    );
+    this.name = 'RecoveryMaybeFinishedError';
   }
 }
 
@@ -82,6 +129,12 @@ interface SessionCtx {
   getProfile(): Promise<VaultProfile | null>;
   /** Encrypt and save her preferences (e.g. `{ preferredName }`) as a profile vault record. */
   saveProfile(input: { preferredName?: string }): Promise<VaultProfile>;
+  /** Signed in: check her passphrase on this device, then make a recovery code to show her (sent on commit). */
+  prepareRecoveryCode(passphrase: string, onProgress?: (p: Progress) => void): Promise<PendingRecoveryCode>;
+  /** Signed in: remove her recovery code (her passphrase keeps working). */
+  turnOffRecovery(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
+  /** Signed out: alias + recovery code → a reset she finishes by choosing a new passphrase. */
+  beginRecovery(username: string, code: string, onProgress?: (p: Progress) => void): Promise<RecoveryReset>;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -161,6 +214,11 @@ export function SessionProvider({
       const kdfSalt = newKdfSalt();
       onProgress?.('deriving');
       const { authKey, masterKey } = await deriveKeys(passphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);
+      mirror(
+        `Passphrase for "${username.trim()}"`,
+        `${'•'.repeat(Math.min(passphrase.length, 24))} (${passphrase.length} characters, hidden here too)`,
+        'Never sent. Her device derives keys from it (PBKDF2-SHA256, 600,000 rounds): one proves it to the server, which keeps only a salted hash of that; the other never leaves.',
+      );
       onProgress?.('generating');
       const identity = await generateIdentity(masterKey);
       onProgress?.('contacting');
@@ -199,24 +257,9 @@ export function SessionProvider({
     [api, adopt, fetchImpl, saveProfile],
   );
 
-  const login = useCallback<SessionCtx['login']>(
-    async (username, passphrase, onProgress) => {
-      const name = username.trim();
-      onProgress?.('contacting');
-      const pre = await api.prelogin(name);
-      onProgress?.('deriving');
-      const { authKey, masterKey } = await deriveKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
-      onProgress?.('contacting');
-      let res;
-      try {
-        res = await api.login({ username: name, authKey });
-      } catch (e) {
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403 || e.status === 404)) {
-          throw new SessionError('That alias and passphrase don’t match. Check for typos and try again.');
-        }
-        throw e;
-      }
-      onProgress?.('unlocking');
+  /** After the server accepted her: open her private key, adopt the session, and do the survivor's sign-in chores. */
+  const enter = useCallback(
+    async (res: AuthResponse, masterKey: CryptoKey): Promise<Session> => {
       let privateKey: CryptoKey;
       try {
         privateKey = await unwrapPrivateKey(res.user.wrappedPrivateKey, masterKey);
@@ -244,7 +287,218 @@ export function SessionProvider({
       }
       return s;
     },
-    [api, adopt, fetchImpl, getProfile],
+    [adopt, fetchImpl, getProfile],
+  );
+
+  const login = useCallback<SessionCtx['login']>(
+    async (username, passphrase, onProgress) => {
+      const name = username.trim();
+      onProgress?.('contacting');
+      const pre = await api.prelogin(name);
+      onProgress?.('deriving');
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
+      onProgress?.('contacting');
+      let res;
+      try {
+        res = await api.login({ username: name, authKey: keys.authKey });
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403 || e.status === 404)) {
+          throw new SessionError('That alias and passphrase don’t match. Check for typos and try again.');
+        }
+        throw e;
+      }
+      onProgress?.('unlocking');
+      let masterKey: CryptoKey;
+      try {
+        // key version 2: her account secret, unwrapped with the passphrase key; version 1: derived as always
+        ({ masterKey } = await unlockAccount(keys, res.user.keyVersion === 2 ? res.user.wrappedAccountKey : undefined));
+      } catch {
+        throw new SessionError('Passphrase incorrect — your vault could not be opened.');
+      }
+      return enter(res, masterKey);
+    },
+    [api, enter],
+  );
+
+  // ── recovery code (W20) ──
+
+  /** Her account secret from her passphrase, checked on this device. The caller wipes it. */
+  const accountSecretFromPassphrase = useCallback(
+    async (s: Session, passphrase: string) => {
+      const pre = await api.prelogin(s.user.username);
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
+      const wrong = () => new SessionError('That passphrase isn’t right. Check for typos and try again.');
+      let as: Uint8Array;
+      try {
+        as = s.user.keyVersion === 2 && s.user.wrappedAccountKey
+          ? await unwrapAccountSecret(s.user.wrappedAccountKey, keys.kek)
+          : await legacyAccountSecret(keys.ikm);
+      } catch {
+        throw wrong();
+      }
+      try {
+        // version 1 derives "something" from any passphrase: prove it is hers by opening her private key with it
+        const { masterKey } = await importAccountSecret(as);
+        await unwrapPrivateKey(s.user.wrappedPrivateKey, masterKey);
+      } catch {
+        as.fill(0);
+        throw wrong();
+      }
+      return { as, keys };
+    },
+    [api],
+  );
+
+  const prepareRecoveryCode = useCallback<SessionCtx['prepareRecoveryCode']>(
+    async (passphrase, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      onProgress?.('deriving');
+      const { as, keys } = await accountSecretFromPassphrase(s, passphrase);
+      let body;
+      const { bytes, code } = generateRecoveryCode();
+      try {
+        const rk = await deriveRecoveryKeys(bytes);
+        body = {
+          authKey: keys.authKey,
+          ...(s.user.keyVersion !== 2 && { wrappedAccountKey: await wrapAccountSecret(as, keys.kek) }),
+          recoveryAuthKey: rk.authKey,
+          recoveryWrappedKey: await wrapAccountSecret(as, rk.kek),
+        };
+      } finally {
+        as.fill(0);
+        bytes.fill(0);
+      }
+      return {
+        code,
+        replacing: s.user.hasRecoveryCode,
+        commit: async () => {
+          try {
+            const { user } = await api.setUpRecovery(body);
+            if (sessionRef.current === s) {
+              const next = { ...s, user };
+              sessionRef.current = next;
+              setSession(next);
+            }
+          } catch (e) {
+            if (e instanceof ApiError && e.status === 401) throw new SessionError('That passphrase isn’t right. Nothing was changed.');
+            throw e;
+          }
+        },
+      };
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const turnOffRecovery = useCallback<SessionCtx['turnOffRecovery']>(
+    async (passphrase, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      onProgress?.('deriving');
+      const { as, keys } = await accountSecretFromPassphrase(s, passphrase);
+      as.fill(0);
+      onProgress?.('contacting');
+      const { user } = await api.turnOffRecovery({ authKey: keys.authKey });
+      if (sessionRef.current === s) {
+        const next = { ...s, user };
+        sessionRef.current = next;
+        setSession(next);
+      }
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const beginRecovery = useCallback<SessionCtx['beginRecovery']>(
+    async (username, code, onProgress) => {
+      let codeBytes: Uint8Array;
+      try {
+        codeBytes = parseRecoveryCode(code);
+      } catch (e) {
+        throw new SessionError(e instanceof RecoveryCodeError ? e.message : 'That code doesn’t look right.');
+      }
+      const rk = await deriveRecoveryKeys(codeBytes);
+      codeBytes.fill(0);
+      onProgress?.('contacting');
+      let start;
+      try {
+        start = await api.recoverStart({ username: username.trim(), recoveryAuthKey: rk.authKey });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401)
+          throw new SessionError('That alias and recovery code don’t match. Check both for typos and try again.');
+        throw e;
+      }
+      let as: Uint8Array | null;
+      try {
+        as = await unwrapAccountSecret(start.recoveryWrappedKey, rk.kek);
+      } catch {
+        throw new SessionError('Your recovery code was accepted, but your space could not be opened with it.');
+      }
+      const wipe = () => {
+        as?.fill(0);
+        as = null;
+      };
+      // set once a finish request may have reached the server without an answer (network error, 5xx)
+      let unanswered = false;
+      return {
+        cancel: wipe,
+        finish: async (newPassphrase, progress) => {
+          const secret = as;
+          if (!secret) throw new SessionError('This reset has ended. Please enter your recovery code again.');
+          progress?.('deriving');
+          const kdfSalt = newKdfSalt();
+          const keys = await derivePassphraseKeys(newPassphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);
+          const next = generateRecoveryCode();
+          const nrk = await deriveRecoveryKeys(next.bytes);
+          next.bytes.fill(0);
+          const body = {
+            resetToken: start.resetToken,
+            kdfSalt,
+            kdfIterations: DEFAULT_KDF_ITERATIONS,
+            authKey: keys.authKey,
+            wrappedAccountKey: await wrapAccountSecret(secret, keys.kek),
+          };
+          // the new code's material, sent only on commit (after she confirms), re-authenticated by the new passphrase
+          const codeBody = {
+            authKey: keys.authKey,
+            recoveryAuthKey: nrk.authKey,
+            recoveryWrappedKey: await wrapAccountSecret(secret, nrk.kek),
+          };
+          const { masterKey } = await importAccountSecret(secret);
+          progress?.('contacting');
+          let res;
+          try {
+            res = await api.recoverFinish(body);
+          } catch (e) {
+            if (e instanceof ApiError && e.status === 401) {
+              wipe(); // the token is spent: she starts again with her code
+              if (unanswered) throw new RecoveryMaybeFinishedError();
+              throw new SessionError('This reset has expired. Please enter your recovery code again.');
+            }
+            // no answer, or a server error: it may have committed (a 4xx such as 429 is refused before the token is used)
+            if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) unanswered = true;
+            throw e;
+          }
+          wipe();
+          progress?.('unlocking');
+          const session = await enter(res, masterKey);
+          const newCode: PendingRecoveryCode = {
+            code: next.code,
+            replacing: false,
+            commit: async () => {
+              const { user } = await api.setUpRecovery(codeBody);
+              const s = sessionRef.current;
+              if (s && s.user.id === user.id) {
+                const updated = { ...s, user };
+                sessionRef.current = updated;
+                setSession(updated);
+              }
+            },
+          };
+          return { session, newCode };
+        },
+      };
+    },
+    [api, enter],
   );
 
   const logout = useCallback(async () => {
@@ -324,8 +578,29 @@ export function SessionProvider({
       profile,
       getProfile,
       saveProfile,
+      prepareRecoveryCode,
+      turnOffRecovery,
+      beginRecovery,
     }),
-    [session, api, lockReason, register, login, logout, lock, refreshProfile, getWorkingData, setWorkingData, workingVersion, profile, getProfile, saveProfile],
+    [
+      session,
+      api,
+      lockReason,
+      register,
+      login,
+      logout,
+      lock,
+      refreshProfile,
+      getWorkingData,
+      setWorkingData,
+      workingVersion,
+      profile,
+      getProfile,
+      saveProfile,
+      prepareRecoveryCode,
+      turnOffRecovery,
+      beginRecovery,
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -347,7 +622,8 @@ export function useRequiredSession(): SessionCtx & { session: Session } {
 export function friendlyError(e: unknown): string {
   if (e instanceof SessionError) return e.message;
   if (e instanceof ApiError) {
-    if (e.status === 409) return 'Someone already uses that alias. Please try another one.';
+    // 409 from register is the alias; other conflicts (e.g. phone_limit_reached) carry their own message
+    if (e.status === 409 && (!e.code || e.code === 'username_taken')) return 'Someone already uses that alias. Please try another one.';
     return e.message;
   }
   return 'Something didn’t work. Nothing was shared. Please try again.';

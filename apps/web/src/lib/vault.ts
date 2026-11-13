@@ -15,6 +15,8 @@ import {
   normalizeMatchIdentifier,
   refreshMatchEntries,
   submitMatchEntry,
+  ThresholdOprfError,
+  AttestationError,
   generateContentKey,
   randomId,
   sha256Hex,
@@ -26,7 +28,9 @@ import { envelopeHash, type ApiClient } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
 import { MATCHING_CONSENT_LINES } from './disclosures';
 import { stripMetadata } from './metadata';
+import type { WorkingData } from './session';
 import { MATCH_PINS } from '../matchPins';
+import { mirror, typedText } from '../dev/mirror';
 
 /** Her personal preferences, stored only inside an encrypted 'profile' vault record. */
 export interface VaultProfile {
@@ -61,6 +65,11 @@ export async function sealPayload(api: ApiClient, masterKey: CryptoKey, payload:
   const key = await generateContentKey();
   const envelope = await encryptJSON(payload, key);
   const ownerWrappedKey = await wrapKeyWithMaster(key, masterKey);
+  mirror(
+    payload.kind === 'final' ? 'Her story (sealed)' : payload.kind === 'profile' ? 'Her preferences' : 'Her story (draft, saved as she goes)',
+    typedText(payload.kind === 'final' ? payload.record : payload),
+    `Encrypted here (AES-256-GCM, a new key per version). The server gets the envelope (${envelope.ct.length} base64 characters), the key wrapped by her own key, and a hash.`,
+  );
   const res = await api.createRecord({ envelope, ownerWrappedKey, supersedes });
   return { ...res, key };
 }
@@ -176,6 +185,11 @@ export async function uploadEvidence(
   const key = await generateContentKey();
   const ct = await encryptBlob(bytes, key);
   const wrapped = await wrapKeyWithMaster(key, masterKey);
+  mirror(
+    'Evidence file',
+    `${file.name} (${formatBytes(bytes.byteLength)}${stripped ? ', location and camera data removed here' : ''})`,
+    `Encrypted here. The server gets ${formatBytes(ct.byteLength)} of ciphertext and its hash; not the file name.`,
+  );
   const res = await api.uploadBlob(ct, wrapped);
   const item: EvidenceItem = {
     id: randomId(),
@@ -208,6 +222,22 @@ export function mergeEvidence(...lists: (EvidenceItem[] | undefined)[]): Evidenc
   const out = new Map<string, EvidenceItem>();
   for (const l of lists) for (const e of l ?? []) out.set(e.blobId ?? e.id, e);
   return Array.from(out.values());
+}
+
+/**
+ * The story's working copy, plus any files the in-memory working data has that it doesn't (details saved by the
+ * Evidence page after the story opened). Her draft stays the story's own; the draft-record id follows the newer save.
+ * Returns null when there is nothing new.
+ */
+export function foldInLateEvidence(story: WorkingData, mem: WorkingData | null): WorkingData | null {
+  if (!mem) return null;
+  const known = new Set(story.evidence.map((e) => e.blobId ?? e.id));
+  if (mem.evidence.every((e) => known.has(e.blobId ?? e.id))) return null;
+  return {
+    ...story,
+    evidence: mergeEvidence(story.evidence, mem.evidence),
+    savedDraftRecordId: mem.savedDraftRecordId ?? story.savedDraftRecordId,
+  };
 }
 
 // ───────────── sealed matching (escrow) ─────────────
@@ -262,14 +292,47 @@ export function matchContactFrom(record: IntakeRecord, input?: MatchContactInput
 }
 
 export class MatchingError extends Error {
-  constructor(message: string) {
+  /** `phone_verification_required`: she has to confirm a phone number first (counselor/PhoneVerify.tsx). */
+  constructor(
+    message: string,
+    readonly code?: 'phone_verification_required',
+  ) {
     super(message);
     this.name = 'MatchingError';
   }
 }
 
+/** The message the sealed screen and Home show when a sealed match waits for her phone confirmation. */
+export const PHONE_VERIFICATION_NEEDED = 'Your story is sealed. To turn on your sealed match, confirm a phone number first.';
+
 /** Local (vault-only) fingerprint of a canonical identifier, for de-duplication. Never sent to the server. */
 const localKey = (canonical: string) => sha256Hex(`matra/match/v1/local|${canonical}`);
+
+type MatchTodo = { label: string; id: Extract<ReturnType<typeof normalizeMatchIdentifier>, { ok: true }>; key: string };
+
+/** The opted-in, matchable identifiers in `record` that are not sealed yet (not in `done`). */
+async function matchTodo(record: IntakeRecord, done: Set<string>): Promise<MatchTodo[]> {
+  const todo: MatchTodo[] = [];
+  for (const p of record.perpetrators) {
+    if (!p.escrowOptIn) continue;
+    for (const raw of p.identifiers) {
+      // Only unique identifiers: free text ('other') and names are never sealed, whatever they look like.
+      if (raw.kind !== 'email' && raw.kind !== 'phone' && raw.kind !== 'social_handle') continue;
+      const id = normalizeMatchIdentifier(raw.kind, raw.value, raw.platform);
+      if (!id.ok) continue; // names and unrecognised text are never sealed
+      const key = await localKey(id.canonical);
+      if (done.has(key) || todo.some((t) => t.key === key)) continue;
+      const label = `${p.name?.trim() || 'A person you named'} · ${ESCROW_KIND_LABEL[id.kind] ?? 'identifier'}${id.platform ? ` (${id.platform})` : ''}`;
+      todo.push({ label, id, key });
+    }
+  }
+  return todo;
+}
+
+/** Does her sealed record still have identifiers she chose to seal for matching that aren't sealed yet? */
+export async function hasUnsealedMatches(record: IntakeRecord | undefined, alreadyLodged: string[] = []): Promise<boolean> {
+  return !!record && (await matchTodo(record, new Set(alreadyLodged))).length > 0;
+}
 
 /**
  * Seal every opted-in perpetrator identifier for sealed matching (Callisto-style; see packages/crypto/src/matching.ts).
@@ -288,42 +351,43 @@ export async function lodgeEscrow(
   opts: { contact?: MatchContactInput; consentStatement?: string } = {},
 ): Promise<string[]> {
   const done = new Set(alreadyLodged);
-  const todo: Array<{ label: string; id: Extract<ReturnType<typeof normalizeMatchIdentifier>, { ok: true }>; key: string }> = [];
-  for (const p of record.perpetrators) {
-    if (!p.escrowOptIn) continue;
-    for (const raw of p.identifiers) {
-      // Only unique identifiers: free text ('other') and names are never sealed, whatever they look like.
-      if (raw.kind !== 'email' && raw.kind !== 'phone' && raw.kind !== 'social_handle') continue;
-      const id = normalizeMatchIdentifier(raw.kind, raw.value, raw.platform);
-      if (!id.ok) continue; // names and unrecognised text are never sealed
-      const key = await localKey(id.canonical);
-      if (done.has(key) || todo.some((t) => t.key === key)) continue;
-      const label = `${p.name?.trim() || 'A person you named'} · ${ESCROW_KIND_LABEL[id.kind] ?? 'identifier'}${id.platform ? ` (${id.platform})` : ''}`;
-      todo.push({ label, id, key });
-    }
-  }
+  const todo = await matchTodo(record, done);
   if (!todo.length) return Array.from(done);
   const contact = matchContactFrom(record, opts.contact);
   if (!contact)
     throw new MatchingError('To use a sealed match, add a safe way for a legal options counselor to reach you (a phone number or email).');
+  // Phone verify-then-forget (W13): asked first, because without it every key holder refuses and the error says nothing.
+  const phone = await api.phoneVerificationStatus();
+  if (phone.required && !phone.verified) throw new MatchingError(PHONE_VERIFICATION_NEEDED, 'phone_verification_required');
   const config = await api.matchingConfig();
   if (!config.counselors.length) throw new MatchingError('Sealed matching isn’t available right now. Nothing was sealed.');
   const transport = { ...matchTransport(api), config: async () => config };
   for (const t of todo) {
     // Her (padded, encrypted) label keeps the canonical identifier, contact and share, so her client can re-seal after
     // a key rotation and add seals for new counselors without asking her again.
+    mirror(
+      'Sealed match: the person she named',
+      `${t.id.canonical} · happened in ${record.incident.jurisdiction?.state ?? '(no state)'} · she lives in ${record.survivor.residenceState ?? '(no state)'} · contact by ${contact.methods.join(', ')}`,
+      'Blinded here: each key holder gets a random-looking group element, the app server a tag it cannot reverse. The two states are sealed to the attested matcher only; her contact details to the counselors on the signed roster.',
+    );
     try {
       await submitMatchEntry(transport, {
         masterKey,
         identifier: t.id,
         contact,
         consentStatement: opts.consentStatement ?? MATCHING_CONSENT_STATEMENT,
-        state: record.incident.jurisdiction?.state ?? record.survivor.residenceState,
+        // routing: a counselor licensed where it happened, else where she lives (sealed to the matcher only)
+        states: { incident: record.incident.jurisdiction?.state, survivor: record.survivor.residenceState },
         label: t.label,
         config,
         pins: MATCH_PINS,
       });
     } catch (e) {
+      // Fewer than t key holders answered (or one answered with a key other than its published one): nothing sealed.
+      if (e instanceof ThresholdOprfError || (e as { code?: string }).code === 'holders_unavailable' || (e as { code?: string }).code === 'matcher_unavailable')
+        throw new MatchingError('Sealed matching isn’t available right now. Nothing was sealed.');
+      // The matcher's attestation did not verify (not the published code, not the trusted platform): nothing was sent.
+      if (e instanceof AttestationError) throw new MatchingError(MATCHER_NOT_TRUSTED);
       if ((e as { code?: string }).code !== 'already_sealed') throw e;
     }
     done.add(t.key);
@@ -331,10 +395,17 @@ export async function lodgeEscrow(
   return Array.from(done);
 }
 
+/** Shown when the matcher's attestation fails: it is not running the code (or on the platform) this app trusts. */
+export const MATCHER_NOT_TRUSTED = 'This matcher isn’t running the code this app trusts, so nothing was sealed. Your story is saved.';
+
 function matchTransport(api: ApiClient) {
   return {
     config: () => api.matchingConfig(),
-    evaluate: (h: 'a' | 'b', req: { blinded: string }) => api.oprfEvaluate(h, req),
+    attestation: (nonce: string) => api.matcherAttestation(nonce),
+    evaluate: (i: number, req: { blinded: string }) => api.oprfEvaluate(i, req),
+    // Sealing still went ahead with t valid holders. Indices only (no identifier); there is no operator report channel yet.
+    onBadHolders: (indices: number[]) =>
+      console.warn(`[matra] OPRF key holder${indices.length > 1 ? 's' : ''} ${indices.join(', ')} answered with an invalid proof; sealed using the others.`),
     createEntry: (req: Parameters<ApiClient['createMatchEntry']>[0]) => api.createMatchEntry(req),
     listEntries: () => api.listMatchEntries(),
     addSeals: (id: string, req: Parameters<ApiClient['addMatchSeals']>[1]) => api.addMatchSeals(id, req),

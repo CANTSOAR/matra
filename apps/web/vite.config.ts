@@ -31,21 +31,84 @@ function ortRuntimeFromModels(): Plugin {
 }
 
 /**
- * Build-time pins for sealed matching (docs/SECURITY_WHITEPAPER.md §4a). Production builds set all three, so the app
- * server cannot substitute OPRF keys or counselors it controls:
- *   MATRA_OPRF_PUBKEY_A / MATRA_OPRF_PUBKEY_B   base64 public keys of the two OPRF key holders
- *   MATRA_COUNSELOR_ROSTER_PUBKEY              base64 Ed25519 key of the org that signs the counselor roster
+ * Build-time pins for sealed matching (docs/SECURITY_WHITEPAPER.md §4a). Production builds set them all, so the app
+ * server cannot substitute OPRF keys or counselors it controls (values from `npm run -w @matra/server oprf-ceremony`):
+ *   MATRA_OPRF_THRESHOLD          t (default 2 when the keys below are set)
+ *   MATRA_OPRF_GROUP_PUBKEY       base64 group public key k·G of the threshold OPRF
+ *   MATRA_OPRF_SHARE_PUBKEYS      base64 share public keys of holders 1..m, comma-separated, in index order
+ *   MATRA_COUNSELOR_ROSTER_PUBKEY base64 Ed25519 key of the org that signs the counselor roster
  * Unset (development): nothing is pinned and the client logs a warning.
  */
+if (process.env.MATRA_OPRF_PUBKEY_A || process.env.MATRA_OPRF_PUBKEY_B)
+  throw new Error('MATRA_OPRF_PUBKEY_A/B were replaced by MATRA_OPRF_GROUP_PUBKEY + MATRA_OPRF_SHARE_PUBKEYS (threshold OPRF; see docs/DEPLOY.md).');
 const matchPins = {
-  oprfA: process.env.MATRA_OPRF_PUBKEY_A || '',
-  oprfB: process.env.MATRA_OPRF_PUBKEY_B || '',
+  oprfT: Number(process.env.MATRA_OPRF_THRESHOLD || 2),
+  oprfGroup: process.env.MATRA_OPRF_GROUP_PUBKEY || '',
+  oprfShares: (process.env.MATRA_OPRF_SHARE_PUBKEYS || '').split(',').map((s) => s.trim()).filter(Boolean),
   rosterKey: process.env.MATRA_COUNSELOR_ROSTER_PUBKEY || '',
 };
+// The OPRF pin is all-or-nothing: a build with only some of these set (one missing or misspelled) would otherwise ship
+// with NO OPRF pin and trust whatever key set the server sends. And a set that is not one consistent t-of-m key
+// (wrong t, a share from another ceremony, a wrong group key) fails here rather than in every survivor's sealing.
+{
+  const oprfVars = ['MATRA_OPRF_THRESHOLD', 'MATRA_OPRF_GROUP_PUBKEY', 'MATRA_OPRF_SHARE_PUBKEYS'] as const;
+  const set = oprfVars.filter((v) => (process.env[v] ?? '').trim() !== '');
+  if (set.length && set.length !== oprfVars.length)
+    throw new Error(`OPRF pins are all-or-nothing: ${set.join(', ')} set but ${oprfVars.filter((v) => !set.includes(v)).join(', ')} missing (see docs/DEPLOY.md).`);
+  if (set.length) {
+    // threshold.ts itself (the @matra/crypto barrel's extensionless imports do not load in a Node-run config), and only
+    // when pins are set, so dev builds do not pull it in
+    const { checkThresholdKeys } = await import('../../packages/crypto/src/threshold.ts');
+    const fromBase64 = (b: string) => new Uint8Array(Buffer.from(b, 'base64'));
+    if (!Number.isInteger(matchPins.oprfT)) throw new Error('MATRA_OPRF_THRESHOLD must be an integer');
+    try {
+      checkThresholdKeys({
+        t: matchPins.oprfT,
+        groupPublicKey: fromBase64(matchPins.oprfGroup),
+        holders: matchPins.oprfShares.map((pk, i) => ({ index: i + 1, publicKey: fromBase64(pk) })),
+      });
+    } catch (e) {
+      throw new Error(`OPRF pins are inconsistent (MATRA_OPRF_THRESHOLD / _GROUP_PUBKEY / _SHARE_PUBKEYS): ${(e as Error).message}`);
+    }
+  }
+}
 
-export default defineConfig({
+/**
+ * The matcher this build trusts (matcher-service; docs/threat-model.md W18). Both or neither:
+ *   MATRA_ATTESTATION_PLATFORM_PUBKEY  base64 Ed25519 key of the attestation platform
+ *   MATRA_MATCHER_MEASUREMENT          hex measurement of the published matcher build (npm run -w @matra/matcher measure)
+ * Pinned builds refuse a matcher that is not that build, and refuse a SIMULATED attestation unless MATRA_DEMO_MODE=1 at
+ * build time (__MATRA_DEMO__, a fictional-data demo build). Unset (development): any attestation, with a warning.
+ * A production `vite build` without them fails unless MATRA_DEMO_MODE=1: the attestation reaches the client through
+ * the app server's proxy, so an unpinned client would seal every survivor's states to whatever key the app server
+ * hands it (matchPins.ts applies the same rule at run time).
+ */
+const attestationPins = {
+  platformKey: (process.env.MATRA_ATTESTATION_PLATFORM_PUBKEY || '').trim(),
+  measurement: (process.env.MATRA_MATCHER_MEASUREMENT || '').trim().toLowerCase(),
+};
+if (!!attestationPins.platformKey !== !!attestationPins.measurement)
+  throw new Error('Matcher pins are all-or-nothing: set both MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT, or neither (see docs/DEPLOY.md).');
+if (attestationPins.measurement && !/^[0-9a-f]{64}$/.test(attestationPins.measurement))
+  throw new Error('MATRA_MATCHER_MEASUREMENT must be 64 hex characters (npm run -w @matra/matcher measure)');
+const demoBuild = process.env.MATRA_DEMO_MODE === '1';
+
+/** Throws for a production build of the app (not the voice-only test page) with no matcher pins, unless a demo build. */
+export function assertMatcherPinned(o: { command: string; mode: string; pinned: boolean; demo: boolean; harnessOnly: boolean }) {
+  if (o.command === 'build' && o.mode === 'production' && !o.harnessOnly && !o.pinned && !o.demo)
+    throw new Error(
+      'A production build needs the matcher pins MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT (see docs/DEPLOY.md). ' +
+        'Set MATRA_DEMO_MODE=1 only for a fictional-data demo build.',
+    );
+}
+
+const config = {
   plugins: [react()],
-  define: { __MATRA_MATCH_PINS__: JSON.stringify(matchPins) },
+  define: {
+    __MATRA_MATCH_PINS__: JSON.stringify(matchPins),
+    __MATRA_ATTESTATION__: JSON.stringify(attestationPins),
+    __MATRA_DEMO__: JSON.stringify(demoBuild),
+  },
   // The transcription worker (src/voice/worker.ts) is an ES module worker: it code-splits and uses import.meta.
   worker: { format: 'es', plugins: () => [ortRuntimeFromModels()] },
   build: voiceHarness
@@ -67,4 +130,15 @@ export default defineConfig({
     ...(process.env.MATRA_WEB_NO_HMR && { hmr: false, watch: null }),
   },
   test: { environment: 'jsdom', setupFiles: ['./src/test-setup.ts'], testTimeout: 30_000 },
-} as any);
+} as any;
+
+export default defineConfig(({ command, mode }) => {
+  assertMatcherPinned({
+    command,
+    mode,
+    pinned: !!attestationPins.measurement,
+    demo: demoBuild,
+    harnessOnly: process.env.MATRA_VOICE_HARNESS === 'only',
+  });
+  return config;
+});

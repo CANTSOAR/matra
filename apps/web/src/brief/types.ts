@@ -12,6 +12,8 @@ export interface BriefOptions {
   redactContactInfo?: boolean;
   /** e.g. "Middlesex County Prosecutor's Office — Special Victims Unit" */
   preparedFor?: string;
+  /** Address of the in-browser checker printed in "How to verify" (default: this app's origin + /verify). */
+  verifyUrl?: string;
 }
 
 export interface BriefRow {

@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage, t
 import type { BriefBlock, BriefRow, BriefSection, BriefTableRow } from '../types';
 import { NOT_PROVIDED } from '../format';
 import { makeSanitizer, wrapText, type Sanitizer } from './text';
+import { embedVerification, type SummaryVerification } from '../verification';
 
 // ── Page geometry (US Letter) ──
 const PAGE_W = 612;
@@ -50,6 +51,8 @@ export interface RenderConfig {
   /** Inserted after the first section if any text needed substitution. */
   sanitizedNote: string;
   meta: { title: string; subject: string; date: Date };
+  /** Machine-readable data for the in-browser checker (/verify), stored in the document information dictionary. */
+  verification?: SummaryVerification;
 }
 
 interface Fonts {
@@ -150,6 +153,7 @@ export async function renderPdf(sections: BriefSection[], cfg: RenderConfig): Pr
   doc.setCreator('Matra');
   doc.setCreationDate(cfg.meta.date);
   doc.setModificationDate(cfg.meta.date);
+  if (cfg.verification) embedVerification(doc, cfg.verification);
   return doc.save();
 }
 

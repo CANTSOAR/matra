@@ -4,14 +4,16 @@ import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react
 import type { Role } from '@matra/shared';
 import { NEUTRAL_TITLE, QuickExitButton } from '../lib/quickExit';
 import { useSession } from '../lib/session';
+import { useDim } from '../lib/theme';
+import { DEMO_BUILD } from '../matchPins';
 
 /**
  * Demo instances show a permanent banner. The production server adds <meta name="matra-demo-banner" content="1">
  * when MATRA_DEMO_BANNER=1 (a meta tag, because the CSP forbids inline scripts); VITE_MATRA_DEMO_BANNER=1 does the
- * same for a dev build.
+ * same for a dev build, and a demo build (MATRA_DEMO_MODE=1) always shows it.
  */
 export function isDemoInstance(): boolean {
-  if (import.meta.env.VITE_MATRA_DEMO_BANNER === '1') return true;
+  if (import.meta.env.VITE_MATRA_DEMO_BANNER === '1' || DEMO_BUILD) return true;
   return typeof document !== 'undefined' && document.querySelector('meta[name="matra-demo-banner"]')?.getAttribute('content') === '1';
 }
 
@@ -52,6 +54,22 @@ function useFocusOnNavigate() {
       clearTimeout(t);
     };
   }, [loc.pathname]);
+}
+
+/** "Dim" / "Brighten": a softer, darker screen for late at night, only for this tab (lib/theme.ts). */
+function DimToggle() {
+  const [dim, setDim] = useDim();
+  return (
+    <button
+      type="button"
+      className="btn btn-quiet btn-small dim-btn"
+      aria-pressed={dim}
+      title={dim ? 'Make the screen bright again' : 'A darker, softer screen for night time'}
+      onClick={() => setDim(!dim)}
+    >
+      {dim ? 'Brighten' : 'Dim'}
+    </button>
+  );
 }
 
 export function Layout() {
@@ -98,6 +116,7 @@ export function Layout() {
             </nav>
           )}
           <span className="header-spacer" />
+          <DimToggle />
           {session && (
             <button
               type="button"

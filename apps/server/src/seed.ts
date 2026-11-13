@@ -2,7 +2,8 @@
  * Matra demo seed — idempotent. Creates FICTIONAL demo accounts through the real API
  * (client-side key derivation with @matra/crypto, exactly like the web app):
  *   - 3 verified attorneys (NJ / NY)
- *   - 1 verified Legal Options Counselor, counselor.demo (receives matched sealed-match groups only)
+ *   - 2 verified Legal Options Counselors (receive matched sealed-match groups only, each group to ONE of them, by state):
+ *     counselor.demo licensed in NJ, counselor.ny licensed in NY
  *   - 1 survivor, jane.demo, with no records (the live demo creates them)
  *
  *   npm run seed -w @matra/server          (MATRA_DB_PATH overrides the DB location)
@@ -11,15 +12,23 @@ import type { AddressInfo } from 'node:net';
 import { DEFAULT_KDF_ITERATIONS, deriveKeys, generateIdentity, newKdfSalt } from '@matra/crypto';
 import type { AuthResponse, RegisterRequest } from '@matra/shared';
 import { createApp, getDb } from './app.js';
-import { loadMatchingSettings, loadOprfKey, loadPepper, resolveDbPath } from './config.js';
+import { loadMatchingSettings, loadOprfThreshold, loadPepper, resolveDbPath } from './config.js';
 
 const ATTORNEY_PASSPHRASE = 'demo-attorney-passphrase';
 const SURVIVOR_PASSPHRASE = 'demo-survivor-passphrase';
 const COUNSELOR_PASSPHRASE = 'demo-counselor-passphrase';
-const COUNSELOR = {
-  username: 'counselor.demo',
-  profile: { displayName: 'Demo — Sam Lee, Legal Options Counselor', organization: 'Demo — Matra Legal Options Counseling', jurisdictions: ['NJ', 'NY'] },
-};
+// For counselors, `jurisdictions` are the states she is licensed in: the matcher assigns each matched group to a
+// counselor licensed in the incident state if possible, else in the survivor's state (apps/matcher).
+const COUNSELORS = [
+  {
+    username: 'counselor.demo',
+    profile: { displayName: 'Demo — Sam Lee, Legal Options Counselor', organization: 'Demo — Matra Legal Options Counseling', jurisdictions: ['NJ'] },
+  },
+  {
+    username: 'counselor.ny',
+    profile: { displayName: 'Demo — Robin Ortiz, Legal Options Counselor', organization: 'Demo — Matra Legal Options Counseling', jurisdictions: ['NY'] },
+  },
+];
 
 type AttorneySeed = { username: string; profile: NonNullable<RegisterRequest['attorneyProfile']> };
 
@@ -61,7 +70,7 @@ const ATTORNEYS: AttorneySeed[] = [
 
 async function main() {
   const dbPath = resolveDbPath();
-  const app = createApp({ dbPath, pepper: loadPepper(), matching: { keyA: loadOprfKey('a'), keyB: loadOprfKey('b'), ...loadMatchingSettings() } });
+  const app = createApp({ dbPath, pepper: loadPepper(), matching: { oprf: loadOprfThreshold(), ...loadMatchingSettings() } });
   const db = getDb(app);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((r) => server.once('listening', () => r()));
@@ -116,12 +125,18 @@ async function main() {
         `UPDATE attorney_profiles SET verified = 1 WHERE user_id = (SELECT id FROM users WHERE username = ?)`,
       ).run(a.username);
     }
-    if (exists(COUNSELOR.username)) console.log(`[seed] skip   ${COUNSELOR.username} (exists)`);
-    else {
-      await register(COUNSELOR.username, COUNSELOR_PASSPHRASE, 'counselor', undefined, COUNSELOR.profile);
-      console.log(`[seed] create ${COUNSELOR.username}  — ${COUNSELOR.profile.displayName} / ${COUNSELOR.profile.organization}`);
+    for (const c of COUNSELORS) {
+      if (exists(c.username)) console.log(`[seed] skip   ${c.username} (exists)`);
+      else {
+        await register(c.username, COUNSELOR_PASSPHRASE, 'counselor', undefined, c.profile);
+        console.log(`[seed] create ${c.username}  — ${c.profile.displayName} / ${c.profile.organization}`);
+      }
+      // licensed states are (re)applied, so an older seeded DB moves to this split too
+      db.prepare(`UPDATE counselor_profiles SET verified = 1, jurisdictions = ? WHERE user_id = (SELECT id FROM users WHERE username = ?)`).run(
+        JSON.stringify(c.profile.jurisdictions),
+        c.username,
+      );
     }
-    db.prepare(`UPDATE counselor_profiles SET verified = 1 WHERE user_id = (SELECT id FROM users WHERE username = ?)`).run(COUNSELOR.username);
     if (exists('jane.demo')) console.log('[seed] skip   jane.demo (exists)');
     else {
       await register('jane.demo', SURVIVOR_PASSPHRASE, 'survivor');
@@ -130,7 +145,8 @@ async function main() {
 
     console.log('\n[seed] Matra demo accounts (ALL FICTIONAL — for demonstration only):');
     for (const a of ATTORNEYS) console.log(`  attorney  ${a.username.padEnd(14)} passphrase: ${ATTORNEY_PASSPHRASE}  [${a.profile.jurisdictions.join(', ')}] verified`);
-    console.log(`  counselor ${COUNSELOR.username.padEnd(14)} passphrase: ${COUNSELOR_PASSPHRASE}  [${COUNSELOR.profile.jurisdictions.join(', ')}] verified`);
+    for (const c of COUNSELORS)
+      console.log(`  counselor ${c.username.padEnd(14)} passphrase: ${COUNSELOR_PASSPHRASE}  [licensed: ${c.profile.jurisdictions.join(', ')}] verified`);
     console.log(`  survivor  ${'jane.demo'.padEnd(14)} passphrase: ${SURVIVOR_PASSPHRASE}`);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));

@@ -130,3 +130,50 @@ export const MATCHING_CONSENT_LINES: readonly string[] = [
   'This is a test version. For now, the people who run Matra could check whether a particular email or number was sealed. Before real use, the key that makes this possible will be split between separate organizations.',
   'You can withdraw a sealed match at any time. Nothing else happens unless you decide. It is completely okay to say no.',
 ];
+
+/**
+ * Staged release, Stage 1b (docs/design/WEEKEND_MVP.md §3.6; threat model W21). The conflict-check statement the
+ * assigned counselor records before contact details are shown to her. The server accepts statementVersion 1 only
+ * (packages/shared CONFLICT_CHECK_STATEMENT_VERSION); change the words → bump the version on both sides. Wording is
+ * a placeholder for review by counsel (Q-018); it describes a process, it is not legal advice.
+ */
+export const CONFLICT_CHECK_STATEMENT = {
+  version: 1,
+  lines: [
+    'Before you see anyone’s name, phone number or email, check the identifier and the states above against your own conflicts records, outside Matra.',
+    'If you, your organization, or anyone you work with represents or has represented the named person, or anyone else who could be adverse to these survivors, choose “I have a conflict”. The group goes to another counselor, and you won’t be given it again.',
+    'If there is no conflict, choose “I have no conflict”. Matra records that you checked, with the time, on its tamper-evident ledger.',
+  ],
+} as const;
+
+/**
+ * Staged release, Stage 2: what she reads before deciding whether a counselor may see her full report, and the words
+ * stored with her yes (buildReportConsentStatement). Short, calm, no pressure: no is a complete answer.
+ */
+export const REPORT_REQUEST_LINES: readonly string[] = [
+  'You don’t have to decide now, and you can say no. Nothing is shared unless you say yes.',
+  'If you say yes, only this counselor can open what you choose. It is locked on this device, for their key only.',
+  'It is not shared with anyone else who named the same person, and they are never told who you are.',
+  'You can stop sharing at any time. If you stop before the counselor opens it, they never see it. Once they have read it, stopping ends future access, but it can’t take back what they already read.',
+  'If you say no, the counselor only learns that you decided not to share. You never have to give a reason, and you won’t be asked again through Matra about this sealed match.',
+];
+
+/** The exact consent text stored with a report release (and hashed into its ledger entry). */
+export function buildReportConsentStatement(p: {
+  counselor: { displayName: string; organization?: string };
+  fingerprint: string;
+  withEvidence: number;
+  sealedAt: string;
+  expiresInDays: number;
+  at: string;
+}): string {
+  const who = `${p.counselor.displayName}${p.counselor.organization ? ` of ${p.counselor.organization}` : ''}`;
+  return [
+    `I choose to share my sealed Matra account (sealed ${p.sealedAt}) with ${who}, the legal options counselor who asked for it, and with no one else.`,
+    p.withEvidence > 0 ? `I am also sharing ${p.withEvidence} evidence file${p.withEvidence === 1 ? '' : 's'} I chose.` : 'I am not sharing any evidence files.',
+    `It is encrypted on my device so that only the holder of the key with fingerprint ${p.fingerprint} can open it.`,
+    'It is not shared with anyone else who named the same person.',
+    `Access ends after ${p.expiresInDays} days unless I stop it sooner. Stopping ends future access, but it can’t take back what was already read.`,
+    `Agreed at ${p.at}.`,
+  ].join('\n');
+}

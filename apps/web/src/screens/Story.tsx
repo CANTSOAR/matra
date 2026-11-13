@@ -6,10 +6,11 @@ import type { IntakeRecord, LedgerEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate } from '../components/common';
 import { IntakeChat, emptyDraft, type IntakeDraft } from '../integration/intakeAdapter';
 import { friendlyError, useRequiredSession, type WorkingData } from '../lib/session';
-import { latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
+import { MatchingError, foldInLateEvidence, latestOf, loadVault, mergeEvidence, resumeFrom, sealPayload, shortHash, uploadEvidence } from '../lib/vault';
 import { SaveStatus, StorySpace, safetyStage, toInterview, type SavePhase } from '../space';
 import { lodgeMatches } from '../space/adapters';
 import { matchContactOf } from '../intake/record';
+import { PhoneStepCard } from '../components/PhoneStepCard';
 
 /** Autosave to her vault: at most one save per minute, a moment after a meaningful change. */
 const MIN_GAP_MS = 60_000;
@@ -23,7 +24,7 @@ interface Boot {
 }
 
 export function Story() {
-  const { api, session, getWorkingData, setWorkingData, profile } = useRequiredSession();
+  const { api, session, getWorkingData, setWorkingData, workingVersion, profile } = useRequiredSession();
   const navigate = useNavigate();
   const [boot, setBoot] = useState<Boot | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -36,7 +37,7 @@ export function Story() {
   const pastSafetyRef = useRef(false);
   pastSafetyRef.current = pastSafety;
   const [sealing, setSealing] = useState<string | null>(null);
-  const [sealed, setSealed] = useState<{ entry: LedgerEntry; contentHash: string; escrowNote?: string } | null>(null);
+  const [sealed, setSealed] = useState<{ entry: LedgerEntry; contentHash: string; escrowNote?: string; needsPhone?: boolean } | null>(null);
   // How she prefers to tell it: the open story space (default) or one question at a time.
   const [mode, setMode] = useState<'space' | 'interview'>('space');
   const [fileCount, setFileCount] = useState(0);
@@ -79,6 +80,26 @@ export function Story() {
       window.clearTimeout(saveTimer.current);
     };
   }, [api, session.masterKey, getWorkingData]);
+
+  // A file added on the Evidence page can finish saving after she has already come back to her story (the upload
+  // carries on when she leaves that page). Fold its details in when they land, so the file count is right and the next
+  // save or seal keeps the file.
+  useEffect(() => {
+    if (!boot) return;
+    let alive = true;
+    getWorkingData().then(
+      (mem) => {
+        const next = alive && workingRef.current ? foldInLateEvidence(workingRef.current, mem) : null;
+        if (!next) return;
+        workingRef.current = next;
+        setFileCount(next.evidence.length);
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [boot, workingVersion, getWorkingData]);
 
   /**
    * Save the encrypted draft to her vault now (if anything changed since the last save).
@@ -251,6 +272,7 @@ export function Story() {
       };
       let escrowed = boot.previousEscrowed;
       let escrowNote: string | undefined;
+      let needsPhone = false;
       if (record.perpetrators.some((p) => p.escrowOptIn && p.identifiers.some((i) => i.kind !== 'full_name' && i.kind !== 'other'))) {
         setSealing('Sealing the names you chose for escrow…');
         try {
@@ -262,7 +284,9 @@ export function Story() {
             workingRef.current?.draft ? matchContactOf(workingRef.current.draft) : undefined,
           );
         } catch (e) {
-          escrowNote = `Your account was sealed, but the sealed match could not be set up right now (${friendlyError(e)}). You can try again later.`;
+          // A sealed match waits for her phone confirmation (W13): a calm next step, not an error.
+          if (e instanceof MatchingError && e.code === 'phone_verification_required') needsPhone = true;
+          else escrowNote = `Your account was sealed, but the sealed match could not be set up right now (${friendlyError(e)}). You can try again later.`;
         }
       }
       setSealing('Encrypting and sealing your account…');
@@ -275,7 +299,7 @@ export function Story() {
       );
       await setWorkingData(null);
       workingRef.current = null;
-      setSealed({ entry: res.ledgerEntry, contentHash: res.record.contentHash, escrowNote });
+      setSealed({ entry: res.ledgerEntry, contentHash: res.record.contentHash, escrowNote, needsPhone });
     } catch (e) {
       a.stopped = false; // nothing sealed: keep her draft saving
       throw new Error(friendlyError(e));
@@ -301,6 +325,7 @@ export function Story() {
           <p className="mono muted small">{shortHash(sealed.contentHash, 16)}</p>
         </div>
         {sealed.escrowNote && <div className="card warn">{sealed.escrowNote}</div>}
+        {sealed.needsPhone && <PhoneStepCard />}
         <div className="card stack">
           <h2>What you can do next — only if and when you want</h2>
           <div className="row">
@@ -368,3 +393,4 @@ export function Story() {
     </div>
   );
 }
+

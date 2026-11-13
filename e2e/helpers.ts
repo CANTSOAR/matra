@@ -13,7 +13,8 @@ const SCREENS = process.env.MATRA_E2E_SCREENS || path.resolve('e2e/.screens');
 
 /**
  * `page` that records console errors/warnings and uncaught exceptions, and fails the test if any appear.
- * Quick exit navigates to google; that host is stubbed so no real network request is made.
+ * Quick exit navigates to google; that host is stubbed so no real network request is made. Any other request that
+ * leaves the app's origin fails the test (no third-party requests, W11).
  */
 export const test = base.extend<{ consoleProblems: string[] }>({
   consoleProblems: async ({}, use) => {
@@ -29,9 +30,27 @@ export const test = base.extend<{ consoleProblems: string[] }>({
       if (/Download the React DevTools/.test(text)) return;
       // Dev/e2e builds don't pin the counselor-roster key; the sealed-matching client says so once (expected).
       if (/no pinned counselor-roster key in this build/.test(text)) return;
+      // Nor the matcher's attestation pins (platform key + measurement); the client accepts the simulated one, once.
+      if (/no pinned matcher attestation in this build/.test(text)) return;
+      // Scenario 5b: the phone-limit refusal (409 phone_limit_reached) is an expected response the page explains.
+      if (/status of 409/.test(text) && /\/api\/matching\/verification\/check$/.test(m.location().url)) return;
       consoleProblems.push(`[${m.type()}] ${text}`);
     });
     page.on('pageerror', (e) => consoleProblems.push(`[pageerror] ${e.message}`));
+    // Flake hunting: MATRA_E2E_CPU_THROTTLE=4 slows the page's CPU 4x (Chromium only), which widens timing races.
+    const throttle = Number(process.env.MATRA_E2E_CPU_THROTTLE);
+    if (throttle > 1) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: throttle });
+    // W11: the app must never contact a third party (analytics, CDN, fonts…). Any request off this origin (other than the
+    // quick-exit navigation stubbed below) is recorded as a failure and aborted. Routes registered later win, so the
+    // quick-exit stub still answers its host.
+    const origin = new URL(testInfo.project.use.baseURL ?? 'http://localhost').origin;
+    await page.route(
+      (url) => url.origin !== origin && url.protocol !== 'data:' && url.protocol !== 'blob:',
+      (r) => {
+        consoleProblems.push(`[third-party request] ${r.request().method()} ${r.request().url()}`);
+        return r.abort();
+      },
+    );
     await page.route(`https://${QUICK_EXIT_HOST}/**`, (r) =>
       r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Google</title><p>weather</p>' }),
     );
@@ -170,6 +189,31 @@ export async function sealFromReview(page: Page) {
   // the intake shows "Sealing…" until the server confirms; then the shell shows its confirmation with the ledger entry
   await expect(page.getByRole('heading', { name: 'Your account is sealed', exact: true })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/ledger entry #\d+/)).toBeVisible();
+}
+
+/**
+ * Phone verify-then-forget before a sealed match (W13), from wherever the "Confirm a phone number" link is. The e2e
+ * stack runs the mock SMS provider, which shows the code on screen ("Demo: your code is 123456").
+ */
+export async function startPhoneVerify(page: Page, phone: string) {
+  await page.getByRole('link', { name: 'Confirm a phone number' }).first().click();
+  await expect(page.getByRole('heading', { name: 'One quick step before your sealed match' })).toBeVisible();
+  await expect(page.getByText(/then forget the number/)).toBeVisible();
+  // Honest about what can still link the number to her (W19): no claim that it "isn't connected" to her account.
+  const why = page.getByRole('region', { name: 'Why we ask' });
+  await expect(why).toContainText('could connect the number to your account');
+  await expect(why).not.toContainText('isn’t connected');
+  await page.getByLabel('Phone number that can get texts').fill(phone);
+  await page.getByRole('button', { name: 'Text me a code' }).click();
+  const demo = page.getByTestId('phone-demo-code');
+  await expect(demo).toHaveText(/^Demo: your code is \d{6}$/);
+  await page.getByLabel('Code from the text').fill((await demo.textContent())!.replace(/\D/g, ''));
+  await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+}
+
+export async function verifyPhone(page: Page, phone: string) {
+  await startPhoneVerify(page, phone);
+  await expect(page.getByTestId('phone-verified')).toContainText('Done. The number has been forgotten.', { timeout: 60_000 });
 }
 
 // ───────────── fixtures ─────────────

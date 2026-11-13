@@ -30,7 +30,7 @@ describe('account crypto-shredding', () => {
     expect(share.status).toBe(201);
     await registerUser(app, 'loc.test', 'counselor');
     await sealMatch(app, jane, 'email', 'someone@example.com');
-    expect((db.prepare('SELECT COUNT(*) n FROM oprf_quota WHERE user_id = ?').get(jane.user.id) as { n: number }).n).toBe(2);
+    expect((db.prepare('SELECT COUNT(*) n FROM oprf_quota WHERE user_id = ?').get(jane.user.id) as { n: number }).n).toBe(4); // one row per key holder (2-of-3: all three answer) + the account-level budget
     const ledgerBefore = (db.prepare('SELECT COUNT(*) n FROM ledger').get() as { n: number }).n;
 
     const del = await request(app).post('/api/account/delete').set(jane.auth);

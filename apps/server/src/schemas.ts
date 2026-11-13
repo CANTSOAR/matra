@@ -103,6 +103,30 @@ export const loginRequest = z.object({
 
 export const preloginQuery = z.object({ username });
 
+// ── recovery code ──
+const authKey32 = base64(128).refine((s) => b64Len(s) >= 16 && b64Len(s) <= 64, 'authKey must be 16-64 bytes');
+/** AES-GCM of the 64-byte account secret: 64 + 16 (tag) bytes. */
+export const accountKeyEnvelope = envelope.extend({ ct: base64(128).refine((s) => b64Len(s) === 80, 'wrapped account key must be 80 bytes') });
+
+export const setUpRecoveryRequest = z.object({
+  authKey: base64(128),
+  wrappedAccountKey: accountKeyEnvelope.optional(),
+  recoveryAuthKey: authKey32,
+  recoveryWrappedKey: accountKeyEnvelope,
+});
+
+export const turnOffRecoveryRequest = z.object({ authKey: base64(128) });
+
+export const recoverStartRequest = z.object({ username, recoveryAuthKey: base64(128) });
+
+export const recoverFinishRequest = z.object({
+  resetToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'invalid reset token'),
+  kdfSalt: base64(128).refine((s) => b64Len(s) >= 16, 'kdfSalt must be at least 16 bytes'),
+  kdfIterations: z.number().int().min(1_000).max(10_000_000),
+  authKey: authKey32,
+  wrappedAccountKey: accountKeyEnvelope,
+});
+
 export const createRecordRequest = z.object({
   envelope,
   ownerWrappedKey,
@@ -152,19 +176,67 @@ const sealList = z
   .max(MAX_SEALS_PER_ENTRY)
   .refine((a) => new Set(a.map((x) => x.counselorId)).size === a.length, 'duplicate counselorId');
 
+const b64url = (max: number) => z.string().min(1).max(max).regex(/^[A-Za-z0-9_-]+$/, 'must be base64url');
+
+/** Her routing tag sealed to the matcher (packages/crypto attestation.ts). The matcher opens it; here only its shape. */
+export const routingEnvelope = z.object({
+  v: z.literal(1),
+  epk: z.object({ kty: z.literal('EC'), crv: z.literal('P-256'), x: b64url(64), y: b64url(64) }),
+  iv: base64(64).refine((s) => b64Len(s) === 12, 'iv must be 12 bytes'),
+  // the plaintext is padded to 256 bytes, + the 16-byte GCM tag
+  ct: base64(1024).refine((s) => b64Len(s) === 272, 'routing ct must be 272 bytes'),
+});
+
 export const createMatchEntryRequest = z.object({
   tag: z.string().regex(/^[a-f0-9]{64}$/, 'tag must be 64 lowercase hex chars'),
   bundle: smallEnvelope,
+  // staged release: her contact details, withheld from the counselor until the conflict check
+  contactBundle: smallEnvelope,
   labelEnvelope: smallEnvelope,
   seals: sealList,
   replacesEntryId: id.optional(),
+  routing: routingEnvelope,
 });
 
+export const attestationQuery = z.object({ nonce: z.string().regex(/^[0-9a-f]{64}$/, 'nonce must be 64 lowercase hex chars') });
+
 export const addMatchSealsRequest = z.object({ seals: sealList });
+
+// phone verification (src/sms.ts): the number is canonicalised by the handler; only shape is checked here
+export const phoneVerificationStart = z.object({ phone: z.string().min(1).max(64) });
+export const phoneVerificationCheck = z.object({
+  challengeId: z.string().regex(/^[a-f0-9]{32}$/, 'invalid challenge'),
+  code: z.string().trim().regex(/^\d{4,10}$/, 'the code is 4-10 digits'),
+});
 
 export const counselorNoteRequest = z.object({
   entryId: id.optional(),
   envelope: smallEnvelope,
+});
+
+// ── staged release (counselor-first; W21) ──
+export const conflictCheckRequest = z.object({
+  result: z.enum(['clear', 'conflict']),
+  statementVersion: z.literal(1),
+});
+
+/** `expected: true`: the counselor confirms she has spoken with her and she expects this request (never a surprise). */
+export const reportRequestCreate = z.object({ entryId: id, expected: z.literal(true) });
+
+export const reportConsentRequest = z.object({
+  recordId: id,
+  recipientWrappedKey,
+  blobs: z
+    .array(z.object({ blobId: id, recipientWrappedKey }))
+    .max(200)
+    .refine((b) => new Set(b.map((x) => x.blobId)).size === b.length, 'duplicate blobId'),
+  consentStatement: z.string().trim().min(10).max(10_000),
+  counselorKeyFingerprint: z.string().regex(/^[0-9A-F]{4}(-[0-9A-F]{4}){7}$/, 'invalid fingerprint'),
+  expiresInDays: z.number().int().min(1).max(365).optional(),
+});
+
+export const ledgerProofRequest = z.object({
+  contentHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/, 'content hashes are 64 lowercase hex chars')).min(1).max(32),
 });
 
 export const attorneysQuery = z.object({

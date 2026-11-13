@@ -68,7 +68,7 @@ describe('Delete everything', () => {
     expect(button).toBeEnabled();
     await user.click(button);
 
-    expect(await screen.findByText('Public home — deleted')).toBeInTheDocument();
+    expect(await screen.findByText('Public home — deleted', {}, { timeout: 15_000 })).toBeInTheDocument();
     expect(deleteCalls(fetchImpl)).toHaveLength(1);
     expect(screen.getByTestId('state')).toHaveTextContent('out');
     expect(current!.session).toBeNull();

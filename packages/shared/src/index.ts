@@ -282,6 +282,16 @@ export interface PublicUser {
   /** Private key encrypted under the user's master key — only the user can open it. */
   wrappedPrivateKey: Envelope;
   createdAt: string;
+  /**
+   * 1: the vault keys are derived from the passphrase. 2: they are an account secret wrapped under a key from the
+   * passphrase (`wrappedAccountKey`), so a recovery code can wrap it too (crypto: index.ts, recovery.ts). Returned only
+   * to the user herself (register, login, /api/me, recovery).
+   */
+  keyVersion: 1 | 2;
+  /** Key version 2: AES-GCM(KEK_pass, account secret). Opaque to the server. */
+  wrappedAccountKey?: Envelope;
+  /** Whether a recovery code is set up (the code itself never reaches the server). */
+  hasRecoveryCode: boolean;
 }
 
 export interface AttorneyProfile {
@@ -417,7 +427,11 @@ export interface MatchContactPreferences {
   language?: string;
 }
 
-/** The plaintext a counselor can open ONLY after a match (2 distinct survivors). Never sent to the server in clear. */
+/**
+ * v1 bundle (before staged release): everything, including her contact details, in one ciphertext. New entries use
+ * MatchSummaryBundle + MatchContactDetails; a counselor's client still opens v1 bundles (legacy) and hides the details
+ * until the conflict check, in the UI only.
+ */
 export interface MatchContactBundle {
   v: 1;
   /** which kind of identifier matched, and its canonical form (e.g. "instagram:bad_guy") */
@@ -425,8 +439,132 @@ export interface MatchContactBundle {
   contact: MatchContactPreferences;
   /** the exact explanation she agreed to, and when */
   consent: { statement: string; at: string };
-  /** USPS state of the incident or residence, if she gave one (assignment data for routing) */
+  /** USPS state of the incident or residence, if she gave one. Kept for bundles sealed before `states` existed. */
   state?: string;
+  /** USPS states she gave: where it happened and where she lives (also sealed to the matcher for routing). */
+  states?: MatchStates;
+}
+
+// ── staged release ──
+/**
+ * Stage 1 of a match (staged release, W21): what the assigned counselor can open as soon as a group is released to her.
+ * The matched identifier, where it happened and where she lives, and HOW she would like to be contacted, but not her
+ * name, number, email or notes: those are in MatchContactDetails, which the server withholds until the counselor has
+ * recorded a conflict check. Encrypted under the entry key with AAD "bundle|" + tag, padded to 1 KiB (as v1 was).
+ */
+export interface MatchSummaryBundle {
+  v: 2;
+  identifier: { kind: 'email' | 'phone' | 'social'; canonical: string };
+  states: MatchStates;
+  methods: MatchContactPreferences['methods'];
+  language?: string;
+  consent: { statement: string; at: string };
+}
+
+/** Stage 1b: her contact details, under the SAME entry key with AAD "contact|" + tag (CreateMatchEntryRequest.contactBundle). */
+export interface MatchContactDetails {
+  v: 1;
+  name?: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+}
+
+/** The conflict-check statement versions the server accepts (text: apps/web/src/lib/disclosures.ts). */
+export const CONFLICT_CHECK_STATEMENT_VERSION = 1 as const;
+export type ConflictCheckResult = 'clear' | 'conflict';
+/** POST /api/counselor/groups/:id/conflict-check */
+export interface ConflictCheckRequest {
+  result: ConflictCheckResult;
+  statementVersion: typeof CONFLICT_CHECK_STATEMENT_VERSION;
+}
+
+export type ReportRequestStatus = 'pending' | 'consented' | 'declined' | 'cancelled';
+export type ReportReleaseStatus = 'active' | 'revoked';
+/**
+ * Who ended a release: 'survivor' (she stopped sharing; a no, so nobody may ask that entry again), or Matra on her
+ * behalf: 'conflict' (the counselor later found a conflict), 'resealed' (her entry moved to a new matching key and so
+ * to a new group), 'withdrawn' (she withdrew the entry; the rows are then deleted, only the ledger row remains).
+ */
+export type ReportRevokeReason = 'survivor' | 'conflict' | 'resealed' | 'withdrawn';
+
+/**
+ * Stage 2: the counselor asks ONE matched survivor for her full report. The survivor decides alone; the counselor
+ * learns only the decision, never a reason. Nothing about one survivor is ever shown to another.
+ */
+export interface CounselorReportRequest {
+  id: string;
+  groupId: string;
+  entryId: string;
+  status: ReportRequestStatus;
+  createdAt: string;
+  decidedAt?: string;
+  /** after a yes: the release she created, and whether it is still active */
+  release?: { id: string; status: ReportReleaseStatus; expiresAt: string; firstOpenedAt?: string };
+}
+
+/** GET /api/report-requests: a request as the survivor sees it (only her own; nothing about anyone else). */
+export interface SurvivorReportRequest {
+  id: string;
+  /** her own sealed-match entry the request is about (her client decrypts its label for context) */
+  entryId: string;
+  status: Exclude<ReportRequestStatus, 'cancelled'>;
+  createdAt: string;
+  decidedAt?: string;
+  counselor: { userId: string; displayName: string; organization?: string; jurisdictions: string[]; publicKey: JsonWebKey };
+  release?: SurvivorReportRelease;
+}
+
+/** POST /api/report-requests/:id/consent: her record key (and any evidence keys she chose) wrapped to the counselor. */
+export interface ReportConsentRequest {
+  recordId: string;
+  recipientWrappedKey: WrappedKey;
+  blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+  consentStatement: string;
+  /** fingerprint of the counselor key she confirmed (or that the signed roster vouched for); the server rejects a mismatch */
+  counselorKeyFingerprint: string;
+  /** 1–365, default 90 */
+  expiresInDays?: number;
+}
+
+/** One survivor's yes: her report, released to ONE counselor. No survivor id is ever sent to the counselor. */
+export interface ReportRelease {
+  id: string;
+  requestId: string;
+  groupId: string;
+  entryId: string;
+  recordId: string;
+  counselorId: string;
+  status: ReportReleaseStatus;
+  consentStatement: string;
+  blobIds: string[];
+  createdAt: string;
+  expiresAt: string;
+  /** null until the counselor first opens it: revoking before then means she never sees it */
+  firstOpenedAt?: string;
+  revokedAt?: string;
+  revokeReason?: ReportRevokeReason;
+  ledgerEntryId: string;
+}
+
+/**
+ * A release as the survivor sees it: no group id. The group id is the same for everyone who named the same person, so
+ * two survivors comparing it would learn they are in one group (W21).
+ */
+export type SurvivorReportRelease = Omit<ReportRelease, 'groupId'>;
+
+/** GET /api/counselor/releases/:id/bundle: like ShareBundle, without any alias. */
+export interface ReportReleaseBundle {
+  release: ReportRelease;
+  record: { id: string; envelope: Envelope; contentHash: string; createdAt: string; ledgerEntryId: string };
+  recipientWrappedKey: WrappedKey;
+  blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey; contentHash: string; sizeBytes: number }>;
+}
+
+/** The two states routing uses (matcher-service): a counselor licensed in the incident state, else in hers. */
+export interface MatchStates {
+  incident?: string;
+  survivor?: string;
 }
 
 /** Hybrid RSA-OAEP-256 + AES-256-GCM ciphertext addressed to one counselor. */
@@ -440,12 +578,27 @@ export interface OprfEvaluateRequest { blinded: string }
 /** RFC 9497 VOPRF (ristretto255-SHA512) evaluation with its DLEQ proof against the key holder's public key. */
 export interface OprfEvaluateResponse { evaluated: string; proof: string }
 
-export interface MatchingConfig {
-  threshold: 2;
+// ── threshold OPRF ──
+/** One OPRF key holder: its index i (1..m) and base64 share public key pk_i = k_i·G (ristretto255). */
+export interface OprfHolderInfo { index: number; publicKey: string }
+/**
+ * The OPRF key k is Shamir-shared among m independent key holders; any t of them evaluate (packages/crypto
+ * threshold.ts). groupPublicKey = k·G, consistent with the holders' share keys (the client checks).
+ */
+export interface ThresholdOprfConfig {
   suite: 'ristretto255-SHA512';
   mode: 'voprf';
-  /** Public keys of the two independent OPRF key holders (base64 ristretto255 elements). */
-  keyHolders: { a: { publicKey: string }; b: { publicKey: string } };
+  t: number;
+  m: number;
+  groupPublicKey: string;
+  holders: OprfHolderInfo[];
+}
+
+export interface MatchingConfig {
+  /** The MATCH threshold: 2 distinct survivors naming the same person. Not the OPRF key threshold (oprf.t). */
+  threshold: 2;
+  /** The threshold OPRF key set. */
+  oprf: ThresholdOprfConfig;
   /** Verified counselors; a sealed entry carries one CounselorSeal per counselor. */
   counselors: CounselorProfile[];
   limits: { perDay: number; lifetime: number };
@@ -464,11 +617,106 @@ export interface SignedCounselorRoster {
   signature: string;
 }
 
+/**
+ * v2 adds each counselor's licensed states (USPS codes), which the matcher uses to assign a group to ONE counselor.
+ * A v1 roster still verifies, but lists nobody as licensed anywhere, so the matcher assigns nothing (re-sign it).
+ */
 export interface CounselorRosterPayload {
+  v: 1 | 2;
+  issuedAt: string;
+  counselors: Array<{ userId: string; publicKey: { kty: 'RSA'; n: string; e: string }; licensedStates?: string[] }>;
+}
+
+/**
+ * The attorney directory signed offline by the organization (threat model W3), with the same org key as the counselor
+ * roster (MATRA_COUNSELOR_ROSTER_PUBKEY). `payload` is canonical JSON of AttorneyDirectoryPayload; `signature` is
+ * base64 Ed25519 over "matra/attorney-directory/v1|" + payload (packages/crypto directory.ts).
+ */
+export interface SignedAttorneyDirectory {
+  payload: string;
+  signature: string;
+}
+export interface AttorneyDirectoryPayload {
   v: 1;
   issuedAt: string;
-  counselors: Array<{ userId: string; publicKey: { kty: 'RSA'; n: string; e: string } }>;
+  /** verified attorneys, sorted by userId; fingerprint = publicKeyFingerprint of the attorney's RSA key */
+  attorneys: Array<{ userId: string; displayName: string; organization?: string; status: 'verified'; fingerprint: string }>;
 }
+/** GET /api/attorneys */
+export interface AttorneysResponse {
+  attorneys: AttorneyProfile[];
+  /** the org-signed directory, once one has been signed (sign-roster / verify-attorney with the org key) */
+  directory?: SignedAttorneyDirectory;
+}
+
+// ── matcher service ──
+/**
+ * Routing data for one entry, sealed by her client to the matcher's attested key (packages/crypto attestation.ts).
+ * The app server stores and forwards it but cannot open it. States are USPS codes.
+ */
+export interface MatchRoutingTag {
+  v: 1;
+  tag: string;
+  incidentState?: string;
+  survivorState?: string;
+}
+/** ECIES (ephemeral ECDH P-256 + HKDF-SHA256 + AES-256-GCM, AAD = "routing|" + tag) ciphertext of a MatchRoutingTag. */
+export interface RoutingEnvelope {
+  v: 1;
+  /** ephemeral P-256 public key (JWK: kty, crv, x, y) */
+  epk: JsonWebKey;
+  iv: string;
+  ct: string;
+}
+/**
+ * What the matcher's platform says about it. `payload` is canonical JSON of AttestationPayload; `signature` is base64
+ * Ed25519 by the PLATFORM key over "matra/attestation/v1|" + payload. platform 'simulated' is a local stand-in signed
+ * by a dev key: it is NOT hardware attestation (docs/threat-model.md W18).
+ */
+export interface AttestationDocument {
+  payload: string;
+  signature: string;
+}
+export interface AttestationPayload {
+  v: 1;
+  platform: 'simulated' | 'nitro' | 'confidential-space';
+  /** hex SHA-256 of the matcher build (apps/matcher `npm run measure`) */
+  measurement: string;
+  /** the matcher's static P-256 key that routing tags are sealed to (JWK: kty, crv, x, y) */
+  encKey: JsonWebKey;
+  /** base64 Ed25519 public key the matcher signs with (reserved: signed assignments) */
+  signKey: string;
+  /** 64 hex chars, chosen by the verifier */
+  nonce: string;
+  issuedAt: string;
+}
+/**
+ * Why a group went to its counselor, from the matcher: `incident_state:NJ`, `survivor_state:NY`, either prefixed
+ * `reassigned:` after a decline or a roster change.
+ */
+export interface MatchAssignmentInfo {
+  reason: string;
+  assignedAt: string;
+}
+
+// ── phone verification ──
+/**
+ * GET /api/matching/verification. A survivor confirms a phone number by SMS before she can lodge a sealed-matching
+ * entry (W13). The server then keeps only a keyed hash of the number, not linked to her account, and this flag.
+ */
+export interface PhoneVerificationStatus {
+  /** false only when the server runs with verification turned off (development) */
+  required: boolean;
+  verified: boolean;
+}
+export interface PhoneVerificationStartRequest { phone: string }
+export interface PhoneVerificationStartResponse {
+  challengeId: string;
+  expiresAt: string;
+  /** Development / demo only (mock SMS provider): the code, so it can be shown on screen. Never from a real provider. */
+  demoCode?: string;
+}
+export interface PhoneVerificationCheckRequest { challengeId: string; code: string }
 
 /** POST /api/matching/entries/:id/seals — add seals for counselors that joined the roster after she sealed. */
 export interface AddMatchSealsRequest {
@@ -478,14 +726,18 @@ export interface AddMatchSealsRequest {
 export interface CreateMatchEntryRequest {
   /** 64 hex chars: HKDF(OPRF output, "tag"). Pseudorandom per perpetrator identifier. */
   tag: string;
-  /** MatchContactBundle encrypted under a fresh entry key (AAD = tag) */
+  /** MatchSummaryBundle encrypted under a fresh entry key ke (AAD = "bundle|" + tag) */
   bundle: Envelope;
+  /** MatchContactDetails under the same ke (AAD = "contact|" + tag); withheld from the counselor until her conflict check */
+  contactBundle: Envelope;
   /** her own label (encrypted under her master key) */
   labelEnvelope: Envelope;
   /** one per verified counselor: {tag, x, y, ce} sealed to that counselor */
   seals: CounselorSeal[];
   /** Re-seal after a key rotation: her older entry with this id is deleted in the same transaction. */
   replacesEntryId?: string;
+  /** Her routing tag (incident and home state) sealed to the matcher's attested key. Only the matcher can open it. */
+  routing: RoutingEnvelope;
 }
 
 /** A matched group as released to ONE counselor: only seals addressed to that counselor, never user ids. */
@@ -494,13 +746,20 @@ export interface CounselorMatchGroup {
   /** the shared tag π (pseudorandom; bound into every seal's AAD so seals can't be moved between groups) */
   tag: string;
   matchedAt: string;
-  entries: Array<{ entryId: string; createdAt: string; bundle: Envelope; seal: CounselorSeal }>;
+  /** `contactBundle` is present only once this counselor has recorded a clear conflict check for the group. */
+  entries: Array<{ entryId: string; createdAt: string; bundle: Envelope; seal: CounselorSeal; contactBundle?: Envelope }>;
   notes: CounselorNote[];
+  /** her conflict check for this group, if recorded (a 'conflict' group is never returned: it is passed on) */
+  conflictCheck?: { result: 'clear'; at: string };
+  /** her report requests in this group (Stage 2), one entry each at most open */
+  reportRequests: CounselorReportRequest[];
   /**
    * Sybil warning signs, computed server-side without revealing accounts: some entries come from accounts created
    * within 24 hours of each other, and how many entries were sealed less than 7 days after their account was created.
    */
   signals: { accountsCreatedClose: boolean; newAccountEntries: number };
+  /** Why the matcher assigned this group to this counselor (matcher-service). */
+  assignment?: MatchAssignmentInfo;
 }
 
 /** Outreach note, encrypted client-side under the counselor's own master key. */
@@ -546,6 +805,39 @@ export interface RegisterRequest {
 export interface AuthResponse { token: string; user: PublicUser }
 export interface LoginRequest { username: string; authKey: string }
 
+// ── recovery code ──
+// A code only she holds (128 bits, shown once) that unwraps her account secret so she can set a new passphrase.
+// The server stores scrypt(recoveryAuthKey) and the wrapped secret; it never sees the code or any key that opens it.
+
+/** POST /api/account/recovery (signed in, survivors only): set one up, or replace the old one (which then stops working). */
+export interface SetUpRecoveryRequest {
+  /** her current passphrase auth key (re-authentication) */
+  authKey: string;
+  /** required when moving from key version 1 to 2; refused otherwise */
+  wrappedAccountKey?: Envelope;
+  recoveryAuthKey: string;
+  recoveryWrappedKey: Envelope;
+}
+/** DELETE /api/account/recovery */
+export interface TurnOffRecoveryRequest { authKey: string }
+export interface RecoverStartRequest { username: string; recoveryAuthKey: string }
+export interface RecoverStartResponse {
+  /** single use, 10 minutes, held in server memory only */
+  resetToken: string;
+  recoveryWrappedKey: Envelope;
+}
+/**
+ * Her new passphrase material. The used code is burned and no new one is stored here: her client shows a new code
+ * and saves it with POST /api/account/recovery only after she confirms she has written it down.
+ */
+export interface RecoverFinishRequest {
+  resetToken: string;
+  kdfSalt: string;
+  kdfIterations: number;
+  authKey: string;
+  wrappedAccountKey: Envelope;
+}
+
 export interface CreateRecordRequest { envelope: Envelope; ownerWrappedKey: WrappedKey; supersedes?: string }
 export interface CreateRecordResponse { record: VaultRecordMeta; ledgerEntry: LedgerEntry }
 
@@ -569,6 +861,24 @@ export interface CreateShareRequest {
 
 export interface LedgerVerifyResponse { ok: boolean; length: number; headHash: string; brokenAtSeq?: number }
 
+/**
+ * POST /api/ledger/proof (public): look up sealed-content ledger entries ('record.sealed', 'blob.sealed') by the exact
+ * SHA-256 content hashes the requester already holds, for the in-browser checker (/verify) and the attorney portal.
+ * Only exact 64-hex hashes; no prefixes, ids or ranges, so it cannot be used to list the ledger.
+ */
+export interface LedgerProofRequest { contentHashes: string[] }
+/** One chain link: enough to check that links connect, without the entry's type, subject or time. */
+export interface LedgerLink { seq: number; prevHash: string; entryHash: string }
+export interface LedgerProofResponse {
+  /** The sealed-content entries whose contentHash was asked for (hashes not found are simply absent). */
+  entries: LedgerEntry[];
+  /** Links from the earliest entry found up to the head (or up to a cap; see `truncated`), in seq order. */
+  links: LedgerLink[];
+  head: { seq: number; entryHash: string };
+  /** true when `links` stops before the head (very long ledgers); the client says how far it checked. */
+  truncated: boolean;
+}
+
 export interface ApiError { error: string; code?: string }
 
 /*
@@ -580,6 +890,14 @@ export interface ApiError { error: string; code?: string }
  POST   /api/auth/login         LoginRequest          -> AuthResponse
  POST   /api/auth/logout                              -> { ok: true }
  GET    /api/me                                       -> { user: PublicUser, attorneyProfile?: AttorneyProfile, counselorProfile?: CounselorProfile }
+ POST   /api/auth/recover/start  RecoverStartRequest  -> RecoverStartResponse (401 invalid_credentials for an unknown alias, no
+                                                         code set up, or a wrong code, after the same scrypt work; 429 rate_limited)
+ POST   /api/auth/recover/finish RecoverFinishRequest -> AuthResponse (401 invalid_credentials: token unknown, used, expired, or
+                                                         the code was replaced meanwhile; every other session of hers ends;
+                                                         the used code is burned and the account has no code until she saves one)
+ POST   /api/account/recovery    SetUpRecoveryRequest -> { user: PublicUser } (401 invalid_credentials on a wrong passphrase;
+                                                         403 forbidden_role for a non-survivor account)
+ DELETE /api/account/recovery    TurnOffRecoveryRequest -> { user: PublicUser }
 
  POST   /api/vault/records      CreateRecordRequest   -> CreateRecordResponse
  GET    /api/vault/records                            -> { records: VaultRecordMeta[] }
@@ -591,8 +909,11 @@ export interface ApiError { error: string; code?: string }
  GET    /api/ledger/entries/:id                       -> { entry: LedgerEntry }
  GET    /api/ledger/verify                            -> LedgerVerifyResponse
  GET    /api/ledger/head                              -> { seq: number, entryHash: string }
+ POST   /api/ledger/proof       LedgerProofRequest    -> LedgerProofResponse (public; 1–32 exact content hashes; sealed records
+                                                         and evidence only; rate-limited per client, keyed by a daily-salted
+                                                         HMAC of the IP held in memory, and globally; 429 rate_limited)
 
- GET    /api/attorneys?state=NJ                       -> { attorneys: AttorneyProfile[] }  (verified only)
+ GET    /api/attorneys?state=NJ                       -> AttorneysResponse  (verified only, plus the org-signed directory)
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }
  GET    /api/shares                                   -> { shares: Share[] }  (survivor: outgoing, attorney: incoming)
  GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares)
@@ -602,16 +923,45 @@ export interface ApiError { error: string; code?: string }
  GET    /api/escrow                                   -> { entries: EscrowEntry[] } (own sealed-match entries; status always 'sealed')
 
  GET    /api/matching/config                          -> MatchingConfig   (survivor)
- POST   /api/matching/oprf-a    OprfEvaluateRequest   -> OprfEvaluateResponse (verified-adult survivor; rate-limited)
- POST   /api/matching/oprf-b    OprfEvaluateRequest   -> OprfEvaluateResponse (independent key; separately rate-limited)
- POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed')
+ GET    /api/matching/oprf/:index/key                 -> OprfHolderInfo   (key holder i's share public key)
+ POST   /api/matching/oprf/:index OprfEvaluateRequest -> OprfEvaluateResponse (verified-adult survivor; account quota charged once per distinct blinded element, plus a per-holder quota;
+                                                         503 holder_unavailable when holder i is down;
+                                                         403 phone_not_verified until she has confirmed a phone)
+ GET    /api/matching/attestation?nonce=<64 hex>      -> AttestationDocument (public; proxied from the matcher service; her
+                                                         client verifies it before sealing routing data to its key)
+ GET    /api/matching/verification                    -> PhoneVerificationStatus (survivor)
+ POST   /api/matching/verification/start PhoneVerificationStartRequest -> PhoneVerificationStartResponse (adult survivor;
+                                                         400 phone_invalid | phone_not_supported · 429 rate_limited · 503 sms_unavailable)
+ POST   /api/matching/verification/check PhoneVerificationCheckRequest -> { verified: true }
+                                                         (400 code_invalid | code_expired · 409 phone_limit_reached)
+ POST   /api/matching/entries   CreateMatchEntryRequest -> { entry: EscrowEntry } (status always 'sealed'; 403 phone_not_verified)
  POST   /api/matching/entries/:id/seals AddMatchSealsRequest -> { entry: EscrowEntry } (owner only; adds seals for new counselors)
  GET    /api/matching/entries                         -> { entries: EscrowEntry[] }
  DELETE /api/matching/entries/:id                     -> { ok: true }  (withdraw: deletes her entry)
 
- GET    /api/counselor/groups                         -> { groups: CounselorMatchGroup[] }  (verified counselor; matched groups only)
+ GET    /api/counselor/groups                         -> { groups: CounselorMatchGroup[] }  (verified counselor; only the groups the
+                                                         matcher assigned to HER, each with its assignment reason)
  POST   /api/counselor/groups/:id/notes { entryId?, envelope } -> { note: CounselorNote }
+ POST   /api/counselor/groups/:id/conflict-check ConflictCheckRequest -> { ok: true, result } ('conflict' passes the group on)
+ POST   /api/counselor/groups/:id/decline                              -> { ok: true }  (same as a 'conflict' check)
+ POST   /api/counselor/groups/:id/report-requests { entryId, expected: true } -> { request: CounselorReportRequest }
+                                                         (after 'clear'; 409 request_open | already_shared)
+ POST   /api/counselor/report-requests/:id/cancel            -> { request: CounselorReportRequest } (pending only)
+ GET    /api/counselor/releases                              -> { releases: ReportRelease[] }
+ GET    /api/counselor/releases/:id/bundle                   -> ReportReleaseBundle (403 release_revoked | release_expired)
+ GET    /api/counselor/releases/:id/blobs/:blobId            -> octet-stream (same checks)
+
+ GET    /api/report-requests                                 -> { requests: SurvivorReportRequest[] } (survivor: her own)
+ POST   /api/report-requests/:id/consent ReportConsentRequest -> { release: ReportRelease, ledgerEntry: LedgerEntry }
+ POST   /api/report-requests/:id/decline                     -> { request: SurvivorReportRequest }
+ POST   /api/report-releases/:id/revoke                      -> { release: ReportRelease, ledgerEntry: LedgerEntry }
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
  POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)
+
+ GET    /api/dev/inspector                            -> InspectorSnapshot (dev / demo only: MATRA_INSPECTOR=1, and never in
+                                                         production unless MATRA_DEMO_MODE=1; unauthenticated; inspector.ts)
 */
+
+export * from './request-log.js';
+export * from './inspector.js';

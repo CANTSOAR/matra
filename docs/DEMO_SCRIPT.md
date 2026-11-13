@@ -7,23 +7,26 @@
 ---
 
 ## Setup (before the meeting)
-- Start the server and seed demo accounts (`npm run seed -w @matra/server`). The seed creates:
+- Start the whole demo stack on one machine with **`npm run demo`** (the first run resets and seeds it; `npm run demo -- --reset`, or `npm run demo:reset` then `npm run demo`, starts from a fresh one). It runs three OPRF key holders (any two are enough), a separate matcher with a **simulated** attestation, the app server and the web app, every service with `NODE_ENV=production` and `MATRA_DEMO_MODE=1` (the only way production accepts the mock SMS provider and the simulated attestation), and the DEMO banner on. It prints the URLs and accounts. Open the app at http://localhost:5173 and, for a technical audience, the **Server view** at http://localhost:5173/inspector in a second window of the same browser.
+- The seed (all fictional, every display name starts with "Demo —"; it goes through the real API and the real client crypto):
   - Survivor **`jane.demo`**, passphrase `demo-survivor-passphrase`, with no records. The demo creates them live.
-  - Verified attorneys **`attorney.nj1`** (NJ), **`attorney.ny1`** (NY), and **`attorney.nj2`** (NJ/NY), all with passphrase `demo-attorney-passphrase`. Names and organizations are labelled "Demo —".
-  - Verified Legal Options Counselor **`counselor.demo`**, passphrase `demo-counselor-passphrase`, for the matching demo. Counselors sign in through the **Legal options counselors** link on the welcome page, not the attorney sign-in.
-  - *If the seed names have changed, use whatever the seed script prints.*
-- Prepare a second survivor account for the escrow demo (for example, register `sam.demo` live, or pre-create it).
+  - Survivors **`sam.demo`** and **`morgan.demo`** (same passphrase), each phone-verified (mock SMS), each with a sealed story and a sealed match on the Instagram profile `@demo_handle_123` (Morgan typed it as a URL). Both say it happened in **New York**; Sam lives in **New Jersey**, Morgan in New York. Sam asked to be texted, Morgan emailed. Their group already exists and the matcher has given it to `counselor.ny`.
+  - Survivor **`taylor.demo`** named the same profile in her sealed story but said **no** to sealed matching: nothing about it leaves her vault, and she is in no group.
+  - Survivor **`riley.demo`** already shared her sealed story with `attorney.nj1` (for the attorney part, without waiting).
+  - Verified attorneys **`attorney.nj1`** (NJ), **`attorney.ny1`** (NY), and **`attorney.nj2`** (NJ/NY), passphrase `demo-attorney-passphrase`.
+  - Verified Legal Options Counselors **`counselor.ny`** (licensed NY), **`counselor.nj`** (licensed NJ), **`counselor.pa`** (licensed PA), passphrase `demo-counselor-passphrase`, on a roster signed with the demo organization key. Counselors sign in through the **Legal options counselors** link on the welcome page.
+  - Jane's phone check uses the mock SMS provider: the code is shown on screen ("Demo: your code is …"). Use a fictional number such as `(201) 555-0113`.
+- What is simulated, say it if asked: the matcher's attestation is signed by a demo key on this laptop, not by enclave hardware; the SMS provider is a mock that texts nobody; all keys (including all three OPRF shares) sit on one machine, which a real deployment never allows.
 - Have a **sample photo with GPS EXIF** on the desktop (for example, one taken with a phone that has location on) and an EXIF viewer ready (`exiftool` or an online viewer used **only** with the demo photo).
 - Use two browser profiles: Profile A for the survivor, Profile B for the attorney and, later, the counselor.
 - Have a fictional intake narrative ready to paste (below). **Never use a real account.**
 - **If you'll show voice:** open the story space once before the meeting and tap **Talk** to run the one-time setup. The speech model (about 94 MB) downloads once from Matra's own server, then stays on the device and works offline. Use a laptop with a microphone; the room should be quiet. Chrome, Edge, Firefox and Safari all work; if a browser can't record, Matra says so and offers typing.
 
 **Fictional sample data**
-- Preferred name: "J." · State: NJ · County: Middlesex · Date: "around March 14, not sure of the exact day"
+- Preferred name: "J." · Where it happened: NY (the matching demo routes on it) · Date: "around March 14, not sure of the exact day"
 - Free recall: *"We were at a party at a coworker's apartment. I remember the music was too loud and the hallway smelled like cologne. He said he'd walk me to my car…"*
 - Disclosure: told roommate "M." by text the next morning, and said "something bad happened last night."
-- Person responsible: "R.", coworker, Instagram `@demo_handle_123`, phone `(555) 010-0199`. Matching opt-in: yes. Safe contact for the counselor: "email, weekday afternoons" (fictional).
-- Second survivor (`sam.demo`): names the same Instagram profile as a URL, `https://www.instagram.com/Demo_Handle_123/`, and opts in to matching.
+- Person responsible: "R.", coworker, Instagram `@demo_handle_123`. Matching opt-in: yes. Safe contact for the counselor: text message, `(555) 010-0213` (fictional). Where it happened: New York (pick **NY** under **When and where**).
 
 ---
 
@@ -83,16 +86,23 @@
 - Log out of `attorney.nj1` in Profile B before step 10.
 
 ### 10. Confidential matching and the counselor (8:30-9:30), **framed as a prototype**
-- As `jane.demo`, in the story space open **The person**. Under *"Ways to recognize them online"*, the Instagram handle `@demo_handle_123` is there. Turn on **Sealed match** and read the explanation aloud: names are never used; if someone else names the same person, a Legal Options Counselor, who is a licensed attorney, may reach out privately by the method she chooses. Choose the contact method ("email, weekday afternoons"). Seal. On **Home**, the sealed-match card says *Sealed*; **What you've sealed** lists it and lets her withdraw it.
-- As `sam.demo`, name the same profile in a different form: `https://www.instagram.com/Demo_Handle_123/`, opt in, and seal. Her status also says **Sealed**. That is on purpose. Neither survivor ever sees a match.
-- In Profile B, open **Legal options counselors** on the welcome page and sign in as **`counselor.demo`** (`demo-counselor-passphrase`). The portal shows the ethics reminder (*"Before you reach out"*) and **Match 1 · 2 people**. Tap **Open with my private key**: the group is opened on the counselor's device, showing the identifier both named and one card per person with only the contact details each chose. Nothing about either survivor's account or records is visible.
-- Record an outreach note on one card (for example *Reached out*). *"Notes are encrypted with the counselor's own key before they're saved. We can't read them either."*
+- As `jane.demo`, open **Home → sealed match** and confirm a phone number: *"One quick step before your sealed match."* The demo code appears on screen. *"The number is checked once and then forgotten: the server keeps a keyed hash and a count, so one phone can't be used to make a crowd of fake survivors."*
+- In the story space open **The person**. Under *"Ways to recognize them online"*, add the Instagram handle `@demo_handle_123`. Turn on **Sealed match** and read the explanation aloud: names are never used; if someone else names the same person, a Legal Options Counselor, who is a licensed attorney, may reach out privately by the method she chooses. Choose **Text message**. Under **When and where**, pick **NY**. Seal. On **Home**, the sealed-match card says *Sealed*. Sam and Morgan named the same person earlier, and their status says **Sealed** too. That is on purpose. No survivor ever sees a match.
+- In Profile B, sign in as **`counselor.nj`**: *"No matches right now."* She is licensed where Sam lives, not where it happened. Then **`counselor.ny`**: **Match 1 · 3 people**, *"Assigned to you because this happened in New York, where you're licensed."* *"Each group goes to one counselor, licensed where it happened if possible, otherwise where a survivor lives. That choice is made by a separate matcher, not by us."*
+- Tap **Open with my private key**: the identifier and, for each person, where it happened, where they live and how they want to be reached. **No phone numbers or emails yet.** She records her conflict check (*"I have no conflict"*); only then do the contact details appear, one card per person, never mixed. Taylor isn't there: she said no to matching.
+- Optionally, the staged release: tick *"I've spoken with this person and they expect this request"* and **Ask for their full report** for Jane and Morgan. As Jane, open the request on Home and say **Yes, share my report**; as Morgan, **No, don't share**. Back as `counselor.ny`, Jane's report opens on the counselor's device; Morgan's card just says she decided not to share.
 - **Talking points:**
   - *"Only unique identifiers are matched: phone, email, social handles. Never names, because names aren't unique enough. The handle and the URL are normalized to the same profile on her device before anything is sealed."*
   - *"Neither survivor sees a match. If they could, the person himself could sign up, type in his own handle, and find out he's been named."*
-  - *"The counselor is an attorney, and that's deliberate. Callisto's design rested on attorney-client privilege. When Callisto moved this role to advocates in 2026, it told users privilege no longer applied. We commit never to make that kind of change without telling survivors first ([Succession and Data Promise](SUCCESSION_AND_DATA_PROMISE.md) D7). The counselor reviews the group for anything implausible, then contacts each survivor separately, by the method she chose, once, with no pressure. Introductions happen only if both say yes."*
+  - *"The counselor is an attorney, and that's deliberate. Callisto's design rested on attorney-client privilege. When Callisto moved this role to advocates in 2026, it told users privilege no longer applied. We commit never to make that kind of change without telling survivors first ([Succession and Data Promise](SUCCESSION_AND_DATA_PROMISE.md) D7). The counselor sees who matched and how to reach them first; full reports only with each survivor's own yes."*
   - *"A match is a lead, not evidence. In New Jersey other-acts evidence goes through Rule 404(b), and there's no equivalent of federal Rule 413."*
-  - **Say this before anyone asks:** *"This follows the published Callisto design: an OPRF with the key split across two key holders, so the server never sees the raw handle, and each survivor's contact details are sealed so only the counselor can open them, and only once two people match. It's demo-only. Before real use it needs an outside cryptographic review, account verification so one person can't create fake accounts to force a match, and counsel's view on privilege and on the solicitation rules for a counselor contacting survivors who opted in."*
+  - **Say this before anyone asks:** *"This follows the published Callisto design: an OPRF whose key is split across three key holders, any two of which are needed, so no server sees the raw handle, and each survivor's contact details are sealed so only the counselor can open them. It's demo-only: the matcher's attestation here is simulated and every key is on this laptop. Before real use it needs an outside cryptographic review, the key holders at separate institutions, the matcher in real confidential-computing hardware, and counsel's view on privilege and on the solicitation rules for a counselor contacting survivors who opted in."*
+
+### 10b. For a technical audience: the Server view (optional, 3-5 minutes)
+Keep http://localhost:5173/inspector open next to the app, in the same browser. It shows, refreshed every two seconds, everything each process holds: the app server's tables and the last requests it received, each key holder's quota and the blinded elements it evaluated, and the matcher's entries, assignments and current attestation document. Ciphertext and hashes are muted; anything a person could read is highlighted. The **On her device** column shows what Jane typed at the moment it was encrypted or blinded (sent from the app tab to this tab only, never to a server).
+- Type a word from Jane's story, or `demo_handle_123`, into **Look for something she typed**: *"not in any column of any table in the app server's database"*. It searches full values, not the shortened ones on screen.
+- Point out what *is* readable: aliases, times, the counselors' public profiles, the share consent text, and at the matcher only, two states per entry.
+- The Server view exists only in development and demo builds, and the server offers it only with `MATRA_INSPECTOR=1`; production refuses it unless it is also a fictional-data demo.
 
 ### 11. Close and ask (9:30-10:00)
 *"We're asking for three things. Attorneys willing to pilot under our MOU. Advocates to co-own the intake script. And a security auditor. We take no fees and no referral money, ever. And because survivors deserve tools that outlast the organization that built them, we've published a succession and data promise: at least 90 days' notice, export at all times, and nothing moves without her yes."*
@@ -126,7 +136,7 @@ No. Nonprofit, grant-funded. No referral fees and no fee sharing; NJ RPC 5.4, 7.
 Today, an admin verifies manually. The pilot adds bar-record checks, organizational attestation, MFA or passkeys, annual re-verification, and the MOU. Every access is visible to the survivor, and shares will expire.
 
 **"What if she forgets her passphrase?"**
-Her data is gone. That's the cost of us being unable to read it. On the roadmap: optional recovery shares held by an advocate she trusts.
+If she made a recovery code, she can set a new passphrase with it ("Forgot your passphrase?" on the sign-in screen). It's optional, shown once, and only she has it: we store a hash of a key derived from it and her keys encrypted under it, so we can't reset anyone ourselves. Anyone who finds the code and knows her alias could get in, and the screen tells her that. Without a code her data is gone; that's the cost of us being unable to read it. Later: recovery shares held by people she trusts, so no single paper opens it (Q-043).
 
 **"What if her abuser has her phone or forces her to unlock it?"**
 Cryptography can't stop coercion. Quick Exit, auto-lock, and safety planning help. We recommend a safe device. This is a key area where we want advocates' guidance.

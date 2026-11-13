@@ -16,10 +16,20 @@
  *                    the same person. Withdrawals write no ledger entry (the entry row is simply deleted).
  *                    There is deliberately NO 'escrow.matched' entry type: writing one at match time would let
  *                    anyone watching /api/ledger/head learn that a submission matched. matched_at lives in the DB only.
+ *   counselor.conflict_checked  SHA-256_hex(`${groupId}|${counselorId}|${result}|${statementVersion}`) (staged release)
+ *   report.requested SHA-256_hex(JSON.stringify({ requestId, groupId, entryId, counselorId }))
+ *   report.released  SHA-256_hex(JSON.stringify({ releaseId, requestId, recordId, counselorId, counselorKeyFingerprint,
+ *                    consentStatement, blobIds, expiresAt })) — attests her exact consent text, like share.granted
+ *   report.declined  SHA-256_hex(JSON.stringify({ requestId, decision: 'declined', decidedAt }))
+ *   report.revoked   SHA-256_hex(JSON.stringify({ releaseId, status: 'revoked', revokedAt }))
+ *                    None of these is written at match time: each follows a person's action after the group was
+ *                    released (the anti-probing rule for escrow.sealed still holds).
+ *   account.recovered SHA-256_hex(JSON.stringify({ userId, at }))  — at = the entry's timestamp (passphrase reset
+ *                    with a recovery code; W20)
  *   account.shredded SHA-256_hex(JSON.stringify({ userId, recordIds, blobIds }))  (ids sorted ascending)
  */
 import { createHash, randomBytes } from 'node:crypto';
-import type { Envelope, LedgerEntry, LedgerVerifyResponse } from '@matra/shared';
+import type { Envelope, LedgerEntry, LedgerLink, LedgerProofResponse, LedgerVerifyResponse } from '@matra/shared';
 import { GENESIS_HASH, type DB } from './db.js';
 
 export type LedgerType =
@@ -29,6 +39,12 @@ export type LedgerType =
   | 'share.revoked'
   | 'share.renewed'
   | 'escrow.sealed'
+  | 'counselor.conflict_checked'
+  | 'report.requested'
+  | 'report.released'
+  | 'report.declined'
+  | 'report.revoked'
+  | 'account.recovered'
   | 'account.shredded';
 
 export function sha256Hex(data: string | Uint8Array): string {
@@ -140,6 +156,38 @@ export function verifyLedger(db: DB): LedgerVerifyResponse {
     expectedSeq++;
   }
   return { ok: true, length, headHash: prev };
+}
+
+/** Entry types the public proof lookup answers for: sealed content only (records and evidence files). */
+export const PROOF_TYPES = ['record.sealed', 'blob.sealed'] as const;
+/** At most this many links per proof (a very long ledger is checked up to here; the client says so). */
+export const PROOF_MAX_LINKS = 20_000;
+
+/**
+ * Proof for the in-browser checker (POST /api/ledger/proof): the sealed-content entries whose content hash is EXACTLY
+ * one of `contentHashes` (the requester already holds the file or the PDF that names it), plus links (seq, prevHash,
+ * entryHash only: no other entry's type, subject or time) from the earliest one found up to the head.
+ */
+export function ledgerProof(db: DB, contentHashes: readonly string[]): LedgerProofResponse {
+  const find = db.prepare(`SELECT * FROM ledger WHERE content_hash = ? AND type IN (${PROOF_TYPES.map(() => '?').join(', ')}) ORDER BY seq ASC`);
+  const seen = new Set<number>();
+  const entries: LedgerEntry[] = [];
+  for (const h of new Set(contentHashes))
+    for (const r of find.all(h, ...PROOF_TYPES) as LedgerRow[]) if (!seen.has(r.seq)) seen.add(r.seq), entries.push(toEntry(r));
+  entries.sort((a, b) => a.seq - b.seq);
+  const head = ledgerHead(db);
+  if (!entries.length) return { entries, links: [], head, truncated: false };
+  const from = entries[0]!.seq;
+  const links = (
+    db.prepare('SELECT seq, prev_hash, entry_hash FROM ledger WHERE seq >= ? ORDER BY seq ASC LIMIT ?').all(from, PROOF_MAX_LINKS + 1) as Array<{
+      seq: number;
+      prev_hash: string;
+      entry_hash: string;
+    }>
+  ).map((r): LedgerLink => ({ seq: r.seq, prevHash: r.prev_hash, entryHash: r.entry_hash }));
+  const truncated = links.length > PROOF_MAX_LINKS;
+  if (truncated) links.length = PROOF_MAX_LINKS;
+  return { entries, links, head, truncated };
 }
 
 function countLedger(db: DB): number {

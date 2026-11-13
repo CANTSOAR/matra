@@ -19,6 +19,9 @@
  * cover the account being shredded. (A TEMP table cannot be used here
  * because SQLite forbids triggers in `main` from referencing `temp` objects.)
  * Ledger rows are never deleted: they hold only ids, hashes and timestamps.
+ *
+ * No table stores a client IP address, user agent or request URL, and none may (W11): every column is listed with its
+ * purpose and retention in docs/PRIVACY_DATA_INVENTORY.md, and src/privacy.test.ts checks the database files.
  */
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
@@ -283,7 +286,164 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  // ── v6: threshold OPRF (t-of-m Shamir shares replace the additive holders 'a'/'b'). Holders are now numbered
+  // "1".."m", so the quota table loses its ('a','b') CHECK. Old quotas are dropped: they counted evaluations under the
+  // old keys, which no longer exist (the key change is a rotation: new epoch, clients re-seal).
+  `
+  DROP TABLE oprf_quota;
+  CREATE TABLE oprf_quota (
+    user_id        TEXT NOT NULL,
+    holder         TEXT NOT NULL,
+    day            TEXT NOT NULL,
+    day_count      INTEGER NOT NULL,
+    lifetime_count INTEGER NOT NULL,
+    PRIMARY KEY (user_id, holder)
+  );
+  `,
+  // ── v7: phone verify-then-forget before sealed matching (W13, W19; src/sms.ts). phone_tokens holds only a keyed hash
+  // of a verified number and how many accounts it has enabled: no user id, no timestamps, and WITHOUT ROWID so not even
+  // insertion order is kept that could be lined up with users. Rows are written in batches apart from the users flag
+  // (app.ts flushPhoneTokens), so no commit pairs a token with an account. That is NOT unlinkability: the SMS provider's
+  // (number, time) records together with the account's own activity times can still link them (W19). The count is
+  // never decremented (no row names an account). Accounts that already have sealed entries (demo data only) are grandfathered as verified, so their
+  // clients can still re-seal after a key rotation.
+  `
+  CREATE TABLE phone_tokens (
+    token_hash TEXT PRIMARY KEY,               -- hex HMAC(MATRA_PHONE_HASH_KEY, "matra/phone-token/v1|" + E.164)
+    accounts   INTEGER NOT NULL
+  ) WITHOUT ROWID;
+  ALTER TABLE users ADD COLUMN matching_verified INTEGER NOT NULL DEFAULT 0;
+  UPDATE users SET matching_verified = 1 WHERE id IN (SELECT user_id FROM match_entries);
+  `,
+  // ── v8: matcher service (apps/matcher; W15, W18). Each entry gains her routing tag sealed to the matcher's attested
+  // key (this server cannot open it) and whether it has been forwarded to the matcher. match_assignments caches the
+  // matcher's answer (which ONE counselor each group went to, and why), so groups already released stay visible while
+  // the matcher is unreachable; new groups wait for it (fail closed). matcher_pending_deletes queues withdrawals and
+  // account deletions until the matcher has them. key_epoch is bumped so existing clients re-seal on next sign-in,
+  // this time with routing data. For counselors, counselor_profiles.jurisdictions means the states she is LICENSED in
+  // (the roster's licensedStates).
+  `
+  ALTER TABLE match_entries ADD COLUMN routing_envelope TEXT;
+  ALTER TABLE match_entries ADD COLUMN matcher_synced INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE match_assignments (
+    tag          TEXT PRIMARY KEY,
+    counselor_id TEXT NOT NULL,
+    reason       TEXT NOT NULL,
+    assigned_at  TEXT NOT NULL,
+    signals      TEXT NOT NULL,             -- JSON MatchSignals, computed by the matcher
+    signature    TEXT                       -- the matcher's Ed25519 signature over the assignment
+  );
+  CREATE TABLE matcher_pending_deletes (
+    entry_id TEXT PRIMARY KEY
+  ) WITHOUT ROWID;
+  UPDATE matching_meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'key_epoch';
+  `,
+  // ── v9: staged release (counselor-first; W1, W21). Each entry's contact details move into their own ciphertext
+  // (contact_bundle), which the server withholds from the assigned counselor until she records a conflict check
+  // (conflict_checks). Stage 2: she may ask one matched survivor for her full report (report_requests); only a survivor's
+  // own yes creates a report_release (her record key, and any evidence keys she chose, wrapped to the counselor's key
+  // on her device). One open request per (entry, counselor). No foreign keys: rows are deleted explicitly with the
+  // entry, the group, or either account (app.ts). key_epoch is bumped so existing clients re-seal into the split format.
+  `
+  ALTER TABLE match_entries ADD COLUMN contact_bundle TEXT;
+  CREATE TABLE conflict_checks (
+    group_id          TEXT NOT NULL,
+    counselor_id      TEXT NOT NULL,
+    result            TEXT NOT NULL CHECK (result IN ('clear','conflict')),
+    statement_version INTEGER NOT NULL,
+    created_at        TEXT NOT NULL,
+    ledger_entry_id   TEXT NOT NULL,
+    PRIMARY KEY (group_id, counselor_id)
+  );
+  CREATE TABLE report_requests (
+    id              TEXT PRIMARY KEY,
+    group_id        TEXT NOT NULL,
+    entry_id        TEXT NOT NULL,
+    counselor_id    TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK (status IN ('pending','consented','declined','cancelled')),
+    created_at      TEXT NOT NULL,
+    decided_at      TEXT,
+    ledger_entry_id TEXT NOT NULL
+  );
+  CREATE INDEX report_requests_entry ON report_requests(entry_id);
+  CREATE INDEX report_requests_group ON report_requests(group_id, counselor_id);
+  CREATE UNIQUE INDEX report_requests_one_open ON report_requests(entry_id, counselor_id) WHERE status = 'pending';
+  CREATE TABLE report_releases (
+    id                    TEXT PRIMARY KEY,
+    request_id            TEXT NOT NULL UNIQUE,
+    survivor_id           TEXT NOT NULL,
+    counselor_id          TEXT NOT NULL,
+    record_id             TEXT NOT NULL,
+    recipient_wrapped_key TEXT NOT NULL,
+    consent_statement     TEXT NOT NULL,
+    status                TEXT NOT NULL CHECK (status IN ('active','revoked')),
+    created_at            TEXT NOT NULL,
+    expires_at            TEXT NOT NULL,
+    first_opened_at       TEXT,
+    revoked_at            TEXT,
+    ledger_entry_id       TEXT NOT NULL
+  );
+  CREATE INDEX report_releases_survivor ON report_releases(survivor_id);
+  CREATE INDEX report_releases_counselor ON report_releases(counselor_id);
+  CREATE TABLE report_release_blobs (
+    release_id            TEXT NOT NULL,
+    blob_id               TEXT NOT NULL,
+    recipient_wrapped_key TEXT NOT NULL,
+    PRIMARY KEY (release_id, blob_id)
+  );
+  UPDATE matching_meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'key_epoch';
+  `,
+  // ── v10: who ended a report release. Only the survivor's own revoke is a "no" (nobody may ask that entry again);
+  // Matra also ends releases for her when the counselor later records a conflict, or when her entry is re-sealed into
+  // a new group or withdrawn. Every earlier revoke was hers. No key_epoch bump (nothing in the sealed format changed).
+  `
+  ALTER TABLE report_releases ADD COLUMN revoke_reason TEXT CHECK (revoke_reason IN ('survivor','conflict','resealed','withdrawn'));
+  UPDATE report_releases SET revoke_reason = 'survivor' WHERE status = 'revoked';
+  `,
+  // ── v11: recovery code (W20). key_version 1 = vault keys derived from the passphrase (every account so far); 2 = an
+  // account secret wrapped under a passphrase key (wrapped_account_key) and, optionally, under a key from a recovery
+  // code only she holds (recovery_wrapped_key). The server keeps scrypt(recoveryAuthKey) like auth_hash: it can check a
+  // code, never derive one or unwrap anything. No data changes; an account moves to 2 when she sets up a code.
+  `
+  ALTER TABLE users ADD COLUMN key_version INTEGER NOT NULL DEFAULT 1 CHECK (key_version IN (1, 2));
+  ALTER TABLE users ADD COLUMN wrapped_account_key TEXT;            -- Envelope JSON: AES-GCM(KEK_pass, account secret)
+  ALTER TABLE users ADD COLUMN recovery_auth_hash BLOB;             -- scrypt(recoveryAuthKey, recovery_auth_salt)
+  ALTER TABLE users ADD COLUMN recovery_auth_salt BLOB;
+  ALTER TABLE users ADD COLUMN recovery_wrapped_key TEXT;           -- Envelope JSON: AES-GCM(KEK_rec, account secret)
+  `,
 ];
+
+/**
+ * A standalone OPRF key holder's own database (src/holder.ts): its quota counters, keyed by the app server's
+ * pseudonymous token subject (same table shape as the app DB's oprf_quota, so SqliteQuotaStore works on both), and
+ * its append-only daily evaluation totals.
+ */
+export function openHolderDb(dbPath: string): DB {
+  if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('secure_delete = ON');
+  db.exec(`CREATE TABLE IF NOT EXISTS oprf_quota (
+    user_id        TEXT NOT NULL,
+    holder         TEXT NOT NULL,
+    day            TEXT NOT NULL,
+    day_count      INTEGER NOT NULL,
+    lifetime_count INTEGER NOT NULL,
+    PRIMARY KEY (user_id, holder)
+  )`);
+  // Append-only per-day totals (src/holder.ts HolderDailyTotals): rows can be added and counts can only grow.
+  db.exec(`CREATE TABLE IF NOT EXISTS daily_totals (
+    day         TEXT PRIMARY KEY,
+    evaluations INTEGER NOT NULL,
+    refused     INTEGER NOT NULL
+  );
+  CREATE TRIGGER IF NOT EXISTS daily_totals_no_delete BEFORE DELETE ON daily_totals
+    BEGIN SELECT RAISE(ABORT, 'daily_totals is append-only'); END;
+  CREATE TRIGGER IF NOT EXISTS daily_totals_no_decrease BEFORE UPDATE ON daily_totals
+    WHEN NEW.day IS NOT OLD.day OR NEW.evaluations < OLD.evaluations OR NEW.refused < OLD.refused
+    BEGIN SELECT RAISE(ABORT, 'daily_totals is append-only'); END;`);
+  return db;
+}
 
 /** Migrations (0-based index) that rebuild a referenced table and must run with foreign_keys OFF. */
 const FK_OFF = new Set([3]);

@@ -1,12 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@matra/crypto';
-import type { EvidenceItem, IntakeRecord, LedgerEntry, ShareBundle } from '@matra/shared';
+import { checkAttorneyKey, decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@matra/crypto';
+import type { EvidenceItem, IntakeRecord, LedgerEntry, LedgerProofResponse, ShareBundle } from '@matra/shared';
 import { envelopeHash } from '../api/client';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { BriefPreview, downloadPdf, generateIncidentSummary } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { formatBytes, shortHash, type VaultPayload } from '../lib/vault';
+import { formatBytes, type VaultPayload } from '../lib/vault';
+import { MATCH_PINS } from '../matchPins';
+import { CheckLines } from '../verify/CheckLines';
+import { accountCheck, chainCheck, evidenceCheck, overallTone, proofHashes, sealedEntry, type CheckLine } from '../verify/checks';
 
 const SCOPE_WORDS: Record<string, string> = { record: 'Written account', evidence: 'Evidence files', brief: 'Incident summary' };
 const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).join(' · ');
@@ -15,6 +18,11 @@ export function AttorneyCases() {
   const { api, session, refreshProfile } = useRequiredSession();
   const shares = useAsync(() => api.listShares().then((r) => r.shares), [api]);
   const fp = useAsync(() => publicKeyFingerprint(session.user.publicKey), [session.user.publicKey]);
+  // Is this key in the org-signed directory survivors' apps check against (W3)? Unpinned (development) builds say nothing.
+  const listing = useAsync(
+    () => api.listAttorneys().then((r) => checkAttorneyKey(r.directory, { userId: session.user.id, publicKey: session.user.publicKey }, MATCH_PINS.rosterKey)),
+    [api, session.user.id, session.user.publicKey],
+  );
   const profile = session.attorneyProfile;
   const [checking, setChecking] = useState(false);
   const active = (shares.data ?? []).filter((s) => s.status === 'active');
@@ -57,8 +65,26 @@ export function AttorneyCases() {
         <p style={{ margin: 0 }}>
           <strong>Your key fingerprint:</strong> <span className="fingerprint">{fp.data ?? '…'}</span>
         </p>
+        {listing.data?.status === 'verified' && (
+          <p style={{ margin: 0 }} data-testid="attorney-directory-status">
+            Matra’s signed attorney directory lists this key as yours, so clients’ apps confirm it automatically. Nobody
+            needs to call you to compare it.
+          </p>
+        )}
+        {listing.data && (listing.data.status === 'not_listed' || listing.data.status === 'unsigned') && profile?.verified && (
+          <p style={{ margin: 0 }} data-testid="attorney-directory-status">
+            Your key isn’t in Matra’s signed attorney directory yet. Until Matra signs it, clients can’t share with you.
+          </p>
+        )}
+        {listing.data?.status === 'key_mismatch' && (
+          <p style={{ margin: 0 }} data-testid="attorney-directory-status">
+            <strong>Matra’s signed directory lists a different key for you.</strong> Clients can’t share with you until this
+            is fixed. Please contact Matra.
+          </p>
+        )}
         <p style={{ margin: 0 }}>
-          A client may ask you to read this to them, by phone or in person, to confirm they’re sharing with you.
+          Received a summary PDF or evidence files by email or on a drive? <Link to="/verify">Check a file</Link> in your
+          browser; nothing is uploaded.
         </p>
       </div>
       <section className="card stack" aria-labelledby="active">
@@ -106,7 +132,14 @@ interface OpenedCase {
   recordKeyOk: true;
   ledgerEntry?: LedgerEntry;
   recomputedHash: string;
-  ledgerOk: boolean;
+  /** sealed-content entries for the record and every shared evidence file, with chain links (null: ledger unreachable) */
+  proof: LedgerProofResponse | null;
+}
+
+/** One evidence file the attorney decrypted: its SHA-256 and its ciphertext's, computed on this device. */
+interface BlobCheck {
+  sha256: string;
+  ciphertextHash: string;
 }
 
 /**
@@ -135,15 +168,21 @@ export function AttorneyCase() {
     const payload = await decryptJSON<VaultPayload>(bundle.record.envelope, key);
     if (!payload.record) throw new Error('This file does not contain a sealed account.');
     const recomputedHash = await envelopeHash(bundle.record.envelope);
-    let ledgerEntry: LedgerEntry | undefined;
+    // The record's hash as recomputed HERE (not the server's word for it), and the ciphertext hashes of the shared
+    // evidence; the chain is re-checked on this device (verify/checks.ts).
+    let proof: LedgerProofResponse | null = null;
     try {
-      ledgerEntry = (await api.getLedgerEntry(bundle.record.ledgerEntryId)).entry;
+      proof = await api.ledgerProof(proofHashes(recomputedHash, ...bundle.blobs.map((b) => b.contentHash)));
     } catch {
       /* shown as unverified */
     }
-    const ledgerOk = !!ledgerEntry && ledgerEntry.contentHash === recomputedHash && bundle.record.contentHash === recomputedHash;
-    return { bundle, record: payload.record, recordKeyOk: true, ledgerEntry, recomputedHash, ledgerOk };
+    const ledgerEntry = sealedEntry(proof ?? undefined, recomputedHash);
+    return { bundle, record: payload.record, recordKeyOk: true, ledgerEntry, recomputedHash, proof };
   }, [api, id, session.privateKey]);
+  const [checks, setChecks] = useState<Record<string, BlobCheck>>({});
+  const [checkAll, setCheckAll] = useState(0);
+  const verification = opened.data ? caseChecks(opened.data, checks) : null;
+  const ledgerOk = verification ? verification.tone === 'ok' && !verification.lines.some((l) => l.id === 'account' && l.tone !== 'ok') : undefined;
 
   async function downloadBrief() {
     if (!opened.data) return;
@@ -192,7 +231,7 @@ export function AttorneyCase() {
             <div>
               <dt>Integrity</dt>
               <dd>
-                <VerifyBadge verified={opened.data.ledgerOk} />
+                <VerifyBadge verified={ledgerOk} />
               </dd>
             </div>
           </dl>
@@ -206,38 +245,24 @@ export function AttorneyCase() {
             <div className="consent-text">{opened.data.bundle.share.consentStatement}</div>
           </section>
 
-          <section className="card stack" aria-labelledby="proof">
+          <section className="card stack" aria-labelledby="proof" data-testid="case-verification">
             <div className="section-title">
-              <h2 id="proof">Integrity proof</h2>
-              <VerifyBadge verified={opened.data.ledgerOk} />
+              <h2 id="proof">Verification</h2>
+              <VerifyBadge verified={ledgerOk} />
             </div>
-            <dl className="small proof">
-              <div>
-                <dt className="muted">Recomputed SHA-256 of the sealed ciphertext</dt>
-                <dd className="mono" style={{ margin: 0 }}>{opened.data.recomputedHash}</dd>
+            <p className="small muted" style={{ margin: 0 }}>
+              Checked in your browser just now: the account was re-hashed on this device and compared with Matra’s
+              tamper-evident ledger, and the ledger’s hash chain was recomputed.
+            </p>
+            {verification && <CheckLines lines={verification.lines} testId="case-checks" />}
+            {verification && verification.unchecked > 0 && (
+              <div className="row">
+                <button className="btn btn-small" onClick={() => setCheckAll((n) => n + 1)} disabled={checkAll > 0}>
+                  {checkAll > 0 ? 'Checking…' : `Check all ${verification.unchecked} evidence file${verification.unchecked === 1 ? '' : 's'}`}
+                </button>
+                <span className="small muted">Each file is downloaded and decrypted on this device. Your client sees each download.</span>
               </div>
-              <div>
-                <dt className="muted">Hash attested in ledger</dt>
-                <dd className="mono" style={{ margin: 0 }}>{opened.data.ledgerEntry?.contentHash ?? 'unavailable'}</dd>
-              </div>
-              {opened.data.ledgerEntry && (
-                <>
-                  <div>
-                    <dt className="muted">Ledger entry</dt>
-                    <dd style={{ margin: 0 }}>
-                      #{opened.data.ledgerEntry.seq} · {opened.data.ledgerEntry.type} · {formatDate(opened.data.ledgerEntry.timestamp)} (server receipt time,{' '}
-                      {opened.data.ledgerEntry.timestamp})
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="muted">Entry hash / previous hash</dt>
-                    <dd className="mono" style={{ margin: 0 }}>
-                      {shortHash(opened.data.ledgerEntry.entryHash, 16)} ← {shortHash(opened.data.ledgerEntry.prevHash, 16)}
-                    </dd>
-                  </div>
-                </>
-              )}
-            </dl>
+            )}
           </section>
 
           <section className="card stack" aria-labelledby="brief">
@@ -268,6 +293,8 @@ export function AttorneyCase() {
                   key={b.blobId}
                   blob={b}
                   item={opened.data!.record.evidence.find((e) => e.blobId === b.blobId)}
+                  checkSignal={checkAll}
+                  onChecked={(c) => setChecks((m) => ({ ...m, [b.blobId]: c }))}
                 />
               ))}
             </ul>
@@ -278,29 +305,98 @@ export function AttorneyCase() {
   );
 }
 
+/**
+ * The verification panel's lines: the account (re-hashed here), the shared evidence (each file decrypted and hashed
+ * here, its ciphertext found in the ledger as that file's seal), and the chain.
+ */
+function caseChecks(c: OpenedCase, checks: Record<string, BlobCheck>): { lines: CheckLine[]; tone: ReturnType<typeof overallTone>; unchecked: number } {
+  const proof = c.proof ?? undefined;
+  const lines: CheckLine[] = [];
+  if (!c.proof)
+    lines.push({ id: 'account', tone: 'bad', text: 'We couldn’t reach Matra’s ledger to check this account. Try again in a moment.', details: [] });
+  else lines.push(accountCheck({ recordId: c.bundle.record.id, recordContentHash: c.recomputedHash, proof, recomputed: true }));
+  const shared = c.bundle.blobs.map((b) => ({ blob: b, item: c.record.evidence.find((e) => e.blobId === b.blobId) }));
+  const expected = shared.flatMap(({ item }) => (item ? [{ fileName: item.fileName, sha256: item.sha256 }] : []));
+  const files: Array<{ name: string; sha256: string }> = [];
+  const unsealed: string[] = [];
+  for (const { blob, item } of shared) {
+    const got = checks[blob.blobId];
+    if (!got) continue;
+    const seal = proof?.entries.find((e) => e.type === 'blob.sealed' && e.contentHash === got.ciphertextHash && e.subjectId === blob.blobId);
+    if (seal) files.push({ name: item?.fileName ?? 'Evidence file', sha256: got.sha256 });
+    else unsealed.push(`${item?.fileName ?? blob.blobId}: ciphertext ${got.ciphertextHash}`);
+  }
+  const unchecked = shared.filter(({ blob }) => !checks[blob.blobId]).length;
+  if (shared.length && unchecked === shared.length)
+    lines.push({
+      id: 'evidence',
+      tone: 'info',
+      text: `${shared.length} evidence file${shared.length === 1 ? ' was' : 's were'} shared. Not checked yet.`,
+      details: expected.map((e) => `${e.fileName}: ${e.sha256}`),
+    });
+  else if (shared.length) lines.push(...evidenceCheck(expected, files));
+  if (unsealed.length)
+    lines.push({
+      id: 'files',
+      tone: 'bad',
+      text: `${unsealed.length === 1 ? 'One evidence file isn’t' : `${unsealed.length} evidence files aren’t`} what was sealed in the ledger. Treat ${unsealed.length === 1 ? 'it' : 'them'} as unverified.`,
+      details: unsealed,
+    });
+  const chain = chainCheck(proof);
+  if (chain) lines.push(chain);
+  return { lines, tone: overallTone(lines), unchecked };
+}
+
 /*
  * Sealed matching is no longer shown to attorneys: they never see match status or counts. Matches go only to a
  * verified Legal Options Counselor (apps/web/src/counselor), who reaches out to each matched survivor separately.
  */
 
-function SharedBlob({ blob, item }: { blob: ShareBundle['blobs'][number]; item?: EvidenceItem }) {
+/**
+ * One shared evidence file: decrypt with the recipient's private key, check the hash she recorded, and only then offer
+ * the download. Also used by the counselor's report viewer (counselor/CounselorReport.tsx), which passes `download`.
+ */
+export function SharedBlob({
+  blob,
+  item,
+  download,
+  checkSignal,
+  onChecked,
+}: {
+  blob: Pick<ShareBundle['blobs'][number], 'blobId' | 'recipientWrappedKey' | 'sizeBytes'>;
+  item?: EvidenceItem;
+  /** fetch the ciphertext (default: the attorney share route) */
+  download?: (blobId: string) => Promise<Uint8Array>;
+  /** when this changes to a positive number, decrypt and verify (the verification panel's "Check all") */
+  checkSignal?: number;
+  /** the hashes computed on this device, for the verification panel */
+  onChecked?(c: { sha256: string; ciphertextHash: string }): void;
+}) {
   const { api, session } = useRequiredSession();
   const [state, setState] = useState<{ busy?: boolean; url?: string; ok?: boolean; hash?: string; error?: string }>({});
+  const started = useRef(false);
   async function decrypt() {
+    started.current = true;
     setState({ busy: true });
     try {
       const key = await unwrapKeyWithPrivate(blob.recipientWrappedKey, session.privateKey);
-      const ct = await api.downloadBlob(blob.blobId);
+      const ct = await (download ?? ((id: string) => api.downloadBlob(id)))(blob.blobId);
       const pt = await decryptBlob(ct, key);
-      const hash = await sha256Hex(pt);
+      const [hash, ciphertextHash] = await Promise.all([sha256Hex(pt), sha256Hex(ct)]);
       const ok = !!item && hash === item.sha256;
       // only offer the download once the hash has been checked
       const url = ok ? URL.createObjectURL(new Blob([pt as BlobPart], { type: item?.mimeType ?? 'application/octet-stream' })) : undefined;
       setState({ ok, hash, url });
+      onChecked?.({ sha256: hash, ciphertextHash });
     } catch (e) {
+      started.current = false;
       setState({ error: friendlyError(e) });
     }
   }
+  useEffect(() => {
+    if (checkSignal && !started.current) void decrypt();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkSignal]);
   return (
     <li className="stack">
       <div className="row" style={{ justifyContent: 'space-between' }}>

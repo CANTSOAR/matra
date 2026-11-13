@@ -1,0 +1,115 @@
+/**
+ * The matcher's HTTP API (src/server.ts runs it; tests import createMatcherApp). Only the app server talks to it,
+ * with a bearer token (MATRA_MATCHER_TOKEN, compared in constant time); the attestation and health endpoints are
+ * public, so a survivor's client can fetch the attestation through the app server's proxy. Nothing public depends on
+ * the matcher's state: a count of groups would tell anyone who can reach it when a match forms.
+ *
+ *   GET    /v1/attestation?nonce=<64 hex>   → AttestationDocument
+ *   GET    /v1/health                        → { ok, measurement, platform }
+ *   GET    /v1/stats                         → { unassigned } (token: groups no licensed counselor can take, for ops)
+ *   PUT    /v1/roster   { roster?, verifiedIds, counselors? }                         → { ok, counselors }
+ *   POST   /v1/entries  { entryId, tag, survivorRef, createdAt, accountCreatedAt, routing } → { ok: true }
+ *                       (idempotent; the same answer whether or not the entry completes a group)
+ *   DELETE /v1/entries/:entryId                                                       → { ok: true }
+ *   GET    /v1/assignments                   → { assignments: MatcherAssignment[] }
+ *   POST   /v1/assignments/:tag/decline { counselorId }                              → { ok: true } (reassigns)
+ *   GET    /v1/debug/state                   → InspectorProcess (token; only with `debugState`, i.e. MATRA_INSPECTOR=1
+ *                                               outside production or with MATRA_DEMO_MODE=1: src/debug.ts)
+ *
+ * Logs `METHOD <route pattern> status ms` only (shared requestLogLine; MATRA_LOG_REQUESTS=0 turns it off): never ids,
+ * tags, bodies, tokens, IPs or query strings. Error logs carry the error message only.
+ */
+import { createHash, timingSafeEqual } from 'node:crypto';
+import express, { type NextFunction, type Request, type Response } from 'express';
+import type { AttestationProvider } from './attestation.js';
+import { errorMessageForLog, logRequests, type InspectorProcess } from '@matra/shared';
+import { MatcherError, type Matcher } from './matcher.js';
+
+export interface MatcherAppOptions {
+  matcher: Matcher;
+  attester: AttestationProvider;
+  /** bearer token shared with the app server */
+  token: string;
+  logRequests?: boolean;
+  /** dev/demo inspector only (src/debug.ts): what this matcher holds */
+  debugState?: () => Promise<InspectorProcess>;
+}
+
+const digest = (s: string) => createHash('sha256').update(s).digest();
+
+export function createMatcherApp(o: MatcherAppOptions): express.Express {
+  const app = express();
+  app.disable('x-powered-by');
+  app.set('etag', false);
+  app.use((_req, res, next) => {
+    res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'" });
+    next();
+  });
+  // The same route-only logger as the app server and key holders (@matra/shared request-log.ts; W11).
+  if (o.logRequests) app.use(logRequests('[matcher]'));
+  app.use(express.json({ limit: '64kb' }));
+
+  const want = digest(o.token);
+  const requireToken = (req: Request, _res: Response, next: NextFunction) => {
+    const h = req.get('authorization') ?? '';
+    const got = h.startsWith('Bearer ') ? h.slice(7) : '';
+    if (!got || !timingSafeEqual(digest(got), want)) throw new MatcherError(401, 'unauthorized', 'Unauthorized');
+    next();
+  };
+
+  app.get('/v1/attestation', async (req, res) => {
+    const nonce = typeof req.query.nonce === 'string' ? req.query.nonce : '';
+    if (!/^[0-9a-f]{64}$/.test(nonce)) throw new MatcherError(400, 'invalid_request', 'nonce must be 64 hex chars');
+    res.json(await o.attester.attest(nonce));
+  });
+  app.get('/v1/health', (_req, res) => {
+    res.json({ ok: true, measurement: o.attester.measurement, platform: o.attester.platform });
+  });
+  app.get('/v1/stats', requireToken, (_req, res) => {
+    res.json({ unassigned: o.matcher.unassignedCount() });
+  });
+  app.put('/v1/roster', requireToken, (req, res) => {
+    res.json(o.matcher.putRoster(req.body ?? {}));
+  });
+  app.post('/v1/entries', requireToken, async (req, res) => {
+    const b = req.body ?? {};
+    await o.matcher.upsertEntry({
+      entryId: b.entryId,
+      tag: b.tag,
+      survivorRef: b.survivorRef,
+      createdAt: b.createdAt,
+      accountCreatedAt: b.accountCreatedAt,
+      routing: b.routing ?? null,
+    });
+    res.json({ ok: true });
+  });
+  app.delete('/v1/entries/:entryId', requireToken, (req, res) => {
+    res.json(o.matcher.removeEntry(String(req.params.entryId)));
+  });
+  app.get('/v1/assignments', requireToken, (_req, res) => {
+    res.json({ assignments: o.matcher.assignments() });
+  });
+  app.post('/v1/assignments/:tag/decline', requireToken, (req, res) => {
+    const counselorId = req.body?.counselorId;
+    if (typeof counselorId !== 'string' || !counselorId) throw new MatcherError(400, 'invalid_request', 'counselorId');
+    res.json(o.matcher.decline(String(req.params.tag), counselorId));
+  });
+  if (o.debugState) {
+    const debugState = o.debugState;
+    app.get('/v1/debug/state', requireToken, async (_req, res) => {
+      res.json(await debugState());
+    });
+  }
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'Not found', code: 'not_found' });
+  });
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof MatcherError) return res.status(err.status).json({ error: err.message, code: err.code });
+    const e = err as { status?: number; message?: string; type?: string };
+    if (typeof e?.status === 'number' && e.status >= 400 && e.status < 500) return res.status(e.status).json({ error: 'Bad request', code: 'invalid_request' });
+    // The message only: never the thrown object, which can carry request data (W11).
+    console.error('[matcher] internal error:', errorMessageForLog(err));
+    res.status(500).json({ error: 'Internal error', code: 'internal' });
+  });
+  return app;
+}

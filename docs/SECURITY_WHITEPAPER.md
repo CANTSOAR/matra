@@ -36,7 +36,7 @@
                                                     └─────────────────────────────────┘
  Attorney browser: same crypto library; decrypts only what was re-wrapped to its RSA key.
  Counselor browser: same library; opens only MATCHED sealed-match groups (section 4a).
- OPRF key holders A and B: one key share each (in-process for the MVP; separable, section 4a).
+ OPRF key holders 1..m: one Shamir share each, any t of m evaluate (in-process or separate processes, section 4a).
 ```
 (The package names in code are currently `@matra/*`. The rename to Matra is cosmetic.)
 
@@ -52,11 +52,25 @@
     ├── HKDF-SHA256(info="matra/auth")    ──► authKey (256 bit) ──► sent at login
     │                                              server stores scrypt(authKey, salt)
     │                                              (N=16384, r=8, p=1) — never the authKey
+    │
+    │  key version 1 (every account until she sets up a recovery code):
     ├── HKDF-SHA256(info="matra/match-x") ──► matchKey (HMAC-SHA256, non-extractable;
     │                                              sealed-matching x-coordinates, section 4a)
-    └── HKDF-SHA256(info="matra/master")  ──► masterKey (AES-256-GCM, non-extractable,
-                                                in memory only)
-             │
+    ├── HKDF-SHA256(info="matra/master")  ──► masterKey (AES-256-GCM, non-extractable,
+    │                                                in memory only)
+    │
+    │  key version 2 (an account with a recovery code, or one that was reset with it):
+    └── HKDF-SHA256(info="matra/kek")     ──► KEK_pass (AES-256-GCM)
+                                                 │ unwraps wrapped_account_key (server)
+                                                 ▼
+                    account secret AS (64 bytes) = masterKey bytes (32) ‖ matchKey bytes (32)
+                                                 ▲
+                                                 │ unwraps recovery_wrapped_key (server)
+ recovery code (16 random bytes, shown once) ──HKDF-SHA256(salt="matra/recovery/v1")──┬─ "kek"  ──► KEK_rec
+                                                                                      └─ "auth" ──► recoveryAuthKey
+                                                                         server stores scrypt(recoveryAuthKey, salt)
+
+ masterKey (either version)
              ├── wraps ► RSA-OAEP-3072 (SHA-256) identity private key  (stored wrapped on server)
              ├── wraps ► per-record content key  K_r  (AES-256-GCM, random)  ──► record ciphertext
              └── wraps ► per-blob content key    K_b  (AES-256-GCM, random)  ──► evidence ciphertext
@@ -69,8 +83,16 @@
 - The server never sees the passphrase, the masterKey, any content key, or any plaintext record.
 - Knowing the authKey (for example, from a stolen login exchange) does not reveal the masterKey, because HKDF provides domain separation.
 - `GET /api/auth/prelogin` returns a deterministic fake salt for unknown usernames, which limits username enumeration.
-- **No password reset exists.** A forgotten passphrase means the data is permanently unrecoverable. This is inherent to zero knowledge (see the roadmap for recovery options).
+- **No operator reset exists.** The server can't reset anyone's passphrase: nothing it stores opens a vault. Without a recovery code, a forgotten passphrase means the data is permanently unrecoverable. This is inherent to zero knowledge.
 - AES-GCM uses a random 96-bit IV per encryption. Every key is random and per-object, so nonce reuse is not a practical concern at MVP scale.
+
+**Recovery code (optional; threat model W20)**
+- Moving to key version 2 re-encrypts nothing: for an existing account AS is exactly the bytes version 1 derived (WebCrypto `deriveKey` of a 256-bit key equals `deriveBits(256)` with the same HKDF parameters; `packages/crypto/src/recovery.test.ts` checks it). Version 1 accounts keep their derivation until she sets up a code.
+- The code is 128 bits from the platform CSPRNG plus a CRC-8 check byte, shown as 28 Crockford base32 characters in groups of 4. The check byte only catches typing mistakes (every single-character typo is detected) before any network call; it is not a secret and not a hash of anything secret. The code is **not** stretched with PBKDF2 or Argon2id: it already has 128 bits of entropy, and slow hashing protects human-chosen secrets (the passphrase, W5).
+- Survivor accounts only (the server refuses set-up for attorneys and counselors, and treats them as having no code).
+- Set up and replace (signed in) re-authenticate with the passphrase authKey; a new code replaces the stored hash and wrapped key, so the old code stops working. Turning it off deletes both. **Neither revokes an account secret already unwrapped with the old code:** AS is not rotated, so a copy taken at `/recover/start` keeps opening every current and future record. A successful start is written to her activity at once, so she can see it happened; rotating AS (re-wrapping every record key and the private key) is later work.
+- Reset (signed out): alias + recoveryAuthKey → a single-use 10-minute reset token (memory only) and the KEK_rec-wrapped AS (her activity: "Your recovery code was used to start a passphrase reset"); her client unwraps AS, derives a new passphrase salt, authKey and KEK_pass, and sends only the new authKey and wrapped key. The server replaces them (conditionally on the code that started the reset still being the stored one), clears the used code, ends every other session, and appends `account.recovered` to the ledger (`SHA-256(JSON.stringify({ userId, at }))`). Her client then shows a **new** code and saves it with the ordinary set-up call only once she confirms she wrote it down. A wrong code, an unknown alias and an alias without a code get the same 401 after the same scrypt work.
+- Whoever holds the code and knows her alias can take over the account. Shamir recovery shares held by people she trusts are later work (section 6, Q-043).
 
 **Evidence handling**
 - Images are **re-encoded client-side to strip EXIF and GPS metadata** before hashing and encryption. The `sha256` stored inside the encrypted record is the hash of the *stripped* bytes, which an examiner can re-verify.
@@ -88,7 +110,7 @@
                SHA-256(canonical consent JSON) for share.granted (attests exact consent text)
 ```
 - SQLite triggers reject any `UPDATE` or `DELETE` on the ledger, and reject any `INSERT` that does not extend the chain (`seq = max+1`, `prevHash = head`). Records are immutable. A correction is a new row with `supersedes`.
-- `GET /api/ledger/verify` recomputes the chain. The brief PDF prints ledger entry IDs and hashes so a third party can re-check them.
+- `GET /api/ledger/verify` recomputes the chain on the server. The brief PDF prints ledger entry IDs and hashes, and carries them machine-readably (`/MatraVerification` in its document info), so a third party can re-check them **in the browser** on the public **Check a file** page (`/verify`): files are hashed locally, only the record ciphertext hash is sent to `POST /api/ledger/proof`, and the client recomputes the returned entry and checks that the bare chain links (`seq`, `prevHash`, `entryHash`) connect to the head (`packages/crypto/src/ledger.ts`). The attorney's case view runs the same checks on the account it decrypts and on each evidence ciphertext. The proof lookup answers only exact 64-hex hashes of `record.sealed` / `blob.sealed` entries, never ranges, prefixes or ids, and is rate-limited per client with the daily-salted in-memory key (threat model W22).
 - Account deletion crypto-shreds the account (ciphertext, keys, shares, sealed-match entries and OPRF quota rows, audit), with `secure_delete` on. Ledger rows (IDs, hashes, timestamps) remain, and an `account.shredded` entry is appended.
 - Sealed matching writes exactly **one** ledger entry per submission (`escrow.sealed`, hashing the random contact-bundle ciphertext, never the matching tag). There is deliberately **no `escrow.matched` entry**: writing one at match time would let anyone watching `GET /api/ledger/head` see the sequence number jump after a submission and infer a match. The match time is kept only in the database (`match_groups.matched_at`). Withdrawals write no ledger entry.
 
@@ -104,11 +126,14 @@
 Replaces the earlier demo-only "blind escrow" (client PBKDF2 hash + server HMAC pepper), which the pepper holder could
 brute-force. The design follows Rajan, Qin, Archer, Boneh, Lepoint, Varia, *Callisto*, COMPASS 2018, reimplemented
 from the paper (no AGPL code copied) with modern standard primitives. Code: `packages/crypto/src/matching.ts`
-(protocol), `apps/server/src/oprf.ts` (key holders), `apps/server/src/app.ts` (`/api/matching/*`, `/api/counselor/*`),
+(protocol), `packages/crypto/src/threshold.ts` (threshold OPRF), `apps/server/src/oprf.ts`, `holders.ts`,
+`holder.ts` (key holders), `apps/server/src/app.ts` (`/api/matching/*`, `/api/counselor/*`),
 `apps/web/src/counselor/` (counselor portal). **Not audited.**
 
-**Parties.** Survivor client · OPRF key holder A · OPRF key holder B · app server (stores ciphertext and tags, no
-secrets) · verified Legal Options Counselor(s) (an RSA-OAEP-3072 identity key, like attorneys).
+**Parties.** Survivor client · OPRF key holders 1..m (any t of them; default 2-of-3) · app server (stores ciphertext and tags, no
+secrets) · the **matcher** (decides which groups are released and to which ONE counselor, from routing data the app
+server cannot read; see "Matcher" below) · verified Legal Options Counselor(s) (an RSA-OAEP-3072 identity key, like
+attorneys).
 
 **What can be matched.** Only unique identifiers, canonicalised on the device (`packages/crypto/src/normalize.ts`):
 email (lower-case; trailing dot removed; internationalised domains converted to punycode; `+tag` removed **only** for
@@ -133,31 +158,37 @@ them" field (`other`) → `not_supported` — the normalizer, the intake opt-in 
  x_id  = canonical identifier, e.g. "instagram:bad_guy"
  input = "matra/match/v2|" || x_id
  client: (blind, B) = VOPRF.Blind(input)                                 RFC 9497, ristretto255-SHA512, mode 0x01
- A: (E_A, π_A) = BlindEvaluate(k_A, pk_A, B)   B: (E_B, π_B) = BlindEvaluate(k_B, pk_B, B)   (DLEQ proofs)
- client: pk_A, pk_B must equal the keys pinned in the build; refuse pk_A = pk_B, an identity key, or pk_A + pk_B = 0;
-         verify π_A against pk_A and π_B against pk_B; P̂ = Finalize(input, blind, E_A + E_B) = VOPRF_{k_A+k_B}(input)
+ holder i ∈ 1..m: (E_i, π_i) = BlindEvaluate(k_i, pk_i, B)    k_i = f(i), Shamir share of k; DLEQ proof per share
+ client: (t, pk, pk_1..pk_m) must equal the keys pinned in the build; refuse t ∉ [2, m], m > 16, a duplicate or
+         identity pk_i, pk = identity, or share keys that are not on one degree-(t−1) polynomial through pk;
+         verify each π_i against pk_i (a bad one is rejected and named); with any t valid responses S:
+         λ_i = Π_{j∈S, j≠i} j/(j−i) mod ℓ;  P̂ = Finalize(input, blind, Σ λ_i·E_i) = VOPRF_k(input)
  a = HKDF(P̂, "slope"),  k = HKDF(P̂, "intercept")      (a, k ∈ F_p, p = 2^256 + 297; salt "matra/match/v2")
  τ = HKDF(I2OSP(k, 33), "tag")        K_P = HKDF(I2OSP(k, 33), "entry-key")        ← the tag is bound to the line
  x   = HMAC(matchKey, "x|τ") mod p    matchKey = HKDF(passphrase material, "matra/match-x"), non-extractable HMAC key
  y   = a·x + k mod p                              her point on this perpetrator's line
- ke  = fresh AES-256 key;  bundle = AES-GCM(ke, pad₁ₖ(contact bundle), AAD "bundle|τ")
+ ke  = fresh AES-256 key;  bundle  = AES-GCM(ke, pad₁ₖ(summary bundle),  AAD "bundle|τ")
+                           contact = AES-GCM(ke, pad₁ₖ(contact details), AAD "contact|τ")   (staged release, below)
  ce  = AES-GCM(K_P, ke, AAD "ce|τ")
  c_j = RSA-OAEP(pk_counselor_j, kc) ‖ AES-GCM(kc, {τ, x, y, ce}, AAD "seal|τ|j")   one per counselor on the signed roster
- → server: { τ, bundle, c_1..c_n, label = AES-GCM_master(pad₁ₖ({label, identifier, contact, consent, state, epoch, {τ,x,y,ce}})) }
+ → server: { τ, bundle, contact, c_1..c_n, label = AES-GCM_master(pad₁ₖ({label, identifier, contact, consent, state, epoch, {τ,x,y,ce}})) }
 ```
 `pad₁ₖ` right-pads the JSON with spaces to 1 KiB, then whole KiB, so ciphertext sizes don't reveal name or note lengths.
-The contact bundle holds how she'd like to be contacted (method, number or email, safe times, name, language), the
-exact consent text she agreed to and when, the identifier kind and canonical form, and an optional state.
+The summary bundle (v2) holds the identifier kind and canonical form, the incident and home states, how she'd like to
+be contacted (the *methods* only: call, text, email, voicemail) and her language, and the exact consent text she agreed
+to and when. Her name, number or email and note are in the separate contact-details ciphertext under the same `ke`.
+(v1 bundles, sealed before staged release, held everything in one ciphertext; counselors' clients still open them.)
 
 **Server rules.** Stores rows keyed by τ with `UNIQUE(user, τ)` (a survivor cannot match herself; her x is the same
 every time she names the same person) and the OPRF key epoch. A τ is **matched** when entries from **2 distinct
 accounts** exist (a single, always-executed SQL statement). Survivors always see `sealed` (no match time, no τ); her
 audit trail never mentions a match or a counselor; the ledger gets exactly one `escrow.sealed` per submission. **Only
-matched groups are released, only to verified counselors, each receives only the seals addressed to them, and only
-once the entries are older than the release delay** (`MATRA_MATCH_RELEASE_DELAY_HOURS`, default 72; an entry younger
-than that neither counts toward nor appears in a released group). Unmatched entries are never served to anyone but
+matched groups are released, each to the ONE verified counselor the matcher assigned it to, who receives only the seals
+addressed to her, and only once the entries are older than the release delay** (`MATRA_MATCH_RELEASE_DELAY_HOURS`,
+default 72; an entry younger than that neither counts toward nor appears in a released group; the matcher and the app
+server each apply it). Unmatched entries are never served to anyone but
 their owner. Counselors (and attorneys) cannot call the OPRF endpoints. With each group the server sends **Sybil
-signals** computed without revealing accounts: whether some entries come from accounts created within 24 h of each
+signals**, computed by the matcher without revealing accounts: whether some entries come from accounts created within 24 h of each
 other, and how many were sealed < 7 days after account creation; the portal shows them as a warning. A survivor can
 **withdraw** any entry at any time (`DELETE /api/matching/entries/:id` deletes it, its seals and counselor notes about
 it); groups with no entries left are deleted with all their counselor notes (also on account deletion).
@@ -197,26 +228,70 @@ the share kept in her encrypted label (`POST /api/matching/entries/:id/seals`, o
 counselor once ≥ 2 entries hold a seal for that counselor, so release converges as survivors sign in. Up to 200
 counselors per entry.
 
-**Deploying the key holders.** k = k_A + k_B (additive 2-of-2; verified in `matching.test.ts`: Σ evaluations then
-Finalize equals one evaluation under k_A + k_B). Keys: `MATRA_OPRF_KEY_A` / `MATRA_OPRF_KEY_B` (64 hex, or any ≥ 32-char
-secret from which the key is derived) or `…_FILE` paths **outside the database directory**. With `NODE_ENV=production`
-the server **refuses to start** without both and never generates them (a key generated next to the DB would put both
-shares — and so an offline dictionary attack over every phone number, which takes milliseconds per thousand guesses —
-on the same volume as the tags). Dev keys are generated once into `apps/server/data/oprf-key-{a,b}.key`. The holder
-public keys are recorded in the DB on first start; the server **refuses to boot if they change** unless
-`MATRA_OPRF_ROTATE=1`, which starts a new **key epoch** (shown in `/api/matching/config`; quotas reset). Entries carry
-their epoch; on her next sign-in her client re-seals older-epoch entries from her encrypted label (identifier, contact,
-consent, state) under the current keys, atomically replacing the old entry. Web builds pin both holder keys
-(`MATRA_OPRF_PUBKEY_A/B`). In the MVP both holders run inside the API process at `/api/matching/oprf-a` and
-`/api/matching/oprf-b` with separate keys and separate quota counters, which gives **no real separation against the
-operator**. For production: run holder B as its own service on a different host and cloud, ideally operated by a
-separate organisation (partner legal-aid group or university lab), generating and backing up its own key; the app
-server issues a short-lived signed token per survivor request that each holder verifies and rate-limits against.
+**Deploying the key holders (threshold OPRF).** The OPRF key k is Shamir-shared over the ristretto255 scalar field
+among m holders, any t of whom evaluate (default 2-of-3; `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_HOLDERS`, 2 ≤ t ≤ m ≤ 16).
+Verified in `threshold.test.ts`: for 2-of-3 and 3-of-5, every t-subset of holder responses gives exactly the VOPRF
+output under the unsplit key, t−1 responses are refused, and a tampered evaluation or proof (or an answer under another
+share's key) is rejected by index while the remaining holders still produce the right output.
+- *Key ceremony (dealer, MVP).* `npm run -w @matra/server oprf-ceremony -- --threshold 2 --holders 3 --out <dir>` draws
+  k, splits it, writes one 0600 file per share and prints the public part (t, m, group key, share public keys) for
+  pinning. It refuses to write into the database directory. Run it offline, hand each file to a different institution,
+  delete the directory. **The dealer briefly knows k**; a distributed key generation (Pedersen / GJKR DKG), in which no
+  party ever holds k, is future work, as is a proactive share refresh.
+- *In-process mode* (development, tests, a single-host demo): `MATRA_OPRF_SHARE_<i>` or `…_<i>_FILE` for every i (files
+  must be different and **outside the database directory**). This gives **no separation against the operator**: whoever
+  runs the process holds every share.
+- *Remote mode*: each holder is its own process (`npm run -w @matra/server holder`, `src/holder-server.ts`) with ONE
+  share, its own quota database and its own logs, ideally run by a separate institution. The app server keeps the
+  browser same-origin (`connect-src 'self'`) and relays `POST /api/matching/oprf/:i` to holder i
+  (`MATRA_OPRF_HOLDER_URLS`, pinned `MATRA_OPRF_SHARE_PUBKEYS`; at startup it checks each reachable holder's `/key`
+  and refuses to start on a mismatch, and only warns about a holder that is down, since t of m suffice). It sees
+  blinded elements and evaluations only. Each relayed call carries a holder token: Ed25519 over
+  `"matra/holder-token/v1|" ‖ {sub, aud, exp, jti, bh}` with `MATRA_HOLDER_TOKEN_KEY`, where `sub` = HMAC(pepper,
+  "holder-sub|" ‖ user id) (holders never see user ids), `aud` = the holder's index, `exp` = 60 s, and `bh` =
+  SHA-256 of the request's blinded element. The holder pins the token public key (`MATRA_HOLDER_TOKEN_PUBKEY`), checks
+  audience, expiry (at most 90 s ahead of its clock) and that `bh` matches the body, and refuses a replayed `jti` until
+  the token expires. Production refuses plain `http://` to a non-loopback holder. Holder quotas are keyed by the
+  holder's index **and share public key**, so a key rotation starts fresh counters at every holder.
+  **The holder trusts the app server's statement that `sub` is an eligible survivor**, and accepts any well-formed
+  `sub`. So whoever holds `MATRA_HOLDER_TOKEN_KEY` — the operator, or anyone who steals it from the app server — can
+  mint a fresh subject per query and get unlimited proof-checked evaluations from t honest holders, then combine them:
+  **a full dictionary attack on guessed phone numbers or handles, with no per-subject limit**. Remote mode turns the
+  operator's *offline* attack into an *online* one that runs through the holders; it does **not** take it away.
+  What the holders can do is see and bound it: each standalone holder has a global daily evaluation budget
+  (`MATRA_HOLDER_DAILY_BUDGET`, default 1000/day across all subjects; it logs an alert at 80% and when spent, then
+  refuses until the next UTC day) and keeps an append-only table of daily totals that its institution can compare with
+  expected volume. A targeted guess about one known suspect still costs only a few requests and stays under any
+  budget. Closing this needs eligibility attested by a party other than the app server — for example anonymous tokens
+  (Privacy Pass style) issued by a separate issuer after phone and age verification and spent at the holders, so the
+  app server cannot mint subjects — which is future work.
+- *Account budget.* The app server charges each survivor account **once per distinct blinded element**, whichever
+  holders it is sent to (`AccountOprfBudget`, `src/oprf.ts`; ≤ 10/day, ≤ 50 lifetime by default), before relaying.
+  Per-holder counters alone would let an account send each guess to a different t-subset (2-of-3: A→{1,2}, B→{1,3},
+  C→{2,3}) and get ⌊m·L/t⌋ identifiers instead of L. Charged elements are remembered as SHA-256(B) in memory for the
+  UTC day only. Each holder still counts its own calls as a backstop.
+- *Custody checks.* With `NODE_ENV=production` the server **refuses to start** without every share (or the full
+  remote configuration) and never generates them: a key set generated next to the DB would put t shares — and so an
+  offline dictionary attack over every phone number, which takes milliseconds per thousand guesses — on the same volume
+  as the tags. Development deals a ceremony once into `apps/server/data/oprf-share-<i>.key` with a warning. The old
+  additive keys (`MATRA_OPRF_KEY_A/B`) are a fatal startup error pointing to the ceremony.
+- *Pinning and rotation.* t, the group key and the share public keys are recorded in the DB on first start; the server
+  **refuses to boot if they change** unless `MATRA_OPRF_ROTATE=1` (outside production a change is treated as a rotation
+  with a warning), which starts a new **key epoch** (shown in `/api/matching/config`; quotas reset). A database still
+  pinned to the additive keys counts as a change. Entries carry their epoch; on her next sign-in her client re-seals
+  older-epoch entries from her encrypted label (identifier, contact, consent, state) under the current keys, atomically
+  replacing the old entry. Web builds pin t, the group key and the share keys (`MATRA_OPRF_THRESHOLD`,
+  `MATRA_OPRF_GROUP_PUBKEY`, `MATRA_OPRF_SHARE_PUBKEYS`).
+- *What colluding holders can do.* Any t holders together hold k: they can compute τ for a guessed identifier and
+  confirm whether it was entered (they still cannot open bundles, which need two survivors' shares and a counselor key).
+  Fewer than t learn nothing about k. Open legal questions for holder institutions: Q-016 (compelled disclosure of a
+  share), Q-040 (joint administration), Q-041, in the legal research bank; nothing here answers them.
 
 **Deviations from Callisto (P1), on purpose.** VOPRF with per-holder DLEQ proofs instead of a plain OPRF (a key holder
 can't silently return wrong evaluations, research A9). τ derived from the intercept so reconstruction can verify the
 line. Per-survivor-per-perpetrator x (P1 used U = H(user id) for every perpetrator, which links a survivor's entries).
-No separate assignment-data / DLOC ciphertext (one counselor tier; `state` rides inside the bundle). Counselor key =
+P1's assignment data (DLOC) becomes a routing tag sealed to the matcher's attested key rather than to a counselor tier
+(see "Matcher"). Counselor key =
 RSA-OAEP identity key instead of libsodium box. Matched groups are released by the server only after threshold and the
 release delay. This **mitigates, but does not close,** research A7 (a counselor holding `sk_LOC` testing guesses): a
 counselor cannot call the OPRF and never receives single-survivor seals, but a counselor colluding with (or running) a
@@ -224,13 +299,133 @@ Sybil survivor account can seal a guess and see whether a group appears after th
 counselor collusion; needs account-level Sybil resistance (partner invite codes / anonymous credentials) before real
 use.** Name-only matching dropped. The survivor keeps her label (identifier, contact, share) instead of `cU = E(kU, ke)`.
 
+**Phone verify-then-forget (W13, W19; `apps/server/src/sms.ts`).** Before an account can call the OPRF endpoints or
+lodge an entry, it confirms a phone number that can get texts (`POST /api/matching/verification/start` then `/check`;
+403 `phone_not_verified` otherwise). The number is canonicalised with the same strict E.164/NANP rules as identifiers.
+The challenge (number, provider reference, attempts) lives only in the app server's memory, for at most 10 minutes and
+5 wrong codes (each attempt is charged before the provider is called, so concurrent checks can't exceed it). On
+success the server sets `users.matching_verified = 1` (its own commit, checkpointed out of the WAL, no audit event) and
+buffers `HMAC-SHA256(MATRA_PHONE_HASH_KEY, "matra/phone-token/v1|" + E.164)` in memory; the buffered counts are written
+to `phone_tokens` (no user id, no timestamps, `WITHOUT ROWID`) in a separate transaction at a random 10–60 minutes
+later, then checkpointed, so no single commit pairs a token with an account. The number and the code are dropped. One
+phone enables at most `MATRA_SMS_MAX_ACCOUNTS_PER_PHONE` accounts (default 2, counting the buffer), checked only after
+she has proved control of the phone, so it can't be used to test whether someone else's number has been used. The hash
+key is held outside the database like the OPRF shares. Code requests are capped in memory: 5 per account per day, 3 per
+(account, phone) per hour, 10 per client IP per hour (keyed by an HMAC of the IP under a daily in-memory salt; section 5, metadata row) and a global
+200 per hour / 1000 per day (503 `sms_unavailable`), and only NANP numbers are accepted by default
+(`MATRA_SMS_ALLOWED_COUNTRY_CODES`), against SMS pumping. The per-phone cap is deliberately per account, so other
+accounts can neither observe nor exhaust it; the provider's own per-number limits still apply across accounts (Twilio
+answers 429, shown as `rate_limited`, which does reveal that the number was sent codes in the last few minutes).
+Providers: a **mock** for development and demos that sends nothing and verifies nothing (the code is shown on screen;
+production refuses it unless `MATRA_DEMO_MODE=1`), and a **Twilio Verify** adapter (Twilio generates and checks the
+code; a Lookup line-type check that fails closed: only numbers reported as `mobile` get a code) that is written to
+Twilio's published API but **has not been run against the real service**. This is friction against cheap mass
+accounts, not Sybil resistance: SIM farms and a few real phones still get through, and the gate is enforced by the app
+server, not by cryptography (section 5). **The phone is not unlinkable from the account:** the provider records the
+number and the time, and Matra's own timestamped activity for the account (sign-ins, when it first sealed) could be
+lined up with it; whoever holds the hash key and the database can test a guessed number (W19). Open questions: Q-013,
+Q-038.
+
+**Matcher (W15, W18; `apps/matcher`, `apps/server/src/matcher-client.ts`, `packages/crypto/src/attestation.ts`).** A
+separate service, not the app server, decides which matched groups exist, when each is released, and which **one**
+counselor gets it. It holds only entry ids, tags, a pseudonymous survivor reference (HMAC of the tag and the account id
+under the app server's pepper, so it can count distinct survivors per tag without user ids, and cannot link one
+survivor's entries across tags), when each entry was sealed, the **hour**
+the account was created (Sybil signals), and the two states from each survivor's **routing tag**: the incident state
+and her home state, taken from her record on her device. Her client seals the routing tag to the matcher's static
+P-256 key with ECIES (ephemeral ECDH P-256, HKDF-SHA256 with salt = both public keys and info
+`matra/matcher-routing/v1`, AES-256-GCM with AAD `routing|τ`, plaintext padded to 256 bytes): the app server stores and
+forwards it but cannot open it, and cannot move it to another entry (the AAD binds τ). This is standard ECIES from
+WebCrypto primitives, not RFC 9180 HPKE. Assignment is deterministic: candidate states are the group's incident states
+by frequency (ties alphabetical), then its survivors' states; the first state with a counselor licensed there (the
+roster's `licensedStates`, now part of the org-signed roster v2) wins, the least-loaded such counselor is chosen (ties:
+lowest SHA-256(τ | counselor id)), and the reason (`incident_state:NJ`, `survivor_state:NY`, `reassigned:…`) is recorded
+and shown to the counselor in plain words. If nobody is licensed in any of the group's states, the group is **not
+released** (ops sees only a count, behind the matcher's token). A group in which nobody gave any state (she left both
+blank, or an entry predates routing) is not dropped: it goes to the least-loaded counselor on the whole roster, reason
+`fallback:no_state`. An assignment is sticky while its counselor stays on the roster, licensed there, and has not
+declined; otherwise it is reassigned with her excluded. The counselor declines from her portal (a conflict of interest,
+before contacting anyone); the decline is kept per τ, so it survives the group dissolving and forming again, and is
+erased once no entry with that τ remains. The app server forwards entries after responding
+(the same way for a match or a miss), retries every minute, queues withdrawals until the matcher has them, and caches
+assignments so released groups survive a matcher outage while new groups wait for it (fail closed). It runs
+in-process (development, tests, single-host demo: the app server then holds the matcher key, so there is **no
+separation**) or as its own process (`npm run -w @matra/matcher start`, bearer token `MATRA_MATCHER_TOKEN`).
+
+*Attestation (SIMULATED).* The matcher serves `GET /v1/attestation?nonce=` (proxied by the app server at
+`/api/matching/attestation`): an Ed25519-signed document `{ platform, measurement, encKey, signKey, nonce, issuedAt }`.
+The measurement is SHA-256 over every source file the matcher loads from this repository: `apps/matcher/src`,
+`packages/crypto/src` (which opens the routing tags and verifies the roster) and `packages/shared/src` (tests excluded),
+their `package.json` files, and the root `package-lock.json`, which pins every third-party dependency's version and
+integrity hash (`npm run -w @matra/matcher measure` prints it for publication). Installed `node_modules`, Node.js and
+the OS image are not hashed; a real platform measures the whole image. The survivor's client fetches it with a fresh nonce
+**before** anything else (so a failure costs no OPRF quota), checks the platform signature, nonce, freshness (5 min)
+and that the measurement equals the value pinned in the build (`MATRA_ATTESTATION_PLATFORM_PUBKEY`,
+`MATRA_MATCHER_MEASUREMENT`), and only then seals the routing tag to `encKey`; otherwise she sees "This matcher isn't
+running the code this app trusts" and nothing is sealed. The app server makes the same check with the same pins at
+first use and every 10 minutes, and forwards nothing while it fails. **This is not attestation.** Tonight's
+"platform" is a dev Ed25519 key (`MATRA_ATTESTATION_PLATFORM_KEY`) held by whoever runs the matcher, and the
+measurement is computed by the matcher process from its own files: anyone holding that key can sign any measurement,
+and a modified process can report the published one. It exercises the protocol so that a real platform (AWS Nitro
+Enclaves: NSM document over PCR0; GCP Confidential Space: attestation token over the image digest, from a reproducible
+build) becomes a verifier plus configuration (`MATRA_ATTESTATION=nitro|confidential-space` exist as stubs that refuse
+to start). A production web build with no matcher pins fails to build unless `MATRA_DEMO_MODE=1` (and such a client
+refuses to seal at run time): the app server proxies the attestation, so an unpinned client would seal to whatever key
+it is handed. Pinned production builds refuse a `simulated` platform unless built with `MATRA_DEMO_MODE=1`; the matcher
+and the app server refuse to run the simulated attester in production unless `MATRA_DEMO_MODE=1`; unpinned
+development builds accept any attestation with a console warning.
+
+*What does not change.* The app server still stores τ (it must, to serve seals), so it still sees which entries share a
+τ and could still compute groups itself. What the matcher adds: routing data the app server cannot read; release and
+assignment decided by published code (attested, once attestation is real); and one counselor per group instead of
+all. A malicious app server can still withhold groups, or serve a released group's seals to another listed counselor
+(seals exist for every counselor). The matcher signs each assignment with its attested `signKey`; the counselor's
+client does **not** verify that signature yet, so re-routing is not detected (W18). Open legal questions: Q-017
+(automatic assignment to one counselor), Q-035 (which state's law governs), Q-042 (an uninspectable matcher).
+
+**Staged release (W1, W21; `apps/server/src/app.ts`, `apps/web/src/counselor`).** A released group opens in stages,
+and nothing about one survivor is ever shown to another.
+1. *What matched.* The assigned counselor's client opens each summary bundle: identifier, states, contact methods,
+   consent. The server withholds every entry's contact-details ciphertext.
+2. *Conflict check.* She checks the identifier and states against her conflicts records outside Matra and records
+   "no conflict" or "conflict" (`POST /api/counselor/groups/:id/conflict-check`, statement version 1; a
+   `counselor.conflict_checked` ledger row hashes group, counselor, result and version). "No conflict" makes the server
+   include the contact ciphertexts from then on; "conflict" asks the matcher to reassign the group with her excluded,
+   cancels her unanswered requests in it, and removes it from her list. **This gate is the server's, not the
+   cryptography's:** her client already holds `ke`, so a counselor colluding with the operator could skip it (W21).
+3. *A full report, only with her yes.* After the check, and only after ticking that she has already spoken with the
+   survivor and the survivor expects it (so the request is never the first sign of a match), the counselor may ask that
+   one survivor for her full report (`report.requested`). The survivor sees the request only in her own space, with who
+   is asking and their key fingerprint (checked automatically against the org-signed roster when the build pins the
+   roster key, otherwise compared by hand). On a yes her device wraps her latest sealed record's key,
+   and any evidence keys she ticks (unticked by default), to the counselor's RSA key, and the server stores a release
+   with her consent text (`report.released`, hashing the consent text, record, counselor, key fingerprint, evidence ids
+   and expiry, like `share.granted`). On a no (`report.declined`) the counselor sees only the decision, and no
+   counselor can ask that entry again through Matra (the history follows the entry through re-seals). She can revoke
+   (`report.revoked`): before the counselor first opens it, the counselor never receives it; after, it stops future
+   access only. Every opening is shown in her activity. Matra also revokes a release for her, with its own
+   `report.revoked` row and a line in her activity, if the counselor later records a conflict, if her entry is
+   re-sealed under a rotated OPRF key (a new group), or if she withdraws the entry; a counselor who is no longer
+   assigned the group or no longer on the signed roster cannot read a release either. Withdrawing the entry or
+   deleting either account deletes the requests and releases (the ledger keeps only hashes).
+Open legal questions: Q-018 (conflict checks), Q-022, Q-023, Q-050 (revocation), Q-052 (non-consenting survivors). Schema
+v9 adds the tables and bumps the key epoch, so survivors' clients re-seal old entries into the split format at their
+next sign-in.
+
 **Data migration.** Schema v5 drops all existing matching data (entries, seals, groups, counselor notes, OPRF quotas):
 the tag derivation and seal format changed, old entries cannot be converted without the plaintext identifiers, and
 they only ever held demo data.
 
 **Metadata still visible to Matra.** Which accounts submitted, when, and how many entries; the τ equality classes
 (how many survivors named the same, unknown, person — including groups of one); that a group matched and when;
-each entry's key epoch and which counselors it is sealed to; OPRF quota counters; counselor note counts and times.
+each entry's key epoch and which counselors it is sealed to; which counselor each released group was assigned to and
+why (the reason names a state, so the app server learns the state of released groups; it never stores per-entry
+states); OPRF quota counters (the account-level budget always;
+per-holder counters in in-process mode, while in remote mode each holder keeps its own counters under a pseudonymous
+subject, plus its daily totals); counselor note counts and times; for each group, when its counselor recorded her conflict check and the result; each
+report request, its status and times, and each release (survivor, counselor, record, consent text, first-opened and
+revoked times; the report itself stays ciphertext wrapped to the counselor); whether an account confirmed a phone, and keyed
+phone hashes with counts (no account id; linkable by time together with the SMS provider's records, W19).
 
 ---
 
@@ -242,13 +437,13 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 |---|---|---|---|
 | **Server database leak / stolen backup** | Read all tables | ✅ content · ⚠️ metadata | Content is AES-256-GCM ciphertext. Exposed metadata includes usernames, record and blob counts and sizes, timestamps, share relationships, the plaintext survivor alias, attorney and counselor profiles, sealed-match tags and match state, and audit text. scrypt hashes protect authKeys, and the 600k PBKDF2 slows offline passphrase guessing. **Weak passphrases remain guessable** (enforce length, and suggest a diceware phrase). |
 | **Subpoena or warrant to Matra** | Compel production | ✅ content · ⚠️ metadata | Matra cannot produce plaintext. It *can* produce the metadata above. See Legal Memo §2. The survivor herself can still be compelled. |
-| **Compromised or malicious server (code, active attacker)** | Serve modified JavaScript; substitute keys | ❌ | **The central limitation of any web-based end-to-end encryption.** A malicious build can capture the passphrase. A malicious server can also return an **attacker-controlled "attorney" public key**, so the survivor encrypts to the attacker. Mitigations: publish build hashes and use subresource integrity; an out-of-band **key-fingerprint check** (**done** in the UI: the share screen shows the attorney's fingerprint, she must tick that it matches what the attorney read to her before she can share, and the fingerprint is in the consent statement; an independent verification path through the attorney's organization is still to do); later, key transparency, a signed desktop or mobile app, and reproducible builds. |
-| **Matching: dictionary attack on identifiers** (operator / DB thief) | Test whether a known phone number or handle was entered | ✅ DB thief · ⚠️ operator | The DB holds only τ (derived from VOPRF_{k_A+k_B}(id)); computing τ for a guess needs **both** key shares — with both, a thousand phone numbers take milliseconds. Production refuses to start unless both shares come from the environment or from files **outside** the DB directory, and never generates them, so a DB volume copy or backup holds neither. **In the MVP the operator runs both holders**, so the operator can still test guesses until holder B is run by a separate party (section 4a). Each guess through the API costs one rate-limited evaluation per holder. |
+| **Compromised or malicious server (code, active attacker)** | Serve modified JavaScript; substitute keys | ❌ | **The central limitation of any web-based end-to-end encryption.** A malicious build can capture the passphrase. A malicious server can also return an **attacker-controlled "attorney" public key**, so the survivor encrypts to the attacker. Mitigations: publish build hashes and use subresource integrity; an **organization-signed attorney directory** (**done**: the org key that signs the counselor roster, pinned in the build, also signs each verified attorney's name and key fingerprint; her client checks the attorney's key against it automatically and turns sharing off on any mismatch, with no manual step; the fingerprint is in the consent statement; threat model W3); later, key transparency, a signed desktop or mobile app, and reproducible builds. |
+| **Matching: dictionary attack on identifiers** (operator / DB thief) | Test whether a known phone number or handle was entered | ✅ DB thief · ❌ operator (both modes) | The DB holds only τ (derived from VOPRF_k(id), k Shamir-shared t-of-m); computing τ for a guess needs **t** key shares — with them, a thousand phone numbers take milliseconds. Production refuses to start unless every share comes from the environment or from files **outside** the DB directory (or the holders are remote), and never generates them, so a DB volume copy or backup holds none. **The operator can still test guesses in both modes.** In in-process mode it holds every share (offline attack). In remote mode it holds the holder-token key, so it can mint fresh subjects and query t honest holders without any per-subject limit (online attack, section 4a); the holders' global daily budget and append-only daily totals make mass querying visible and bounded, but a few targeted guesses about a known suspect are not. Closing it needs eligibility attested by someone other than the app server (anonymous tokens from a separate issuer). An honest server charges each survivor account one evaluation per guess, whichever holders answer. |
 | **Matching: perpetrator probing (self-check)** | Register as a "survivor", seal his own identifiers, see if they matched | ✅ **mitigated** · ⚠️ residual | Survivors only ever see `sealed`; no match time, τ, ledger entry, or audit text reveals a match; counselor views are never logged to a survivor. Attorneys no longer see counts either. **Residual:** a counselor who contacts him (because his fake entry matched) reveals the match — hence the counselor's plausibility check and the instruction never to confirm who else was named. |
-| **Matching: Sybil / framing / decoys** | Create accounts that name a target to force a "match" and expose a real survivor's contact bundle to the counselor; or seal a decoy line under the real τ to hide real reports | ⚠️ (decoys ✅) | Threshold counts distinct **accounts**, not people. Decoy lines can no longer hide real reports (τ is bound to the line's intercept, every entry is opened with K_P, all pairs are tried, extra lines raise an alert). Mitigations: verified-adult survivor accounts only, OPRF + entry rate limits, a 72 h release delay, Sybil signals (accounts created within 24 h of each other / < 7 days before sealing) shown to the counselor, a human counselor who reviews plausibility before any contact, and contact only on the survivor's terms. **Residual:** account creation is cheap (self-attested 18+); once one OPRF evaluation yields τ for a target, further accounts can reuse τ without more evaluations. Needs account verification (partner invite codes / anonymous credentials) before real data. |
-| **Matching: colluding key holders** | Holders A and B (or one operator running both) combine keys | ❌ in MVP | With k_A + k_B the colluders can compute τ for any guess and confirm whether it was entered (but still cannot open bundles: those need two survivors' shares and a counselor key). Fix: independent operators, HSM/KMS custody, audit logs on both holders. |
-| **Matching: malicious key holder** | Return a wrong evaluation to block matches or tag a user; present degenerate keys | ✅ | VOPRF DLEQ proofs are verified per holder against its published key; a bad evaluation makes the client refuse. Production builds pin both public keys (`MATRA_OPRF_PUBKEY_A/B`); the client refuses pk_A = pk_B, identity keys and pk_A + pk_B = 0. The server records the keys and refuses to boot on a silent change (explicit rotation → new epoch → clients re-seal). |
-| **Matching: malicious app server** | Release unmatched entries, swap counselor keys, drop entries | ⚠️ | The server can withhold or delete entries (availability). It could hand a counselor unmatched seals, but a single share reveals nothing about k (2-of-2 Shamir) — the counselor still needs two survivors' points. Substituting a counselor public key it controls (and then reconstructing any τ with two entries) is **blocked when the build pins the organization's roster key**: survivors seal only to counselors in the org-signed roster, with the listed key. Residual: development builds without a pinned key trust the server's list. Seals are bound to τ and the counselor id by AAD. |
+| **Matching: Sybil / framing / decoys** | Create accounts that name a target to force a "match" and expose a real survivor's contact bundle to the counselor; or seal a decoy line under the real τ to hide real reports | ⚠️ (decoys ✅) | Threshold counts distinct **accounts**, not people. Decoy lines can no longer hide real reports (τ is bound to the line's intercept, every entry is opened with K_P, all pairs are tried, extra lines raise an alert). Mitigations: verified-adult survivor accounts only, an SMS-confirmed phone per account with at most 2 accounts per phone (verify-then-forget; friction, not proof of a distinct person), OPRF + entry rate limits, a 72 h release delay, Sybil signals (accounts created within 24 h of each other / < 7 days before sealing) shown to the counselor, a human counselor who reviews plausibility before any contact, and contact only on the survivor's terms. **Residual:** accounts still cost only a phone per two (SIM farms, a few real phones; the mock provider in demos verifies nothing); once one OPRF evaluation yields τ for a target, further accounts can reuse τ without more evaluations. Needs account verification (partner invite codes / anonymous credentials) before real data. |
+| **Matching: colluding key holders** | t holders (or one operator running them all in-process) combine shares | ❌ in-process · ⚠️ remote | Any t shares give k: the colluders can compute τ for any guess and confirm whether it was entered (but still cannot open bundles: those need two survivors' shares and a counselor key). t−1 learn nothing. The dealer of the MVP ceremony briefly knew k. Fix: independent operators in remote mode, a DKG instead of a dealer, HSM/KMS custody, audit logs on every holder. |
+| **Matching: malicious key holder** | Return a wrong evaluation to block matches or tag a user; present degenerate keys | ✅ | VOPRF DLEQ proofs are verified per holder against its own share key; a bad evaluation is rejected and named — also when t others are valid and sealing goes ahead (the client logs the holder index; there is no report channel to the operator yet) — and the remaining holders are used if t are still valid (fewer: nothing is sealed). Production builds pin t, the group key and every share key; the client refuses duplicate or identity share keys, an identity group key, and share keys inconsistent with the group key. The server records the key set and refuses to boot on a silent change (explicit rotation → new epoch → clients re-seal). A holder that refuses to answer only costs availability while t others answer. |
+| **Matching: malicious app server** | Release unmatched entries, swap counselor keys, drop entries | ⚠️ | The server can withhold or delete entries (availability). It could hand a counselor unmatched seals, but a single share reveals nothing about k (the per-perpetrator 2-survivor line, not the OPRF key) — the counselor still needs two survivors' points. Substituting a counselor public key it controls (and then reconstructing any τ with two entries) is **blocked when the build pins the organization's roster key**: survivors seal only to counselors in the org-signed roster, with the listed key. Residual: development builds without a pinned key trust the server's list. Seals are bound to τ and the counselor id by AAD. |
 | **Matching: counselor insider** | Counselor misuses matched contact details, tries to open unmatched entries, or tests guesses with a Sybil survivor account | ⚠️ | Counselors receive only matched groups and only seals addressed to them; they cannot call the OPRF themselves. Research A7 is **mitigated, not closed**: a counselor colluding with (or running) a Sybil survivor account can seal a guess and see whether a group appears; the 72 h release delay, OPRF quotas and Sybil signals slow and flag this. **Residual risk: Sybil + counselor collusion; needs account-level Sybil resistance before real use.** They do see contact details of matched survivors: vetting, contract, ethics rules, and per-counselor seals (removing a counselor from the roster deletes their seals). Roadmap: threshold-split counselor key, decryption logging on a separate system. |
 | **Matching: linkability of tags** | Learn that entries are about the same (unknown) person | ⚠️ inherent | τ is deterministic per identifier, so the server sees equality classes and cluster sizes, including below threshold (Callisto has the same leak; MPC designs like SAE/WhoToo avoid it at much higher cost). τ does not link a survivor's entries about *different* people (x is per-perpetrator), and the ledger never contains τ. |
 | **Matching: false matches** | Recycled numbers, shared emails, common handles on other apps | ⚠️ | Names are excluded entirely; handles are platform-qualified; phones are E.164. A match is a lead for a counselor conversation, not evidence. |
@@ -256,7 +451,8 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 | **Malicious or compromised attorney account** | Read shared records; exfiltrate them | ⚠️ | Only **verified** attorneys can receive shares (an admin CLI sets verification today). Every open and download is written to the survivor's visible audit log. **Revocation stops future server fetches but cannot recall plaintext already downloaded.** Mitigations: identity and bar verification procedures (see MOU), share expiry (**done**: default 90 days, she can choose 30 days to 1 year, renewal keeps her chosen length), scoped shares, MFA and passkeys for attorneys, and partner agreements with breach duties. |
 | **Insider (Matra staff)** | Database access; deploy code | ⚠️ | Same as a database leak plus the malicious-code risk. Mitigations: two-person code review and deploy, least-privilege production access, audit of admin actions (attorney verification), and a published security policy. |
 | **Network attacker** | Intercept traffic | ✅ (with TLS) | TLS is required in deployment, along with HSTS. Even under TLS interception, payloads are already end-to-end encrypted. Login is protected by the derived authKey (the passphrase is never sent). |
-| **Account takeover by guessing** | Online guessing | ⚠️ | Login rate limits are 10/min per username and 60/min per IP (in-memory, single process), and failed attempts are written to the user's audit log. Roadmap: persistent limiter, passkeys, alerts. |
+| **Account takeover by guessing** | Online guessing | ⚠️ | Login rate limits are 10/min per username and 60/min per IP (in-memory, single process; the IP only as a daily-salted HMAC), and failed attempts are written to the user's audit log. Roadmap: persistent limiter, passkeys, alerts. |
+| **Metadata: IP addresses and devices** | Subpoena, database thief or log reader wants to know where a survivor connected from | ✅ our code · ⚠️ host | Matra's code never writes a client IP, user agent, referrer, URL or query string to the database, ledger or logs. Per-client rate limits hold `HMAC-SHA256(salt, IP)` in memory, where the salt is random per UTC day and never written; windows are at most 24 h, and a timer at midnight UTC zero-fills the salt and empties those limiters even when no request arrives. Expired session rows (a sign-in time each) are deleted within about 10 minutes of expiry. Request logs from every service (app server, key holders, matcher) are `METHOD <route pattern> status ms`. A regression test drives a full session behind a proxy and checks the DB files and logs (`apps/server/src/privacy.test.ts`). The web app makes no third-party requests (CSP `'self'`, build audit, e2e guard). **Residual:** the hosting edge logs IPs unless configured not to (DEPLOY.md); an operator who changes the server code could log them; timestamps, sizes and the share graph remain (threat model §2, W11). |
 | **Denial / destruction** | Delete data | ⚠️ | Records cannot be deleted except by the owner's crypto-shred. There is no server-side backup strategy yet. Define backup encryption and retention before the pilot. |
 
 ---
@@ -264,17 +460,17 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 ## 6. Roadmap
 
 **Before any real-data pilot (blocking)**
-1. **Sealed matching:** ~~hide match status from users~~ (**done**) · ~~split-key VOPRF, threshold-2 Shamir shares, counselor-only release of matched groups, OPRF rate limits, Legal Options Counselor role~~ (**done**, section 4a). ~~decoy-line-proof reconstruction, allow-list profile parsing, key pinning (holder keys + org-signed counselor roster), key-epoch re-sealing, release delay + Sybil signals, production key custody checks~~ (**done**, security review 2026-10). Still to do before real data: run OPRF holder B as an independent service/organisation with its own token-based auth and quota store; set the build-time pins in every production build; account-level Sybil resistance (the release delay and signals only slow and flag Sybil + counselor guessing); a counselor vetting procedure and contract; an external cryptographic review of the protocol. Until then, keep matching **demo-only**.
+1. **Sealed matching:** ~~hide match status from users~~ (**done**) · ~~split-key VOPRF, threshold-2 Shamir shares, counselor-only release of matched groups, OPRF rate limits, Legal Options Counselor role~~ (**done**, section 4a). ~~decoy-line-proof reconstruction, allow-list profile parsing, key pinning (holder keys + org-signed counselor roster), key-epoch re-sealing, release delay + Sybil signals, production key custody checks~~ (**done**, security review 2026-10). ~~t-of-m threshold OPRF with standalone holder processes, holder tokens and per-holder quota stores~~ (**done**, section 4a). Still to do before real data: run the holders at independent institutions (and replace the dealer ceremony with a DKG); set the build-time pins in every production build; account-level Sybil resistance (the release delay and signals only slow and flag Sybil + counselor guessing); a counselor vetting procedure and contract; an external cryptographic review of the protocol. Until then, keep matching **demo-only**.
 2. **Independent security audit** of the crypto library, server, and web client. Commission a penetration test.
-3. **Client integrity:** published build hashes, SRI, a strict CSP (**done** for production serving: same-origin only, no inline script or eval; see DEPLOY.md), and an attorney key-fingerprint check in the UI (**done**, manual: see section 5).
+3. **Client integrity:** published build hashes, SRI, a strict CSP (**done** for production serving: same-origin only, no inline script or eval; see DEPLOY.md), and an attorney key check against the org-signed directory (**done**, automatic in pinned builds: see section 5 and threat model W3).
 4. ~~**Share expiry** (VAWA "reasonably time-limited" consent)~~ (**done**: default 90 days, renewable, length in the consent text and ledger hash). Still to do: MFA or passkeys for attorneys, and a documented attorney-verification procedure.
-5. **Metadata minimization:** encrypt the survivor alias, pad sizes, set log retention, and truncate IPs.
-6. **Incident response plan** and breach-notification procedure (N.J.S.A. 56:8-163; NY GBL 899-aa).
+5. **Metadata minimization:** ~~no IP addresses or user agents on disk or in logs, route-only request logs, no third-party requests from the web app~~ (**done**, see the metadata row in section 5 and [PRIVACY_DATA_INVENTORY.md](PRIVACY_DATA_INVENTORY.md)). Still to do: encrypt the survivor alias, pad record and blob sizes, and configure the host's edge logs (DEPLOY.md).
+6. **Incident response plan** and breach-notification procedure (N.J.S.A. 56:8-163; NY GBL 899-aa). A draft, pending counsel, is in [ops/INCIDENT_RESPONSE.md](ops/INCIDENT_RESPONSE.md); whether a ciphertext-only leak requires notice is open (Q-055). Deploy approvals (n-of-m across organizations, signed releases, published hashes) are proposed in [ops/DEPLOY_GOVERNANCE.md](ops/DEPLOY_GOVERNANCE.md), and the hosting choice for real enclave attestation (W18) in [ops/HOSTING.md](ops/HOSTING.md).
 
 **Next phase**
 7. **External timestamp anchoring** of the ledger head: an RFC 3161 Time-Stamp Authority, and/or periodic publication to a public, append-only log. This turns "trust our server clock" into third-party-verifiable time evidence.
 8. **Plaintext commitments** or a key-committing AEAD for sealed records (section 4).
-9. **Recovery without operator access:** Shamir secret sharing of a recovery key among the survivor and one or more trusted advocates (for example, 2-of-3). The survivor would be fully informed of the risks if an advocate is compromised or compelled.
+9. **Recovery without operator access:** done for one secret (an optional recovery code only she holds, section 3, W20). Next: Shamir secret sharing of the recovery key among the survivor and one or more trusted advocates (for example, 2-of-3), so no single paper opens the account. The survivor would be fully informed of the risks if an advocate is compromised or compelled (Q-043).
 10. **Passkeys (WebAuthn)** for login and possibly key wrapping (PRF extension).
 11. A native or packaged client to reduce the malicious-JavaScript risk.
 12. Optional encrypted storage of **original** evidence files alongside stripped copies.
@@ -284,7 +480,7 @@ Notation: ✅ protected in MVP · ⚠️ partially protected · ❌ not protecte
 
 ## 7. What we tell survivors (plain language)
 - "We can't read what you write. Not even our staff can."
-- "If you forget your passphrase, nobody can recover your information. Not us, not anyone."
+- "If you forget your passphrase, we can't recover your information. If you made a recovery code, it lets you set a new passphrase. Only you have it: anyone who has it and knows your alias could get into your account, so keep it somewhere only you can reach. Without one, nobody can recover your information. Not us, not anyone."
 - "A court can order **you** to share your records. We can't be forced to, because we can't open them."
 - "Anything you give police will be shared with the defense."
 - "Every saved version is kept. If you're ever asked to hand over your records, that can include earlier versions."

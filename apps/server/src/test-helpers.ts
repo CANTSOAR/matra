@@ -13,13 +13,13 @@ import {
   newKdfSalt,
   wrapKeyWithMaster,
 } from '@matra/crypto';
-import type { AttorneyProfile, AuthResponse, Envelope, IdentifierKind, RegisterRequest, Role } from '@matra/shared';
+import type { AttorneyProfile, AuthResponse, Envelope, IdentifierKind, MatchStates, RegisterRequest, Role } from '@matra/shared';
 import { createApp, getDb, type CreateAppOptions } from './app.js';
 
 export const TEST_ITERATIONS = 1000;
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
-export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string } = {}) {
+export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; inspector?: boolean } = {}) {
   // Tests release matched groups immediately unless they set a delay (production default: 72 h).
   const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra, matching: { releaseDelayHours: 0, ...extra.matching } });
   return { app, db: getDb(app) };
@@ -47,7 +47,13 @@ export async function registerUser(
   app: express.Express,
   username: string,
   role: Role = 'survivor',
-  opts: { verify?: boolean; profile?: RegisterRequest['attorneyProfile']; ageConfirmed18?: boolean | null } = {},
+  opts: {
+    verify?: boolean;
+    profile?: RegisterRequest['attorneyProfile'];
+    ageConfirmed18?: boolean | null;
+    /** survivors: mark the account phone-verified for sealed matching directly (default true; see verifyPhone for the real flow) */
+    phoneVerified?: boolean;
+  } = {},
 ): Promise<TestUser> {
   const passphrase = `pass-${username}`;
   const kdfSalt = newKdfSalt();
@@ -69,6 +75,8 @@ export async function registerUser(
   if (res.status !== 201) throw new Error(`register failed ${res.status} ${JSON.stringify(res.body)}`);
   if (role === 'attorney' && opts.verify !== false)
     getDb(app).prepare('UPDATE attorney_profiles SET verified = 1 WHERE user_id = ?').run(res.body.user.id);
+  if (role === 'survivor' && opts.phoneVerified !== false)
+    getDb(app).prepare('UPDATE users SET matching_verified = 1 WHERE id = ?').run(res.body.user.id);
   if (role === 'counselor' && opts.verify !== false)
     getDb(app).prepare('UPDATE counselor_profiles SET verified = 1 WHERE user_id = ?').run(res.body.user.id);
   return {
@@ -114,8 +122,9 @@ export function matchTransport(app: express.Express, u: TestUser): MatchTranspor
   };
   return {
     config: async () => ok(await request(app).get('/api/matching/config').set(u.auth)),
-    evaluate: async (h, req) => ok(await request(app).post(`/api/matching/oprf-${h}`).set(u.auth).send(req)),
+    evaluate: async (i, req) => ok(await request(app).post(`/api/matching/oprf/${i}`).set(u.auth).send(req)),
     createEntry: async (req) => ok(await request(app).post('/api/matching/entries').set(u.auth).send(req)),
+    attestation: async (nonce) => ok(await request(app).get(`/api/matching/attestation?nonce=${nonce}`)),
     listEntries: async () => ok(await request(app).get('/api/matching/entries').set(u.auth)),
     addSeals: async (id, req) => ok(await request(app).post(`/api/matching/entries/${id}/seals`).set(u.auth).send(req)),
   };
@@ -130,6 +139,8 @@ export async function sealMatch(
   platform?: string,
   contactName = u.user.username,
   pins?: MatchPins,
+  /** default: incident in NJ, where test-helpers' counselors are licensed (so the matcher assigns the group) */
+  states: MatchStates = { incident: 'NJ' },
 ) {
   const n = normalizeMatchIdentifier(kind, value, platform);
   if (!n.ok) throw new Error(`not matchable: ${n.reason}`);
@@ -140,5 +151,18 @@ export async function sealMatch(
     consentStatement: 'If someone else names the same person, a counselor may contact me.',
     label: `${kind}`,
     ...(pins && { pins }),
+    states,
   });
+}
+
+/** Wait for the app server to forward everything to the matcher (it normally does so after each response). */
+export async function syncMatcher(app: express.Express): Promise<void> {
+  await (app.locals.syncMatcher as () => Promise<void>)();
+}
+
+/** The real phone-verification flow with the mock SMS provider's demo code. Returns the check response. */
+export async function verifyPhone(app: express.Express, u: TestUser, phone = '(201) 555-0100') {
+  const start = await request(app).post('/api/matching/verification/start').set(u.auth).send({ phone });
+  if (start.status !== 200) return start;
+  return request(app).post('/api/matching/verification/check').set(u.auth).send({ challengeId: start.body.challengeId, code: start.body.demoCode });
 }

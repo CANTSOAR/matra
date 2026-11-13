@@ -8,11 +8,14 @@ import {
   generateOprfKey,
   generateRosterKey,
   refreshMatchEntries,
+  splitOprfKey,
   signCounselorRoster,
   decryptJSON,
   encryptJSON,
   generateContentKey,
+  matcherKeysFromSeed,
   reconstructMatchGroup,
+  sealRouting,
   toBase64,
 } from '@matra/crypto';
 import type { CounselorMatchGroup } from '@matra/shared';
@@ -34,51 +37,80 @@ describe('sealed matching: access control and rate limits', () => {
     const s = await registerUser(app, 'survivor.ok');
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const atty = await registerUser(app, 'atty.one', 'attorney');
-    for (const h of ['a', 'b']) {
-      expect((await request(app).post(`/api/matching/oprf-${h}`).set(s.auth).send(blinded())).status).toBe(200);
-      const c = await request(app).post(`/api/matching/oprf-${h}`).set(loc.auth).send(blinded());
+    for (const h of [1, 2, 3]) {
+      expect((await request(app).post(`/api/matching/oprf/${h}`).set(s.auth).send(blinded())).status).toBe(200);
+      const c = await request(app).post(`/api/matching/oprf/${h}`).set(loc.auth).send(blinded());
       expect(c.status).toBe(403);
       expect(c.body.code).toBe('forbidden_role');
-      expect((await request(app).post(`/api/matching/oprf-${h}`).set(atty.auth).send(blinded())).status).toBe(403);
-      expect((await request(app).post(`/api/matching/oprf-${h}`).send(blinded())).status).toBe(401);
+      expect((await request(app).post(`/api/matching/oprf/${h}`).set(atty.auth).send(blinded())).status).toBe(403);
+      expect((await request(app).post(`/api/matching/oprf/${h}`).send(blinded())).status).toBe(401);
     }
+    // no such holder (and no old additive endpoints)
+    for (const p of ['/api/matching/oprf/0', '/api/matching/oprf/4', '/api/matching/oprf/x', '/api/matching/oprf-a'])
+      expect((await request(app).post(p).set(s.auth).send(blinded())).status).toBe(404);
+    // each holder's share public key is public; the config lists all three and the group key
+    const cfg = (await request(app).get('/api/matching/config').set(s.auth)).body;
+    expect(cfg.oprf).toMatchObject({ suite: 'ristretto255-SHA512', mode: 'voprf', t: 2, m: 3 });
+    for (const h of [1, 2, 3]) expect((await request(app).get(`/api/matching/oprf/${h}/key`)).body).toEqual(cfg.oprf.holders[h - 1]);
     expect((await request(app).get('/api/matching/config').set(loc.auth)).status).toBe(403);
     expect((await request(app).post('/api/matching/entries').set(loc.auth).send({})).status).toBe(403);
 
     // a survivor account without a stored 18+ confirmation (created before that existed) is refused
     db.prepare('UPDATE users SET age_confirmed_18 = 0 WHERE id = ?').run(s.user.id);
-    const r = await request(app).post('/api/matching/oprf-a').set(s.auth).send(blinded());
+    const r = await request(app).post('/api/matching/oprf/1').set(s.auth).send(blinded());
     expect(r.status).toBe(403);
     expect(r.body.code).toBe('age_not_confirmed');
 
     // invalid group element → 400, not counted
     const s2 = await registerUser(app, 'survivor.two');
-    expect((await request(app).post('/api/matching/oprf-a').set(s2.auth).send({ blinded: toBase64(new Uint8Array(32).fill(255)) })).status).toBe(400);
+    expect((await request(app).post('/api/matching/oprf/1').set(s2.auth).send({ blinded: toBase64(new Uint8Array(32).fill(255)) })).status).toBe(400);
     expect(db.prepare('SELECT * FROM oprf_quota WHERE user_id = ?').all(s2.user.id)).toEqual([]);
   });
 
-  it('rate-limits per account and per key holder (daily + lifetime)', async () => {
+  it('rate-limits per account (daily + lifetime), one unit per distinct blinded element whichever holders it goes to', async () => {
     const { app, db } = makeApp({ matching: { limits: { perDay: 3, lifetime: 5 } } });
     const s = await registerUser(app, 'survivor.rl');
     const other = await registerUser(app, 'survivor.other');
-    const hit = (u: TestUser, h = 'a') => request(app).post(`/api/matching/oprf-${h}`).set(u.auth).send(blinded());
-    for (let i = 0; i < 3; i++) expect((await hit(s)).status).toBe(200);
+    const hit = (u: TestUser, h = 1, b = blinded()) => request(app).post(`/api/matching/oprf/${h}`).set(u.auth).send(b);
+    const third = blinded();
+    expect((await hit(s)).status).toBe(200);
+    expect((await hit(s)).status).toBe(200);
+    expect((await hit(s, 1, third)).status).toBe(200);
     const d = await hit(s);
     expect(d.status).toBe(429);
     expect(d.body.code).toBe('rate_limited_daily');
     expect((await hit(other)).status).toBe(200); // per account
-    expect((await hit(s, 'b')).status).toBe(200); // holder B keeps its own counters
+    expect((await hit(s, 2, third)).status).toBe(200); // the same blinded element at another holder is not charged again
+    const n = await hit(s, 2); // a NEW element at another holder is: the account's budget is spent
+    expect(n.status).toBe(429);
+    expect(n.body.code).toBe('rate_limited_daily');
 
     // next day: allowed again until the lifetime cap
-    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ? AND holder = 'a'`).run(s.user.id);
+    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ?`).run(s.user.id);
     expect((await hit(s)).status).toBe(200);
     expect((await hit(s)).status).toBe(200);
-    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ? AND holder = 'a'`).run(s.user.id);
+    db.prepare(`UPDATE oprf_quota SET day = '2000-01-01' WHERE user_id = ?`).run(s.user.id);
     const l = await hit(s);
     expect(l.status).toBe(429);
     expect(l.body.code).toBe('rate_limited_lifetime');
     // only a day + counts are stored, no timestamps per call
     expect(Object.keys(db.prepare('SELECT * FROM oprf_quota LIMIT 1').get() as object).sort()).toEqual(['day', 'day_count', 'holder', 'lifetime_count', 'user_id']);
+  });
+
+  it('spreading guesses over different t-subsets of holders does not multiply the account budget (2-of-3)', async () => {
+    const { app, db } = makeApp({ matching: { limits: { perDay: 3, lifetime: 50 } } });
+    const s = await registerUser(app, 'survivor.spread');
+    const pairs = [[1, 2], [1, 3], [2, 3], [1, 2], [1, 3], [2, 3]];
+    const ok: number[][] = [];
+    for (const p of pairs) {
+      const b = blinded();
+      const r = await Promise.all(p.map((h) => request(app).post(`/api/matching/oprf/${h}`).set(s.auth).send(b)));
+      if (r.every((x) => x.status === 200)) ok.push(p);
+      else expect(r.every((x) => x.status === 429 && x.body.code === 'rate_limited_daily')).toBe(true);
+    }
+    // per-holder counting alone would have allowed ⌊3·3/2⌋ = 4 guesses today; the account limit is 3
+    expect(ok).toHaveLength(3);
+    expect(db.prepare(`SELECT day_count FROM oprf_quota WHERE user_id = ? AND holder = 'account'`).get(s.user.id)).toEqual({ day_count: 3 });
   });
 
   it('unverified counselors get nothing and are not offered to survivors', async () => {
@@ -113,43 +145,50 @@ describe('sealed matching: threshold release to counselors', () => {
 
     const eb = await sealMatch(app, b, 'social_handle', '@bad_guy', 'Instagram', 'Blair');
     expect(eb.tag).toBe(ea.tag); // different forms, same person
-    const groups = await groupsOf(app, loc);
+    // the matcher gives the group to ONE of the two NJ-licensed counselors
+    const [mine, other] = (await groupsOf(app, loc)).length ? [loc, loc2] : [loc2, loc];
+    const groups = await groupsOf(app, mine);
     expect(groups).toHaveLength(1);
+    expect(groups[0]!.assignment?.reason).toBe('incident_state:NJ');
+    expect(await groupsOf(app, other)).toEqual([]);
     const g = groups[0]!;
     expect(g.tag).toBe(ea.tag);
     expect(g.entries).toHaveLength(2);
-    expect(g.entries.every((e) => e.seal.counselorId === loc.user.id)).toBe(true);
+    expect(g.entries.every((e) => e.seal.counselorId === mine.user.id)).toBe(true);
     const text = JSON.stringify(groups);
     for (const u of [a, b, c]) {
       expect(text).not.toContain(u.user.id);
       expect(text).not.toContain(u.user.username);
     }
 
-    const r = await reconstructMatchGroup(g.tag, g.entries, loc.privateKey, loc.user.id);
+    const r = await reconstructMatchGroup(g.tag, g.entries, mine.privateKey, mine.user.id);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.failed).toEqual([]);
-      expect(r.bundles.map((x) => x.bundle.contact.name).sort()).toEqual(['Alex', 'Blair']);
+      // staged release: no contact details before the conflict check (staged-release.test.ts)
+      expect(r.bundles.map((x) => x.contact)).toEqual([undefined, undefined]);
       expect(r.bundles[0]!.bundle.identifier).toEqual({ kind: 'social', canonical: 'instagram:bad_guy' });
     }
-    // the second counselor gets only the seals addressed to them, and can reconstruct independently
-    const g2 = (await groupsOf(app, loc2))[0]!;
-    expect(g2.entries.every((e) => e.seal.counselorId === loc2.user.id)).toBe(true);
-    expect((await reconstructMatchGroup(g2.tag, g2.entries, loc2.privateKey, loc2.user.id)).ok).toBe(true);
-    // ...and cannot use the first counselor's seals
-    expect((await reconstructMatchGroup(g.tag, g.entries, loc2.privateKey, loc2.user.id)).ok).toBe(false);
+    const checked = await request(app).post(`/api/counselor/groups/${g.id}/conflict-check`).set(mine.auth).send({ result: 'clear', statementVersion: 1 });
+    expect(checked.status).toBe(200);
+    const [g1] = await groupsOf(app, mine);
+    const r1 = await reconstructMatchGroup(g1!.tag, g1!.entries, mine.privateKey, mine.user.id);
+    expect(r1.ok && r1.bundles.map((x) => x.contact?.name).sort()).toEqual(['Alex', 'Blair']);
+    // the other counselor could not use the assigned counselor's seals even if she had them
+    expect((await reconstructMatchGroup(g.tag, g.entries, other.privateKey, other.user.id)).ok).toBe(false);
 
     // C's unrelated entry was never released
     expect(text).not.toContain('Casey');
 
     // counselor notes: encrypted to the counselor, stored per group
-    const env = await encryptJSON({ status: 'reached_out', text: 'Left a text at 6pm.' }, loc.masterKey);
-    const n = await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(loc.auth).send({ entryId: g.entries[0]!.entryId, envelope: env });
+    const env = await encryptJSON({ status: 'reached_out', text: 'Left a text at 6pm.' }, mine.masterKey);
+    const n = await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(mine.auth).send({ entryId: g.entries[0]!.entryId, envelope: env });
     expect(n.status).toBe(201);
-    const again = (await groupsOf(app, loc))[0]!;
+    const again = (await groupsOf(app, mine))[0]!;
     expect(again.notes).toHaveLength(1);
-    expect(await decryptJSON(again.notes[0]!.envelope, loc.masterKey)).toEqual({ status: 'reached_out', text: 'Left a text at 6pm.' });
-    expect((await groupsOf(app, loc2))[0]!.notes).toEqual([]);
+    expect(await decryptJSON(again.notes[0]!.envelope, mine.masterKey)).toEqual({ status: 'reached_out', text: 'Left a text at 6pm.' });
+    // a counselor the group was not assigned to cannot add notes to it
+    expect((await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(other.auth).send({ envelope: env })).body.code).toBe('group_not_found');
     expect((await request(app).post(`/api/counselor/groups/${g.id}/notes`).set(a.auth).send({ envelope: env })).status).toBe(403);
   });
 
@@ -164,7 +203,14 @@ describe('sealed matching: threshold release to counselors', () => {
     const forged = await request(app)
       .post('/api/matching/entries')
       .set(a.auth)
-      .send({ tag: first.tag, bundle: env, labelEnvelope: env, seals: [{ counselorId: loc.user.id, wrappedKey: { v: 1, alg: 'RSA-OAEP-256', data: 'AAAA' }, envelope: env }] });
+      .send({
+        tag: first.tag,
+        bundle: env,
+        contactBundle: env,
+        labelEnvelope: env,
+        seals: [{ counselorId: loc.user.id, wrappedKey: { v: 1, alg: 'RSA-OAEP-256', data: 'AAAA' }, envelope: env }],
+        routing: await sealRouting({ v: 1, tag: first.tag }, matcherKeysFromSeed(new Uint8Array(32)).encPublicJwk),
+      });
     expect(forged.status).toBe(409);
     expect(await groupsOf(app, loc)).toEqual([]);
     expect(db.prepare('SELECT COUNT(*) n FROM match_entries').get()).toEqual({ n: 1 });
@@ -250,15 +296,18 @@ describe('review fixes: release delay and Sybil signals (M2)', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM match_groups').get()).toEqual({ n: 1 }); // it matched…
     expect(await groupsOf(app, loc)).toEqual([]); // …but nothing is released yet
     const old = new Date(Date.now() - 73 * 3_600_000).toISOString();
-    db.prepare('UPDATE match_entries SET created_at = ? WHERE user_id = ?').run(old, a.user.id);
+    // (time travel: the matcher keeps its own copy of the times, so the entries are re-sent to it)
+    const age = (userId: string) => db.prepare('UPDATE match_entries SET created_at = ?, matcher_synced = 0 WHERE user_id = ?').run(old, userId);
+    age(a.user.id);
     expect(await groupsOf(app, loc)).toEqual([]); // only one entry is old enough
-    db.prepare('UPDATE match_entries SET created_at = ? WHERE user_id = ?').run(old, b.user.id);
+    age(b.user.id);
     const g = await groupsOf(app, loc);
     expect(g).toHaveLength(1);
     // both accounts were created seconds apart and sealed within 7 days of creation
     expect(g[0]!.signals).toEqual({ accountsCreatedClose: true, newAccountEntries: 2 });
     // an older account, created weeks earlier, is not flagged
     db.prepare('UPDATE users SET created_at = ? WHERE id = ?').run(new Date(Date.now() - 60 * 86_400_000).toISOString(), a.user.id);
+    db.prepare('UPDATE match_entries SET matcher_synced = 0').run();
     expect((await groupsOf(app, loc))[0]!.signals).toEqual({ accountsCreatedClose: false, newAccountEntries: 1 });
   });
 });
@@ -301,17 +350,21 @@ describe('review fixes: counselor roster changes (M6) and signed roster (M4)', (
     expect(await refreshMatchEntries(matchTransport(app, a), { masterKey: a.masterKey })).toEqual({ resealed: 0, sealsAdded: 1, skipped: 0 });
     expect(await groupsOf(app, loc2)).toEqual([]);
     await refreshMatchEntries(matchTransport(app, b), { masterKey: b.masterKey });
-    const g2 = (await groupsOf(app, loc2))[0]!;
-    expect((await reconstructMatchGroup(g2.tag, g2.entries, loc2.privateKey, loc2.user.id)).ok).toBe(true);
+    // the group stays with loc1 (sticky) while loc1 is on the roster
+    expect(await groupsOf(app, loc2)).toEqual([]);
+    expect(await groupsOf(app, loc1)).toHaveLength(1);
     // idempotent
     expect(await refreshMatchEntries(matchTransport(app, b), { masterKey: b.masterKey })).toEqual({ resealed: 0, sealsAdded: 0, skipped: 0 });
-    // the seals endpoint is owner-only
-    const seal = g2.entries[0]!.seal;
-    expect((await request(app).post(`/api/matching/entries/${ea.entry.id}/seals`).set(b.auth).send({ seals: [seal] })).status).toBe(404);
-    // loc1 is removed: its seals are deleted server-side
+    // loc1 is removed: its seals are deleted server-side, and the matcher reassigns the group to loc2
     db.prepare('UPDATE counselor_profiles SET verified = 0 WHERE user_id = ?').run(loc1.user.id);
     await request(app).get('/api/matching/config').set(a.auth);
     expect(db.prepare('SELECT COUNT(*) n FROM match_seals WHERE counselor_id = ?').get(loc1.user.id)).toEqual({ n: 0 });
+    const g2 = (await groupsOf(app, loc2))[0]!;
+    expect(g2.assignment?.reason).toBe('reassigned:incident_state:NJ');
+    expect((await reconstructMatchGroup(g2.tag, g2.entries, loc2.privateKey, loc2.user.id)).ok).toBe(true);
+    // the seals endpoint is owner-only
+    const seal = g2.entries[0]!.seal;
+    expect((await request(app).post(`/api/matching/entries/${ea.entry.id}/seals`).set(b.auth).send({ seals: [seal] })).status).toBe(404);
     // 20-counselor cap raised to 200
     const many = Array.from({ length: 21 }, (_, i) => ({ ...seal, counselorId: i.toString(16).padStart(32, '0') }));
     const r = await request(app).post(`/api/matching/entries/${ea.entry.id}/seals`).set(a.auth).send({ seals: many });
@@ -346,8 +399,9 @@ describe('review fixes: OPRF key pinning and rotation (M5)', () => {
   it('refuses to boot with different keys; an explicit rotation starts a new epoch and clients re-seal on sign-in', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matra-rot-'));
     const dbPath = path.join(dir, 'm.db');
-    const [kA, kB, kA2] = [generateOprfKey(), generateOprfKey(), generateOprfKey()];
-    const app1 = createApp({ dbPath, pepper: TEST_PEPPER, matching: { keyA: kA, keyB: kB, releaseDelayHours: 0 } });
+    const deal = () => ({ t: 2, shares: splitOprfKey(generateOprfKey().secretKey, 2, 3) });
+    const [k1, k2] = [deal(), deal()];
+    const app1 = createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf: k1, releaseDelayHours: 0 } });
     const loc = await registerUser(app1, 'loc.one', 'counselor');
     const a = await registerUser(app1, 'survivor.a');
     const b = await registerUser(app1, 'survivor.b');
@@ -356,13 +410,20 @@ describe('review fixes: OPRF key pinning and rotation (M5)', () => {
     const tagBefore = (await groupsOf(app1, loc))[0]!.tag;
     getDb(app1).close();
 
-    expect(() => createApp({ dbPath, pepper: TEST_PEPPER, matching: { keyA: kA2, keyB: kB } })).toThrow(/MATRA_OPRF_ROTATE/);
-    const app2 = createApp({ dbPath, pepper: TEST_PEPPER, matching: { keyA: kA2, keyB: kB, releaseDelayHours: 0, allowKeyRotation: true } });
+    // a restart with the same shares is fine; ANY change (new key, other t, one share swapped) is refused
+    getDb(createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf: k1 } })).close();
+    expect(() => createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf: k2 } })).toThrow(/MATRA_OPRF_ROTATE/);
+    const k1as3of3 = { t: 3, shares: k1.shares };
+    expect(() => createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf: k1as3of3 } })).toThrow(/MATRA_OPRF_ROTATE/);
+    // shares that are not from one ceremony are refused outright (inconsistent key set), rotation or not
+    const mixed = { t: 2, shares: [k1.shares[0]!, k1.shares[1]!, k2.shares[2]!] };
+    expect(() => createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf: mixed, allowKeyRotation: true } })).toThrow(/inconsistent/);
+    const app2 = createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf: k2, releaseDelayHours: 0, allowKeyRotation: true } });
     const cfg = (await request(app2).get('/api/matching/config').set(a.auth)).body;
     expect(cfg.keyEpoch).toBe(2);
     // a restart with the rotated keys (no flag) is fine
     getDb(app2).close();
-    const app3 = createApp({ dbPath, pepper: TEST_PEPPER, matching: { keyA: kA2, keyB: kB, releaseDelayHours: 0 } });
+    const app3 = createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf: k2, releaseDelayHours: 0 } });
     for (const u of [a, b]) {
       expect(await refreshMatchEntries(matchTransport(app3, u), { masterKey: u.masterKey })).toEqual({ resealed: 1, sealsAdded: 0, skipped: 0 });
       const entries = (await request(app3).get('/api/matching/entries').set(u.auth)).body.entries;
@@ -374,6 +435,24 @@ describe('review fixes: OPRF key pinning and rotation (M5)', () => {
     const r = await reconstructMatchGroup(groups[0]!.tag, groups[0]!.entries, loc.privateKey, loc.user.id);
     expect(r.ok && r.bundles[0]!.bundle.identifier.canonical).toBe('phone:+12015550142');
     getDb(app3).close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a database pinned to the old additive keys (oprf_pk_a/b) counts as a key change: refused without rotation', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matra-legacy-'));
+    const dbPath = path.join(dir, 'm.db');
+    const db = createApp({ dbPath, pepper: TEST_PEPPER }).locals.db as ReturnType<typeof getDb>;
+    db.prepare(`DELETE FROM matching_meta WHERE key LIKE 'oprf_%'`).run();
+    db.prepare(`INSERT INTO matching_meta (key, value) VALUES ('oprf_pk_a', 'AAAA'), ('oprf_pk_b', 'BBBB')`).run();
+    db.close();
+    const oprf = { t: 2, shares: splitOprfKey(generateOprfKey().secretKey, 2, 3) };
+    expect(() => createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf } })).toThrow(/MATRA_OPRF_ROTATE/);
+    const app = createApp({ dbPath, pepper: TEST_PEPPER, matching: { oprf, allowKeyRotation: true } });
+    const meta = Object.fromEntries((getDb(app).prepare('SELECT key, value FROM matching_meta').all() as Array<{ key: string; value: string }>).map((r) => [r.key, r.value]));
+    expect(meta.oprf_pk_a).toBeUndefined();
+    expect(meta.oprf_t).toBe('2');
+    expect(meta.key_epoch).toBe('2');
+    getDb(app).close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

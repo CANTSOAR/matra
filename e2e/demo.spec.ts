@@ -27,7 +27,9 @@ import {
   shot,
   signIn,
   signOut,
+  startPhoneVerify,
   test,
+  verifyPhone,
   tinyPdf,
 } from './helpers';
 
@@ -42,8 +44,21 @@ const NARRATIVE =
   "We were at a party at a coworker's apartment. I remember the music was too loud and the hallway smelled like cologne.\n\n" +
   'He said he\'d walk me to my car… I said "no thanks, I\'m fine" — twice.\nI don\'t remember the drive home clearly.';
 
-const COUNSELOR = 'counselor.demo';
+// Two seeded counselors: counselor.demo is licensed in NJ, counselor.ny in NY. The matcher gives each matched group to
+// ONE counselor, licensed where it happened if possible (apps/matcher).
+const COUNSELOR_NJ = 'counselor.demo';
+const COUNSELOR_NY = 'counselor.ny';
 const COUNSELOR_PASS = 'demo-counselor-passphrase';
+
+async function counselorSignIn(page: Page, username: string) {
+  await page.goto('/');
+  await page.getByRole('link', { name: 'I’m an attorney' }).click();
+  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.getByLabel('Username').fill(username);
+  await page.getByLabel('Passphrase').fill(COUNSELOR_PASS);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('heading', { name: 'Matched sealed reports' })).toBeVisible({ timeout: 90_000 });
+}
 
 async function openStory(page: Page) {
   await nav(page, 'My story');
@@ -209,20 +224,33 @@ test('1. survivor registers (18+ gate), tells her story "dump first", answers to
 
   await sealFromReview(page);
   await expect(page.getByText(/ledger entry #\d+/)).toBeVisible();
+  // Her sealed match waits for one quick phone confirmation (W13): a calm next step, not an error.
+  await expect(page.getByTestId('phone-step-card')).toContainText('To turn on your sealed match, confirm a phone number first.');
+  await expect(page.getByText(/sealed match could not be set up/)).toHaveCount(0);
   await shot(page, '06-sealed', { mobile: false });
+  await startPhoneVerify(page, '(201) 555-0142');
+  await expect(page.getByTestId('phone-verified')).toContainText('Done. The number has been forgotten.', { timeout: 60_000 });
+  await expect(page.getByTestId('phone-verified')).toContainText('Your sealed match is on.');
+  await shot(page, '06b-phone-verified');
+  await page.getByRole('button', { name: 'Back to Home' }).click();
+  await expect(page.getByTestId('home-title')).toBeVisible();
+  await expect(page.getByTestId('phone-step-card')).toHaveCount(0);
 
   await nav(page, 'Home');
   const acct = page.getByTestId('home-story');
   await expect(acct.getByText('Current sealed version')).toBeVisible({ timeout: 60_000 });
-  await expect(acct.getByText('Verified ✓')).toBeVisible();
-  await expect(acct.getByText(/ledger entry #\d+/)).toBeVisible();
+  // Turning the sealed match on saved her record again as a new sealed version (only the list of sealed fingerprints
+  // changed), so the first seal is now listed as an earlier version; both verify.
+  await expect(acct.getByTestId('sealed-current').getByText('Verified ✓')).toBeVisible();
+  await expect(acct.getByTestId('sealed-earlier').getByText('Verified ✓')).toBeVisible();
+  await expect(acct.getByTestId('sealed-current').getByText(/ledger entry #\d+/)).toBeVisible();
   const escrow = page.getByTestId('home-escrow');
   // phone + handle; a bare initial ("R.") is too weak to seal
   await expect(escrow.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
   await expect(escrow.getByText('R. · social media handle (instagram)')).toBeVisible();
   // the client labels the seal (it can decrypt its own records); the server only knows "saved"
   const activity = page.getByTestId('home-activity');
-  await expect(activity.getByText('You sealed your account')).toBeVisible();
+  await expect(activity.getByText('You sealed your account').first()).toBeVisible();
   await shot(page, '07-dashboard');
 });
 
@@ -246,6 +274,9 @@ test('2. evidence: JPEG GPS is stripped and hashed; PDF warns metadata kept; re-
   const pdfRow = added.locator('li', { hasText: 'texts-export.pdf' });
   await expect(pdfRow.getByText('Hidden details not removed')).toBeVisible({ timeout: 60_000 });
   await expect(pdfRow.getByText(/couldn’t remove hidden details from this PDF/)).toBeVisible();
+  // The row appears once the file is uploaded; its details are added to her draft a moment later. Wait for that (the
+  // message is cleared when the PDF is chosen, so this is the PDF's), as she would: leaving earlier used to race it.
+  await expect(page.getByText('Saved to your space and added to your draft story.')).toBeVisible();
   await shot(page, '08-evidence');
 
   // The stored copy really has no EXIF: decrypt it from the vault and download it.
@@ -332,7 +363,12 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
   await expect(page.locator('.consent-text')).toContainText(`I, "${ALIAS_A}", choose to share`);
   await expect(page.locator('.consent-text')).toContainText('The attorney can read and save what I share.');
   await expect(page.getByTestId('notice-sharing')).toContainText('it can’t erase what they already saved');
-  await page.getByLabel('This matches what the attorney told me.').check();
+  // No manual fingerprint step: this dev build pins no org key, and says so; the fingerprint is an optional, closed detail
+  await expect(page.getByTestId('attorney-key-check')).toHaveAttribute('data-status', 'unpinned');
+  await expect(page.getByTestId('attorney-key-check')).toContainText('Development version');
+  await expect(page.getByText('This matches what the attorney told me.')).toHaveCount(0);
+  await expect(page.getByTestId('attorney-key-check').getByTestId('attorney-fingerprint')).not.toHaveAttribute('open', '');
+  await expect(page.getByTestId('attorney-key-check')).not.toContainText(/by phone|in person/);
   await page.getByLabel('I agree to the statement above.').check();
   await shot(page, '11-share-consent');
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
@@ -343,18 +379,51 @@ test('4. share with attorney → attorney decrypts + verifies → survivor sees 
   await signIn(page, ATTORNEY, ATTORNEY_PASS, 'attorney');
   await page.getByRole('link', { name: 'Open' }).first().click();
   await expect(page.getByRole('heading', { name: `Client: ${ALIAS_A}` })).toBeVisible({ timeout: 60_000 });
-  const proof = page.locator('section', { has: page.getByRole('heading', { name: 'Integrity proof' }) });
-  await expect(proof.getByText('Verified ✓')).toBeVisible();
+  // The verification panel: checked in the browser, in plain language
+  const checks = page.getByTestId('case-checks');
+  await expect(page.getByTestId('case-verification').getByText('Verified ✓')).toBeVisible();
+  await expect(checks.locator('[data-check="account"]')).toHaveAttribute('data-tone', 'ok');
+  await expect(checks.locator('[data-check="account"]')).toContainText('This account has not changed since it was sealed on');
+  await expect(checks.locator('[data-check="evidence"]')).toContainText('2 evidence files were shared. Not checked yet.');
+  await expect(checks.locator('[data-check="chain"]')).toContainText(/Ledger chain intact through entry \d+\./);
   expect(await page.locator('.brief-verbatim-text').allTextContents()).toContain(NARRATIVE);
   const ev = page.locator('section', { has: page.getByRole('heading', { name: 'Evidence', exact: true }) });
   const photo = ev.locator('li', { hasText: 'hallway.jpg' });
   await photo.getByRole('button', { name: 'Decrypt & verify' }).click();
   await expect(photo.getByText('Verified ✓', { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(checks.locator('[data-check="evidence"]')).toContainText('1 of 2 evidence files match so far. 1 file not checked yet.');
+  await page.getByRole('button', { name: 'Check all 1 evidence file' }).click();
+  await expect(checks.locator('[data-check="evidence"]')).toContainText('2 of 2 evidence files match.', { timeout: 30_000 });
+  await expect(checks.locator('[data-tone="bad"]')).toHaveCount(0);
   const dl = page.waitForEvent('download');
   await photo.getByRole('link', { name: 'Download (verified ✓)' }).click();
-  const got = fs.readFileSync((await (await dl).path())!);
+  const photoPath = (await (await dl).path())!;
+  const got = fs.readFileSync(photoPath);
   expect(hasExifGps(got)).toBe(false);
   await shot(page, '12-attorney-case');
+
+  // The PDF carries what the checker needs; "Check a file" verifies it with the evidence, in the browser
+  const pdfDl = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download incident summary (PDF)' }).click();
+  const pdfPath = (await (await pdfDl).path())!;
+  expect(fs.readFileSync(pdfPath).subarray(0, 5).toString()).toBe('%PDF-'); // its verification data is read back on /verify below
+  await page.getByRole('link', { name: '← All files' }).click();
+  await page.getByRole('link', { name: 'Check a file' }).click();
+  await expect(page.getByTestId('verify-title')).toBeVisible();
+  await page.getByLabel('Choose files to check').setInputFiles([
+    { name: 'summary.pdf', mimeType: 'application/pdf', buffer: fs.readFileSync(pdfPath) },
+    { name: 'hallway.jpg', mimeType: 'image/jpeg', buffer: got },
+  ]);
+  const result = page.getByTestId('verify-result');
+  await expect(result).toHaveAttribute('data-tone', 'ok', { timeout: 30_000 });
+  await expect(result).toContainText('The sealed account behind this summary is in the ledger: sealed on');
+  await expect(result).toContainText('1 of 2 evidence files match so far.');
+  await expect(result).toContainText(/Ledger chain intact through entry \d+\./);
+  // a changed file is named in red
+  await page.getByLabel('Choose files to check').setInputFiles([{ name: 'edited.jpg', mimeType: 'image/jpeg', buffer: Buffer.concat([got, Buffer.from([0])]) }]);
+  await expect(result).toHaveAttribute('data-tone', 'bad');
+  await expect(result).toContainText('edited.jpg doesn’t match any file in this summary.');
+  await shot(page, '12b-verify-file', { mobile: false });
   await signOut(page);
 
   // Survivor sees the access, then revokes
@@ -385,7 +454,6 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await signIn(page, ALIAS_A, SURVIVOR_PASS);
   await nav(page, 'Sharing');
   await page.locator('li.card', { hasText: ATTORNEY_NAME }).getByRole('button', { name: 'Review and decide' }).click();
-  await page.getByLabel('This matches what the attorney told me.').check();
   await page.getByLabel('I agree to the statement above.').check();
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
   await expect(page.getByRole('heading', { name: `Shared with ${ATTORNEY_NAME}` })).toBeVisible({ timeout: 60_000 });
@@ -417,9 +485,14 @@ test('4b. attorney with the case open when access is revoked sees a clear messag
   await ctx.close();
 });
 
-test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the counselor sees one matched group with two separate contact bundles', async ({ page }) => {
+test('5. sealed match: two survivors name the same Instagram profile in different forms; both see only "Sealed"; attorney sees nothing; the matcher gives the group to the counselor licensed where it happened (NY), with two separate contact bundles; the NJ counselor sees nothing; staged release: contact details only after her conflict check, A says yes to her report request and B says no, A stops sharing', async ({ page }) => {
   // Survivor B names the same Instagram profile as a URL (A typed "@demo_handle_123"), and a different phone number.
   await registerSurvivor(page, ALIAS_B);
+  // She confirms a phone first, from the sealed-match page: the same phone as A, written differently (2 accounts allowed).
+  await page.getByTestId('home-matching-link').click();
+  await expect(page.getByTestId('matching-phone')).toContainText('confirm a phone number once');
+  await verifyPhone(page, '+1 201-555-0142');
+  await page.getByRole('button', { name: 'Back to Home' }).click();
   await openStory(page);
   await storySafety(page, 'Yes');
   await openTopic(page, 'person');
@@ -438,9 +511,19 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await fill(page, { 'Phone number or email to use': '(555) 010-0300' });
   await savePage(page);
   await page.locator('[data-topic-panel]').getByRole('button', { name: 'Back to your story' }).last().click();
+  // It happened in New York: the matcher routes the group to a counselor licensed there (sealed to the matcher only).
+  await openTopic(page, 'whenWhere');
+  // (the "when" page, then the place page, are left empty: she only gives the state)
+  await savePage(page);
+  await expect(page.locator('[data-topic-panel]').getByLabel('Where did it happen? Describe it any way you can.')).toBeVisible();
+  await savePage(page);
+  await fill(page, { State: { select: 'NY' } });
+  await savePage(page);
+  await page.locator('[data-topic-panel]').getByRole('button', { name: 'Back to your story' }).last().click();
   await storyMap(page).getByRole('button', { name: /^Review/ }).click();
   await sealFromReview(page);
   await expect(page.getByText(/sealed match could not be set up/)).toHaveCount(0);
+  await expect(page.getByTestId('phone-step-card')).toHaveCount(0);
   await nav(page, 'Home');
   const escrowB = page.getByTestId('home-escrow');
   await expect(escrowB.locator('.badge')).toHaveText(['Sealed', 'Sealed']);
@@ -454,7 +537,6 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await expect(escrowA).not.toContainText(/matched|counselor has/i);
   await nav(page, 'Sharing');
   await page.locator('li.card', { hasText: ATTORNEY_NAME }).getByRole('button', { name: 'Review and decide' }).click();
-  await page.getByLabel('This matches what the attorney told me.').check();
   await page.getByLabel('I agree to the statement above.').check();
   await page.getByRole('button', { name: `Yes, share with ${ATTORNEY_NAME}` }).click();
   await expect(page.getByRole('heading', { name: `Shared with ${ATTORNEY_NAME}` })).toBeVisible({ timeout: 60_000 });
@@ -469,27 +551,39 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await page.getByTestId('lock-signout').click();
   await expect(page.getByRole('heading', { name: 'For attorneys' })).toBeVisible();
 
-  // The legal options counselor (verified, seeded) signs in and sees exactly one matched group.
-  await page.goto('/');
-  await page.getByRole('link', { name: 'I’m an attorney' }).click();
-  await page.getByRole('link', { name: 'Sign in' }).click();
-  await page.getByLabel('Username').fill(COUNSELOR);
-  await page.getByLabel('Passphrase').fill(COUNSELOR_PASS);
-  await page.getByRole('button', { name: 'Unlock' }).click();
-  await expect(page.getByRole('heading', { name: 'Matched sealed reports' })).toBeVisible({ timeout: 90_000 });
+  // The NJ-licensed counselor is not given this group: it happened in NY.
+  await counselorSignIn(page, COUNSELOR_NJ);
+  await expect(page.getByText('No matches right now.')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('counselor-group')).toHaveCount(0);
+  await page.getByTestId('lock-signout').click();
+
+  // The NY-licensed counselor (verified, seeded) signs in and sees exactly one matched group, and why it is hers.
+  await counselorSignIn(page, COUNSELOR_NY);
   await expect(page.getByTestId('counselor-ethics')).toContainText('not evidence');
   const groups = page.getByTestId('counselor-group');
   await expect(groups).toHaveCount(1);
+  await expect(groups.getByTestId('counselor-assignment')).toContainText('Assigned to you because this happened in New York, where you’re licensed.');
   await groups.getByRole('button', { name: 'Open with my private key' }).click();
   await expect(groups.getByText('instagram:demo_handle_123').first()).toBeVisible({ timeout: 30_000 });
   // every card shows the identifier its bundle names (review L1)
   await expect(groups.getByTestId('counselor-canonical')).toHaveText(['instagram:demo_handle_123', 'instagram:demo_handle_123']);
   const people = groups.getByTestId('counselor-survivor');
   await expect(people).toHaveCount(2);
-  // two separate contact bundles, never mixed
+  // Staged release, stage 1: what matched, where, and HOW each person wants to be reached; no numbers, no names yet.
+  await expect(groups).not.toContainText('(555) 010-0100');
+  await expect(groups).not.toContainText('(555) 010-0300');
+  await expect(people.getByTestId('counselor-contact-hidden')).toHaveCount(2);
+  await expect(people.filter({ hasText: 'Text message' }).first()).toBeVisible();
+  const conflict = groups.getByTestId('counselor-conflict-check');
+  await expect(conflict).toContainText('instagram:demo_handle_123');
+  await expect(conflict).toContainText('New York');
+  await shot(page, '15a-counselor-conflict-check', { mobile: false });
+  await conflict.getByRole('button', { name: 'I have no conflict' }).click();
+  await expect(groups.getByTestId('counselor-conflict-done')).toBeVisible({ timeout: 30_000 });
+  // stage 1b: two separate contact bundles, never mixed
   const a = people.filter({ hasText: '(555) 010-0100' });
   const b = people.filter({ hasText: '(555) 010-0300' });
-  await expect(a).toHaveCount(1);
+  await expect(a).toHaveCount(1, { timeout: 30_000 });
   await expect(b).toHaveCount(1);
   await expect(a).not.toContainText('(555) 010-0300');
   await expect(b).not.toContainText('(555) 010-0100');
@@ -500,6 +594,93 @@ test('5. sealed match: two survivors name the same Instagram profile in differen
   await a.getByRole('button', { name: 'Save note' }).click();
   await expect(a.getByRole('listitem').filter({ hasText: 'Texted after 6pm as asked.' })).toContainText('Reached out', { timeout: 30_000 });
   await shot(page, '15-counselor-match');
+  // Stage 2: having spoken with each of them, she asks each one for their full report (only once they expect it).
+  for (const person of [a, b]) {
+    const ask = person.getByRole('button', { name: 'Ask for their full report' });
+    await expect(ask).toBeDisabled();
+    await person.getByLabel('I’ve spoken with this person and they expect this request.').check();
+    await ask.click();
+    await expect(person.getByTestId('counselor-report-request')).toContainText('They haven’t decided', { timeout: 30_000 });
+  }
+  await page.getByTestId('lock-signout').click();
+
+  // A sees the request on Home, only about herself, and says yes (evidence stays unticked unless she chooses it).
+  await signIn(page, ALIAS_A, SURVIVOR_PASS);
+  const card = page.getByTestId('home-report-request');
+  await expect(card).toContainText('A legal options counselor has asked to see your report.', { timeout: 30_000 });
+  await card.getByRole('link', { name: 'See the request' }).click();
+  await expect(page.getByTestId('report-request-title')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('main')).not.toContainText(ALIAS_B);
+  await expect(page.getByLabel(/My evidence files too/)).not.toBeChecked();
+  await expect(page.locator('.consent-text')).toContainText('It is not shared with anyone else who named the same person.');
+  const yes = page.getByRole('button', { name: 'Yes, share my report' });
+  await expect(yes).toBeDisabled();
+  await page.getByLabel('This matches what the counselor told me.').check();
+  await page.getByLabel('I agree to the statement above.').check();
+  await shot(page, '15b-survivor-report-request');
+  await yes.click();
+  await expect(page.getByTestId('report-request-shared')).toContainText('They haven’t opened it yet.', { timeout: 60_000 });
+  await signOut(page);
+
+  // B says no. The counselor will learn only that.
+  await signIn(page, ALIAS_B, SURVIVOR_PASS);
+  await page.getByTestId('home-report-request').getByRole('link', { name: 'See the request' }).click();
+  await expect(page.getByTestId('report-request-title')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('main')).not.toContainText(ALIAS_A);
+  await page.getByRole('button', { name: 'No, don’t share' }).click();
+  await expect(page.getByTestId('report-request-declined')).toBeVisible({ timeout: 30_000 });
+  await nav(page, 'Home');
+  await expect(page.getByTestId('home-report-request')).toHaveCount(0);
+  await signOut(page);
+
+  // The counselor opens A's report (her story, decrypted on the counselor's device); B's stays sealed.
+  await counselorSignIn(page, COUNSELOR_NY);
+  await groups.getByRole('button', { name: 'Open with my private key' }).click();
+  await expect(b.getByTestId('counselor-report-request')).toContainText('They decided not to share their report.', { timeout: 30_000 });
+  await expect(b.getByRole('link', { name: 'Open their report' })).toHaveCount(0);
+  await a.getByRole('link', { name: 'Open their report' }).click();
+  await expect(page.getByTestId('counselor-report-title')).toBeVisible({ timeout: 60_000 });
+  expect(await page.locator('.brief-verbatim-text').allTextContents()).toContain(NARRATIVE);
+  await expect(page.locator('main')).not.toContainText(ALIAS_A);
+  await expect(page.locator('main')).not.toContainText(ALIAS_B);
+  await shot(page, '15c-counselor-report', { mobile: false });
+  await page.getByRole('link', { name: '← Matched sealed reports' }).click();
+  await page.getByTestId('lock-signout').click();
+
+  // A sees the opening in her activity, and stops sharing; the counselor's access ends.
+  await signIn(page, ALIAS_A, SURVIVOR_PASS);
+  await expect(page.getByTestId('home-activity').getByText('The legal options counselor opened your report').first()).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('home-report-shared').getByRole('link', { name: 'See or stop sharing' }).click();
+  await page.getByRole('button', { name: 'Stop sharing' }).click();
+  await page.getByRole('button', { name: 'Yes, stop sharing' }).click();
+  await expect(page.getByTestId('report-request-shared')).toContainText('You stopped sharing on', { timeout: 30_000 });
+  await signOut(page);
+
+  await counselorSignIn(page, COUNSELOR_NY);
+  await expect(page.getByTestId('counselor-releases')).toContainText('they stopped sharing', { timeout: 30_000 });
+  await expect(page.getByRole('link', { name: 'Open report' })).toHaveCount(0);
+  await groups.getByRole('button', { name: 'Open with my private key' }).click();
+  await expect(a.getByTestId('counselor-report-request')).toContainText('They stopped sharing their report with you.', { timeout: 30_000 });
+  // A conflict turns up later: she declines the group, and the matcher passes it on; it is gone from her list.
+  await groups.getByRole('button', { name: 'I can’t take this group (conflict of interest)' }).click();
+  await groups.getByRole('button', { name: 'Keep it' }).click();
+  await expect(groups).toHaveCount(1);
+  await groups.getByRole('button', { name: 'I can’t take this group (conflict of interest)' }).click();
+  await groups.getByRole('button', { name: 'Yes, decline this group' }).click();
+  await expect(page.getByTestId('counselor-declined')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('counselor-group')).toHaveCount(0);
+  await expect(page.getByText('No matches right now.')).toBeVisible();
+});
+
+test('5b. one phone turns on sealed matching for at most two accounts: a third gets a kind message and stays unconfirmed', async ({ page }) => {
+  await registerSurvivor(page, `finch-${RUN}`);
+  await page.getByTestId('home-matching-link').click();
+  await startPhoneVerify(page, '201.555.0142');
+  await expect(page.getByRole('alert')).toContainText('already been used to turn on sealed matching for as many accounts as we allow', { timeout: 30_000 });
+  await expect(page.getByTestId('phone-verified')).toHaveCount(0);
+  await page.getByRole('link', { name: 'Not now' }).click();
+  await page.getByTestId('home-matching-link').click();
+  await expect(page.getByTestId('matching-phone')).toContainText('confirm a phone number once');
 });
 
 test('6. quick exit: button and triple-Esc leave to a neutral site; coming back shows welcome, no session', async ({ page }) => {
@@ -562,4 +743,89 @@ test('8. delete everything: explained first (lawyer caution, what stays), typed 
   await page.getByLabel('Passphrase').fill(SURVIVOR_PASS);
   await page.getByRole('button', { name: 'Unlock' }).click();
   await expect(page.getByRole('alert')).toHaveText('That alias and passphrase don’t match. Check for typos and try again.', { timeout: 60_000 });
+});
+
+test('9. recovery code: set up (shown once, confirm last 4) → forgot passphrase → alias + code → new passphrase → same space; old passphrase and old code stop working', async ({ page }) => {
+  const alias = `heron-rec-${RUN}`;
+  const NEW_PASS = 'e2e copper meadow lantern river nine';
+  await registerSurvivor(page, alias);
+  await expect(page.getByTestId('recovery-offer')).toBeVisible();
+
+  // something only her keys can open: an encrypted profile record with the name she chose
+  await page.getByRole('button', { name: 'Tell us what to call you' }).click();
+  await page.getByLabel('What should we call you?').fill('Robin');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByTestId('home-title')).toHaveText('Welcome, Robin.');
+
+  // set up: her passphrase again, then the code, shown once
+  await page.getByTestId('recovery-link').click();
+  await expect(page.getByTestId('recovery-title')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('recovery-status')).toHaveText('You don’t have a recovery code yet.');
+  await page.getByTestId('recovery-passphrase').fill(SURVIVOR_PASS);
+  await page.getByTestId('recovery-set-up').click();
+  const codeBox = page.getByTestId('recovery-code');
+  await expect(codeBox).toBeVisible({ timeout: 90_000 });
+  const code = (await codeBox.textContent())!.trim();
+  expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){6}$/);
+  await shot(page, '18-recovery-code');
+  // the wrong tail is refused, the right one saves it
+  await page.getByTestId('recovery-confirm-input').fill('????');
+  await page.getByTestId('recovery-confirm').click();
+  await expect(page.getByText(/Those aren’t the last 4 characters/)).toBeVisible();
+  await page.getByTestId('recovery-confirm-input').fill(code.slice(-4));
+  await page.getByTestId('recovery-confirm').click();
+  await expect(page.getByTestId('recovery-done')).toHaveText('Your recovery code is set up.');
+  await expect(page.getByTestId('recovery-status')).toHaveText('You have a recovery code.');
+
+  // she forgets her passphrase
+  await page.getByRole('link', { name: '← Home' }).click();
+  await expect(page.getByTestId('home-title')).toBeVisible();
+  await signOut(page);
+  await page.getByRole('link', { name: 'Sign in' }).first().click();
+  await page.getByTestId('forgot-passphrase').click();
+  await expect(page.getByTestId('recover-title')).toHaveText('Set a new passphrase', { timeout: 60_000 });
+  await page.getByTestId('recover-alias').fill(alias);
+  // a typo is caught on this device, before anything is sent
+  const typo = code.slice(0, -1) + (code.at(-1) === '0' ? '1' : '0');
+  await page.getByTestId('recover-code').fill(typo);
+  await page.getByTestId('recover-continue').click();
+  await expect(page.getByText(/mistyped/)).toBeVisible();
+  await page.getByTestId('recover-code').fill(code.toLowerCase().replace(/-/g, ' '));
+  await page.getByTestId('recover-continue').click();
+  await expect(page.getByTestId('recover-new-passphrase')).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('recover-new-passphrase').fill(NEW_PASS);
+  await page.getByTestId('recover-new-passphrase-again').fill(NEW_PASS);
+  await page.getByTestId('recover-set-passphrase').click();
+
+  // a new code, shown once (the used one is burned; this one is saved when she confirms), then into her space
+  await expect(page.getByTestId('recover-title')).toHaveText('Your new passphrase is set', { timeout: 90_000 });
+  const newCode = (await page.getByTestId('recovery-code').textContent())!.trim();
+  expect(newCode).not.toBe(code);
+  await page.getByTestId('recovery-confirm-input').fill(newCode.slice(-4));
+  await page.getByTestId('recovery-confirm').click();
+  await expect(page.getByTestId('home-title')).toHaveText('Welcome back, Robin.', { timeout: 60_000 });
+  await expect(page.getByTestId('home-activity')).toContainText('Your passphrase was reset with your recovery code');
+  await expect(page.getByTestId('home-activity')).toContainText('Your recovery code was used to start a passphrase reset');
+  // the new code was saved only on her confirmation, with her new passphrase
+  await expect(page.getByTestId('home-recovery')).toContainText('You have a recovery code.');
+  await expect(page.getByTestId('home-activity')).toContainText('You set up a recovery code');
+  await signOut(page);
+
+  // the old passphrase no longer opens it
+  await page.getByRole('link', { name: 'Sign in' }).first().click();
+  await page.getByLabel('Alias').fill(alias);
+  await page.getByLabel('Passphrase').fill(SURVIVOR_PASS);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('alert')).toHaveText('That alias and passphrase don’t match. Check for typos and try again.', { timeout: 60_000 });
+
+  // nor does the old code
+  await page.getByTestId('forgot-passphrase').click();
+  await page.getByTestId('recover-alias').fill(alias);
+  await page.getByTestId('recover-code').fill(code);
+  await page.getByTestId('recover-continue').click();
+  await expect(page.getByRole('alert')).toHaveText('That alias and recovery code don’t match. Check both for typos and try again.', { timeout: 60_000 });
+
+  // the new passphrase does
+  await signIn(page, alias, NEW_PASS);
+  await expect(page.getByTestId('home-title')).toHaveText('Welcome back, Robin.');
 });

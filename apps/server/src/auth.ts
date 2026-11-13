@@ -49,6 +49,7 @@ export function fakeKdfSalt(pepper: Buffer, username: string): { kdfSalt: string
 export function createSession(db: DB, userId: string): string {
   const token = randomBytes(32).toString('base64url');
   const now = Date.now();
+  purgeExpiredSessions(db, now);
   db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(
     sha256Hex(token),
     userId,
@@ -56,6 +57,15 @@ export function createSession(db: DB, userId: string): string {
     now + SESSION_TTL_MS,
   );
   return token;
+}
+
+/**
+ * Delete every expired session row (W11: a row's created_at is a sign-in time, so it must not outlive the session).
+ * Run at startup, on every sign-in, and from createApp's housekeeping timer, so a session that is simply abandoned
+ * (tab closed, quick exit, auto-lock) is gone within SESSION_TTL_MS + one sweep interval. Returns the number deleted.
+ */
+export function purgeExpiredSessions(db: DB, now = Date.now()): number {
+  return db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now).changes;
 }
 
 export function deleteSession(db: DB, token: string): void {
@@ -118,18 +128,29 @@ export function requireRole(role: Role) {
 
 // ───────────── rate limiting ─────────────
 
-/** Fixed-window in-memory limiter. Good enough for a single-process MVP. */
+/** The longest window a limiter may use: no rate-limit entry (and no client key in it) outlives a day (W11). */
+export const MAX_RATE_LIMIT_WINDOW_MS = 24 * 3_600_000;
+
+/**
+ * Fixed-window in-memory limiter. Good enough for a single-process MVP. Never persisted; keys that name a client are
+ * keyed hashes (privacy.ts ClientKeyer), never a raw IP. Windows are capped at 24 h, and expired entries are swept at
+ * least once a minute while the limiter is in use (and whenever the map grows large), so nothing lingers.
+ */
 export class RateLimiter {
   private hits = new Map<string, { count: number; resetAt: number }>();
+  private lastSweep = 0;
   constructor(
     private readonly max: number,
     private readonly windowMs: number,
-  ) {}
+    private readonly now: () => number = Date.now,
+  ) {
+    if (!(windowMs > 0 && windowMs <= MAX_RATE_LIMIT_WINDOW_MS)) throw new Error('rate-limit window must be within 24 hours');
+  }
 
   /** Returns true if allowed. */
   hit(key: string): boolean {
-    const now = Date.now();
-    if (this.hits.size > 10_000) for (const [k, v] of this.hits) if (v.resetAt <= now) this.hits.delete(k);
+    const now = this.now();
+    if (this.hits.size > 10_000 || now - this.lastSweep >= 60_000) this.sweep(now);
     const cur = this.hits.get(key);
     if (!cur || cur.resetAt <= now) {
       this.hits.set(key, { count: 1, resetAt: now + this.windowMs });
@@ -137,5 +158,26 @@ export class RateLimiter {
     }
     cur.count++;
     return cur.count <= this.max;
+  }
+
+  /** Drop every expired entry. */
+  sweep(now = this.now()): void {
+    this.lastSweep = now;
+    for (const [k, v] of this.hits) if (v.resetAt <= now) this.hits.delete(k);
+  }
+
+  /** Forget every entry (ClientKeyer does this when its daily salt rotates). */
+  clear(): void {
+    this.hits.clear();
+  }
+
+  /** Live keys (tests: what is held in memory). */
+  keys(): string[] {
+    return [...this.hits.keys()];
+  }
+
+  /** Live entries with their counts and expiry (the dev/demo inspector shows exactly what is held in memory). */
+  entries(): Array<{ key: string; count: number; resetAt: number }> {
+    return [...this.hits].map(([key, v]) => ({ key, count: v.count, resetAt: v.resetAt }));
   }
 }

@@ -12,7 +12,7 @@ const PROGRESS_TEXT: Record<Progress, string> = {
   unlocking: 'Unlocking your space…',
 };
 
-function ProgressNote({ p }: { p: Progress | null }) {
+export function ProgressNote({ p }: { p: Progress | null }) {
   if (!p) return null;
   return (
     <p className="row muted" role="status" aria-live="polite">
@@ -21,7 +21,7 @@ function ProgressNote({ p }: { p: Progress | null }) {
   );
 }
 
-const STRENGTH_WIDTH = { 'too-short': '10%', weak: '35%', okay: '65%', strong: '100%' } as const;
+export const STRENGTH_WIDTH = { 'too-short': '10%', weak: '35%', okay: '65%', strong: '100%' } as const;
 
 export function CreateAccountForm({ role }: { role: Role }) {
   const { register } = useSession();
@@ -145,6 +145,12 @@ export function CreateAccountForm({ role }: { role: Role }) {
             <strong>We can’t reset it.</strong> If it’s lost, your space can’t be opened — by you or anyone else. That’s
             what keeps it safe.
           </p>
+          {role === 'survivor' && (
+            <p className="small" style={{ margin: 0 }}>
+              Once you’re in, you can make a recovery code that only you keep. It lets you set a new passphrase if you
+              forget this one.
+            </p>
+          )}
         </div>
         <div className="stack">
           <span className="small muted">Here’s a strong one, made on your device just now:</span>
@@ -411,6 +417,13 @@ export function SignInForm({ role }: { role: Role }) {
         </button>
         <Link to={role === 'attorney' ? '/attorney/register' : '/start'}>Create an account</Link>
       </div>
+      {role === 'survivor' && (
+        <p className="small" style={{ margin: 0 }}>
+          <Link to="/recover" data-testid="forgot-passphrase">
+            Forgot your passphrase?
+          </Link>
+        </p>
+      )}
     </form>
   );
 }

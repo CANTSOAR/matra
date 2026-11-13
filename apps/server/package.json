@@ -11,10 +11,14 @@
     "test": "vitest run",
     "typecheck": "tsc -p .",
     "verify-attorney": "tsx src/verify-attorney.ts",
-    "sign-roster": "tsx src/sign-roster.ts"
+    "sign-roster": "tsx src/sign-roster.ts",
+    "holder": "tsx src/holder-server.ts",
+    "oprf-ceremony": "tsx src/oprf-ceremony.ts",
+    "demo-seed": "tsx src/demo-seed.ts"
   },
   "dependencies": {
     "@matra/crypto": "*",
+    "@matra/matcher": "*",
     "@matra/shared": "*",
     "better-sqlite3": "^13.0.3",
     "cors": "^2.8.6",

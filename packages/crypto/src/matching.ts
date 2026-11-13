@@ -8,13 +8,14 @@
  * ── Protocol (threshold t = 2) ───────────────────────────────────────────────────────────────────────
  *   x_id   = normalizeMatchIdentifier(kind, value)            e.g. "instagram:bad_guy", "phone:+12015550100"
  *   input  = utf8("matra/match/v2|" || x_id)
- *   OPRF   : RFC 9497 VOPRF, suite ristretto255-SHA512, with the server key split additively between two
- *            independent key holders A and B (k = k_A + k_B). The client blinds once, sends the same blinded element
- *            to A and B, verifies EACH holder's DLEQ proof against its published (build-time pinned) public key, refuses
- *            degenerate key pairs (pk_A = pk_B, an identity key, pk_A + pk_B = identity), adds the two evaluated
- *            elements and unblinds:  P̂ = Finalize(input, blind, Eval_A + Eval_B) = VOPRF_{k_A + k_B}(input).
- *            Neither holder alone learns anything about x_id or can compute P̂ (offline dictionary attacks over phone
- *            numbers need BOTH keys).
+ *   OPRF   : RFC 9497 VOPRF, suite ristretto255-SHA512, with the server key k Shamir-shared among m independent key
+ *            holders, any t of whom (default 2-of-3) can evaluate (./threshold.ts). The client blinds once, sends the
+ *            same blinded element to every holder, verifies EACH holder's DLEQ proof against its published (build-time
+ *            pinned) share public key, refuses inconsistent or degenerate key sets, combines any t valid evaluations
+ *            with Lagrange coefficients in the exponent and unblinds:  P̂ = Finalize(input, blind, Σ λ_i·Eval_i) =
+ *            VOPRF_k(input). Fewer than t holders learn nothing about x_id and cannot compute P̂ (offline dictionary
+ *            attacks over phone numbers need t shares). This t is the KEY threshold; the MATCH threshold (2 distinct
+ *            survivors) below is separate.
  *   KDF    : HKDF-SHA256(salt = "matra/match/v2") with distinct info labels:
  *              a  (slope)              = HKDF(P̂, "slope")     ∈ F_p, p = 2^256 + 297 (Callisto's field)
  *              k  (intercept / secret) = HKDF(P̂, "intercept") ∈ F_p; the per-perpetrator line is Y = a·X + k
@@ -24,10 +25,14 @@
  *            HKDF-derived from her passphrase material ("matra/match-x", deriveKeys), so the SAME survivor naming the
  *            SAME person always produces the SAME point (she cannot match herself, exactly like P1's U = H(user id)),
  *            but x differs per perpetrator, so her points are unlinkable across perpetrators (research §4.5).
- *   Entry  : ke  = fresh AES key;     bundle = AES-GCM(ke, pad(MatchContactBundle), AAD = "bundle|" || π)
+ *   Entry  : ke  = fresh AES key;     bundle  = AES-GCM(ke, pad(MatchSummaryBundle),  AAD = "bundle|" || π)
+ *                                       contact = AES-GCM(ke, pad(MatchContactDetails), AAD = "contact|" || π)
  *            ce  = AES-GCM(K_P, ke, AAD = "ce|" || π)
  *            c_j = SealTo(pk_counselor_j, {π, x, y, ce})    (RSA-OAEP-256 + AES-256-GCM hybrid, AAD binds π and j)
- *            Sent to the server: { π, bundle, c_1..c_n, label (hers, under her master key, padded) }.
+ *            Sent to the server: { π, bundle, contact, c_1..c_n, label (hers, under her master key, padded) }.
+ *            Staged release (W21): the summary (identifier, states, contact METHODS) is released with the group; the
+ *            contact ciphertext only after the counselor records a conflict check. That gate is the SERVER's (it
+ *            withholds the ciphertext); cryptographically both open with the same ke.
  *            Counselors j come from the organization-signed roster when the build pins the roster key.
  *   Reveal : the server releases {bundle, c_j} ONLY for tags that have entries from ≥ 2 distinct survivor accounts,
  *            each older than the release delay, and only to counselor j. The counselor opens the seals, tries EVERY
@@ -39,9 +44,12 @@
  * ── Deviations from P1 (deliberate) ──────────────────────────────────────────────────────────────────
  *   • VOPRF with per-holder DLEQ proofs (P1 used a plain OPRF): a malicious key holder cannot silently return a
  *     wrong evaluation to block matches or tag a user (research A9).
- *   • Additive 2-of-2 key split, verified here: Σ Eval_i then Finalize == VOPRF under k_A + k_B (see tests).
+ *   • Shamir t-of-m key split (P1 had one key server): any t evaluations combined in the exponent then Finalize ==
+ *     VOPRF under the unsplit key (see threshold.test.ts).
  *   • Per-survivor-per-perpetrator x instead of U = H(user id) (see above).
- *   • No assignment-data (DLOC) ciphertext: Matra has one counselor tier; `state` rides inside the bundle.
+ *   • Assignment data (P1's DLOC ciphertext) is a separate routing tag {π, incident state, her state} sealed to the
+ *     matcher service's ATTESTED key (./attestation.ts), not to a counselor: the matcher assigns each group to ONE
+ *     counselor licensed in one of those states (apps/matcher). The states also ride inside the bundle for the counselor.
  *   • The counselor key is the counselor's existing RSA-OAEP-3072 identity key (WebCrypto), not libsodium box.
  *   • Name-only matching is NOT supported: full names are rejected by the normalizer (names are not unique enough).
  *   • The survivor does not keep cU = E(kU, ke); she keeps her own label under her master key instead, holding the
@@ -54,13 +62,18 @@ import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type {
   AddMatchSealsRequest,
+  AttestationDocument,
   CounselorRosterPayload,
   CounselorSeal,
   CreateMatchEntryRequest,
   Envelope,
   EscrowEntry,
   MatchContactBundle,
+  MatchContactDetails,
+  MatchContactPreferences,
+  MatchSummaryBundle,
   MatchingConfig,
+  MatchStates,
   OprfEvaluateRequest,
   OprfEvaluateResponse,
   SignedCounselorRoster,
@@ -78,6 +91,8 @@ import {
   wrapKeyForRecipient,
 } from './index';
 import type { NormalizedIdentifier } from './normalize';
+import { AttestationError, newAttestationNonce, sealRouting, verifyAttestation, type VerifiedAttestation } from './attestation';
+import { checkThresholdKeys, finalizeThresholdOprfReport, ThresholdOprfError, type HolderEvaluation, type ThresholdKeyConfig } from './threshold';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -92,8 +107,10 @@ export const MATCH_THRESHOLD = 2 as const;
 export const FIELD_P = (1n << 256n) + 297n;
 const FIELD_BYTES = 33;
 
-// Identifier normalization lives in ./normalize.ts (re-exported here).
+// Identifier normalization lives in ./normalize.ts, threshold OPRF in ./threshold.ts (both re-exported here).
 export * from './normalize';
+export * from './threshold';
+export * from './attestation';
 
 export function matchInput(canonical: string): Uint8Array {
   return enc.encode(`${MATCH_DOMAIN}|${canonical}`);
@@ -115,15 +132,21 @@ export function oprfPublicKey(secretKey: Uint8Array): Uint8Array {
   return Point.BASE.multiply(k).toBytes();
 }
 
+/**
+ * True when `bytes` is a canonical, non-identity ristretto255 element: what oprfBlindEvaluate accepts. Lets the app
+ * server refuse a bad blinded element before charging the account's OPRF quota.
+ */
+export function isOprfElement(bytes: Uint8Array): boolean {
+  try {
+    return bytes.length === 32 && !ristretto255.Point.fromBytes(bytes).is0();
+  } catch {
+    return false;
+  }
+}
+
 /** Key holder: evaluate one blinded element, with a DLEQ proof. Throws on an invalid / identity element. */
 export function oprfBlindEvaluate(key: OprfKeyPair, blinded: Uint8Array): { evaluated: Uint8Array; proof: Uint8Array } {
   return OPRF.voprf.blindEvaluate(key.secretKey, key.publicKey, blinded);
-}
-
-/** Test / migration helper: the effective key k_A + k_B. Never computed in production (no party holds both). */
-export function combineOprfKeys(a: OprfKeyPair, b: OprfKeyPair): OprfKeyPair {
-  const sk = Fn.toBytes(Fn.add(Fn.fromBytes(a.secretKey), Fn.fromBytes(b.secretKey)));
-  return { secretKey: sk, publicKey: oprfPublicKey(sk) };
 }
 
 export interface MatchBlind { input: Uint8Array; blind: Uint8Array; blinded: Uint8Array }
@@ -136,40 +159,24 @@ export function blindMatchIdentifier(canonical: string): MatchBlind {
 }
 
 /**
- * Key holder (deploy helper): a VOPRF key pair derived from an arbitrary high-entropy secret string (e.g. a value a
- * hosting platform generated, like Render's `generateValue`). RFC 9497 DeriveKeyPair(seed = SHA-256(secret),
- * info = "matra/oprf-key/<holder>").
+ * Deterministic VOPRF key pair from a high-entropy secret string: RFC 9497 DeriveKeyPair(seed = SHA-256(secret),
+ * info = label), e.g. label "matra/oprf-share/<i>". Used for reproducible test keys and as the "unsplit key" a dealer
+ * may start a ceremony from; a Shamir SHARE can never be derived this way (it must be f(i) for the dealt polynomial).
  */
-export function oprfKeyFromSecret(secret: string, holder: 'a' | 'b'): OprfKeyPair {
+export function oprfKeyFromSecret(secret: string, label: string): OprfKeyPair {
   if (secret.length < 32) throw new Error('OPRF key secret must be at least 32 characters');
-  return OPRF.voprf.deriveKeyPair(sha256(enc.encode(secret)), enc.encode(`matra/oprf-key/${holder}`));
+  return OPRF.voprf.deriveKeyPair(sha256(enc.encode(secret)), enc.encode(label));
 }
 
-export interface HolderEvaluation { publicKey: Uint8Array; evaluated: Uint8Array; proof: Uint8Array }
-
-/**
- * Client: verify each key holder's DLEQ proof, then combine. Returns the 64-byte OPRF output under k_A + k_B.
- * Throws if either proof is invalid (a holder used a key other than its published one), and refuses degenerate key
- * configurations that would make the "split" key meaningless: the same key presented twice (k = 2·k_A, one party
- * holds everything), an identity key, or k_B = −k_A (the combined key is 0, so the output no longer depends on any
- * secret and anyone can compute every tag offline).
- */
-export function finalizeSplitOprf(b: MatchBlind, ...holders: HolderEvaluation[]): Uint8Array {
-  if (holders.length !== 2) throw new Error('need evaluations from exactly two key holders');
-  const pks = holders.map((h) => Point.fromBytes(h.publicKey));
-  if (pks.some((p) => p.is0())) throw new Error('OPRF key holder public key is the identity');
-  if (pks[0]!.equals(pks[1]!)) throw new Error('OPRF key holders A and B must use different keys');
-  if (pks[0]!.add(pks[1]!).is0()) throw new Error('OPRF key holder keys cancel out (k_A + k_B = 0)');
-  let sum: InstanceType<typeof Point> | undefined;
-  for (const h of holders) {
-    // voprf.finalize verifies the DLEQ proof against h.publicKey (and throws if it fails); its output is discarded.
-    OPRF.voprf.finalize(b.input, b.blind, h.evaluated, b.blinded, h.publicKey, h.proof);
-    const p = Point.fromBytes(h.evaluated);
-    sum = sum ? sum.add(p) : p;
+/** Matching could not run (nothing was sealed). `holders_unavailable`: fewer than t OPRF key holders answered. */
+export class MatchingError extends Error {
+  constructor(
+    readonly code: 'holders_unavailable',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'MatchingError';
   }
-  // RFC 9497 Finalize is mode-independent (unblind + Hash(len‖input‖len‖element‖"Finalize")); the blinded element was
-  // built with the VOPRF-mode hash-to-group, so this equals VOPRF_{Σk}(input).
-  return OPRF.oprf.finalize(b.input, b.blind, sum!.toBytes());
 }
 
 // ═══════════════════════════════ per-perpetrator values ═══════════════════════════════
@@ -331,20 +338,24 @@ export interface SealedShare {
 export async function buildMatchEntry(args: {
   secrets: PerpetratorSecrets;
   x: bigint;
-  bundle: MatchContactBundle;
+  /** v2 summary (staged release); a v1 MatchContactBundle is still accepted (tests of legacy entries) */
+  bundle: MatchSummaryBundle | MatchContactBundle;
+  /** her contact details, sealed separately under the same entry key (AAD "contact|" + tag) */
+  contact?: MatchContactDetails;
   counselors: Array<{ userId: string; publicKey: JsonWebKey }>;
-}): Promise<Pick<CreateMatchEntryRequest, 'tag' | 'bundle' | 'seals'> & { share: SealedShare }> {
+}): Promise<Pick<CreateMatchEntryRequest, 'tag' | 'bundle' | 'seals'> & { contactBundle?: Envelope; share: SealedShare }> {
   const { secrets, x, bundle, counselors } = args;
   if (!counselors.length) throw new Error('no counselor available to receive matches');
   const tag = secrets.tag;
   const ke = await generateContentKey();
   const bundleEnv = await sealAad(ke, padJson(bundle), `bundle|${tag}`);
+  const contactBundle = args.contact && (await sealAad(ke, padJson(args.contact), `contact|${tag}`));
   const keRaw = new Uint8Array(await subtle.exportKey('raw', ke));
   const ce = await sealAad(await entryKeyFromIntercept(secrets.intercept), keRaw, `ce|${tag}`);
   const share: SealedShare = { v: 2, tag, x: fieldToHex(x), y: fieldToHex(shareY(secrets, x)), ce };
   const seals: CounselorSeal[] = [];
   for (const c of counselors) seals.push(await sealShareToCounselor(share, c));
-  return { tag, bundle: bundleEnv, seals, share };
+  return { tag, bundle: bundleEnv, ...(contactBundle && { contactBundle }), seals, share };
 }
 
 /** SealTo(pk_counselor, {π, x, y, ce}): RSA-OAEP-256 wraps a fresh AES-256-GCM key; AAD binds π and the counselor. */
@@ -358,6 +369,33 @@ export async function sealShareToCounselor(share: SealedShare, counselor: { user
 }
 
 // ═══════════════════════════════ reveal (counselor side) ═══════════════════════════════
+
+/** Stage 1 view of either bundle version (a legacy v1 bundle's single `state` counts as the incident state). */
+export function summaryFromBundle(b: MatchSummaryBundle | MatchContactBundle): MatchSummaryBundle {
+  if (b.v === 2) return b;
+  return {
+    v: 2,
+    identifier: b.identifier,
+    states: b.states ?? (b.state ? { incident: b.state } : {}),
+    methods: b.contact?.methods ?? [],
+    ...(b.contact?.language && { language: b.contact.language }),
+    consent: b.consent,
+  };
+}
+
+function detailsFromLegacy(b: MatchContactBundle): MatchContactDetails {
+  const c = b.contact ?? { methods: [] };
+  return { v: 1, ...(c.name && { name: c.name }), ...(c.phone && { phone: c.phone }), ...(c.email && { email: c.email }), ...(c.notes && { notes: c.notes }) };
+}
+
+/** Split her contact preferences into what the counselor sees first (methods, language) and the details (Stage 1b). */
+export function splitContact(c: MatchContactPreferences): { methods: MatchContactPreferences['methods']; language?: string; details: MatchContactDetails } {
+  return {
+    methods: c.methods,
+    ...(c.language && { language: c.language }),
+    details: { v: 1, ...(c.name && { name: c.name }), ...(c.phone && { phone: c.phone }), ...(c.email && { email: c.email }), ...(c.notes && { notes: c.notes }) },
+  };
+}
 
 /**
  * Open one seal addressed to `counselorId`. The group's tag is part of the AAD, so a seal the server moved from
@@ -387,7 +425,18 @@ export type ReconstructAlert = 'multiple_lines' | 'foreign_line' | 'off_line_sha
 
 export interface ReconstructedBundle {
   entryId: string;
-  bundle: MatchContactBundle;
+  /** the bundle exactly as opened: v2 summary, or a legacy v1 bundle */
+  bundle: MatchSummaryBundle | MatchContactBundle;
+  /** Stage 1, normalised from either version: identifier, states, contact methods, consent */
+  summary: MatchSummaryBundle;
+  /**
+   * Her contact details: from the separate contact ciphertext once the server releases it (after the conflict check),
+   * or, for a legacy v1 bundle, from inside the bundle (then the gate is the counselor UI's only: `legacyBundle`).
+   */
+  contact?: MatchContactDetails;
+  legacyBundle: boolean;
+  /** a contact ciphertext was supplied but did not open under this entry's key and tag (moved or tampered) */
+  contactError?: boolean;
   /** her share's x coordinate (hex) — equal x means the same survivor */
   x: string;
   /** the point lies on the line most entries agree on */
@@ -421,17 +470,17 @@ export type ReconstructResult =
  */
 export async function reconstructMatchGroup(
   tag: string,
-  entries: Array<{ entryId: string; seal: CounselorSeal; bundle: Envelope }>,
+  entries: Array<{ entryId: string; seal: CounselorSeal; bundle: Envelope; contactBundle?: Envelope }>,
   privateKey: CryptoKey,
   counselorId: string,
 ): Promise<ReconstructResult> {
-  const opened: Array<{ entryId: string; x: bigint; y: bigint; ce: Envelope; bundle: Envelope }> = [];
+  const opened: Array<{ entryId: string; x: bigint; y: bigint; ce: Envelope; bundle: Envelope; contactBundle?: Envelope }> = [];
   const failed: string[] = [];
   const alerts = new Set<ReconstructAlert>();
   for (const e of entries) {
     try {
       const s = await openCounselorSeal(e.seal, privateKey, counselorId, tag);
-      opened.push({ entryId: e.entryId, x: hexToField(s.x), y: hexToField(s.y), ce: s.ce, bundle: e.bundle });
+      opened.push({ entryId: e.entryId, x: hexToField(s.x), y: hexToField(s.y), ce: s.ce, bundle: e.bundle, ...(e.contactBundle && { contactBundle: e.contactBundle }) });
     } catch {
       failed.push(e.entryId);
     }
@@ -479,7 +528,20 @@ export async function reconstructMatchGroup(
     try {
       const keRaw = await openCe(key, o);
       const ke = await subtle.importKey('raw', keRaw as BufferSource, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-      const bundle = JSON.parse(dec.decode(await openAad(ke, o.bundle, `bundle|${tag}`))) as MatchContactBundle;
+      const bundle = JSON.parse(dec.decode(await openAad(ke, o.bundle, `bundle|${tag}`))) as MatchSummaryBundle | MatchContactBundle;
+      const summary = summaryFromBundle(bundle);
+      const legacyBundle = bundle.v === 1;
+      let contact: MatchContactDetails | undefined = legacyBundle ? detailsFromLegacy(bundle) : undefined;
+      let contactError = false;
+      if (!legacyBundle && o.contactBundle) {
+        try {
+          contact = JSON.parse(dec.decode(await openAad(ke, o.contactBundle, `contact|${tag}`))) as MatchContactDetails;
+          if (contact.v !== 1) throw new Error('unknown contact version');
+        } catch {
+          contact = undefined;
+          contactError = true;
+        }
+      }
       if (seenX.has(o.x)) {
         duplicates.push(o.entryId);
         alerts.add('duplicate_share');
@@ -488,12 +550,12 @@ export async function reconstructMatchGroup(
       seenX.add(o.x);
       const onLine = onLineOf(main, o);
       if (!onLine) alerts.add('off_line_share');
-      bundles.push({ entryId: o.entryId, bundle, x: fieldToHex(o.x), onLine });
+      bundles.push({ entryId: o.entryId, bundle, summary, ...(contact && { contact }), legacyBundle, ...(contactError && { contactError }), x: fieldToHex(o.x), onLine });
     } catch {
       failed.push(o.entryId);
     }
   }
-  const canonicals = [...new Set(bundles.map((b) => b.bundle.identifier?.canonical ?? ''))];
+  const canonicals = [...new Set(bundles.map((b) => b.summary.identifier?.canonical ?? ''))];
   if (canonicals.length > 1) alerts.add('identifier_mismatch');
   return { ok: true, tag, bundles, people: bundles.length, failed, duplicates, canonicals, alerts: [...alerts] };
 }
@@ -502,24 +564,31 @@ export async function reconstructMatchGroup(
 
 export const ROSTER_DOMAIN = 'matra/counselor-roster/v1';
 
-/** Canonical roster JSON: counselors sorted by userId, keys in fixed order, RSA public keys reduced to {kty, n, e}. */
+/** USPS codes, upper case, de-duplicated and sorted (invalid entries dropped). */
+export const normalizeLicensedStates = (states: readonly string[] | undefined): string[] =>
+  Array.from(new Set((states ?? []).map((s) => String(s).trim().toUpperCase()).filter((s) => /^[A-Z]{2}$/.test(s)))).sort();
+
+/**
+ * Canonical roster JSON (v2): counselors sorted by userId, keys in fixed order, RSA public keys reduced to {kty, n, e},
+ * licensed states normalized. The matcher assigns a group only to a counselor licensed in one of its states.
+ */
 export function canonicalRosterPayload(
-  counselors: Array<{ userId: string; publicKey: JsonWebKey }>,
+  counselors: Array<{ userId: string; publicKey: JsonWebKey; licensedStates?: readonly string[] }>,
   issuedAt = new Date().toISOString(),
 ): string {
   const list = [...counselors]
     .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0))
     .map((c) => {
       if (c.publicKey.kty !== 'RSA' || !c.publicKey.n || !c.publicKey.e) throw new Error('counselor key must be an RSA public key');
-      return { userId: c.userId, publicKey: { kty: 'RSA' as const, n: c.publicKey.n, e: c.publicKey.e } };
+      return { userId: c.userId, publicKey: { kty: 'RSA' as const, n: c.publicKey.n, e: c.publicKey.e }, licensedStates: normalizeLicensedStates(c.licensedStates) };
     });
-  const payload: CounselorRosterPayload = { v: 1, issuedAt, counselors: list };
+  const payload: CounselorRosterPayload = { v: 2, issuedAt, counselors: list };
   return JSON.stringify(payload);
 }
 
 /** Organization (offline, CLI): sign the verified counselor roster with the org's Ed25519 secret key (32 bytes). */
 export function signCounselorRoster(
-  counselors: Array<{ userId: string; publicKey: JsonWebKey }>,
+  counselors: Array<{ userId: string; publicKey: JsonWebKey; licensedStates?: readonly string[] }>,
   orgSecretKey: Uint8Array,
   issuedAt?: string,
 ): SignedCounselorRoster {
@@ -536,15 +605,18 @@ export function generateRosterKey(): { secretKey: Uint8Array; publicKey: Uint8Ar
   return ed25519.keygen();
 }
 
-/** Verify a signed roster against the pinned org public key. Returns the payload, or null if anything is off. */
+/**
+ * Verify a signed roster against the pinned org public key. Returns the payload, or null if anything is off. A v1
+ * roster (before licensed states) verifies with `licensedStates: []` for everyone.
+ */
 export function verifyCounselorRoster(signed: SignedCounselorRoster | undefined, orgPublicKey: Uint8Array): CounselorRosterPayload | null {
   if (!signed) return null;
   try {
     const sig = fromBase64(signed.signature);
     if (sig.length !== 64 || !ed25519.verify(sig, enc.encode(`${ROSTER_DOMAIN}|${signed.payload}`), orgPublicKey)) return null;
     const p = JSON.parse(signed.payload) as CounselorRosterPayload;
-    if (p.v !== 1 || !Array.isArray(p.counselors)) return null;
-    return p;
+    if ((p.v !== 1 && p.v !== 2) || !Array.isArray(p.counselors)) return null;
+    return { ...p, counselors: p.counselors.map((c) => ({ ...c, licensedStates: p.v === 2 ? normalizeLicensedStates(c.licensedStates) : [] })) };
   } catch {
     return null;
   }
@@ -581,18 +653,65 @@ export function counselorsToSealTo(
 /** Network calls the survivor's client needs (implemented by the web ApiClient, and by tests with supertest/fetch). */
 export interface MatchTransport {
   config(): Promise<MatchingConfig>;
-  evaluate(holder: 'a' | 'b', req: OprfEvaluateRequest): Promise<OprfEvaluateResponse>;
+  /** OPRF evaluation by key holder `index` (1..m). */
+  evaluate(index: number, req: OprfEvaluateRequest): Promise<OprfEvaluateResponse>;
+  /**
+   * Called when holders answered with an evaluation that failed its proof (or under the wrong index) even though t
+   * others were valid and sealing went ahead: the deployment is running with less margin than t-of-m suggests.
+   * Indices only; nothing about the identifier.
+   */
+  onBadHolders?(indices: number[]): void;
   createEntry(req: CreateMatchEntryRequest): Promise<{ entry: EscrowEntry }>;
+  /** The matcher's attestation document for this nonce (GET /api/matching/attestation, proxied by the app server). */
+  attestation(nonce: string): Promise<AttestationDocument>;
   listEntries?(): Promise<{ entries: EscrowEntry[] }>;
   addSeals?(entryId: string, req: AddMatchSealsRequest): Promise<{ entry: EscrowEntry }>;
 }
 
 /** Build-time pins (production builds set both; see docs/SECURITY_WHITEPAPER.md §4a). */
 export interface MatchPins {
-  /** base64 public keys of OPRF key holders A and B */
-  keys?: { a: string; b: string };
+  /** threshold OPRF key set: t, the base64 group public key, and the base64 share public keys in index order 1..m */
+  oprf?: { t: number; groupPublicKey: string; holders: string[] };
   /** base64 Ed25519 public key of the organization that signs the counselor roster */
   rosterKey?: string;
+  /**
+   * The matcher this app trusts: the platform's base64 Ed25519 key and the hex measurement of the published matcher
+   * build. Without it (development) any attestation is accepted, with a console warning.
+   */
+  attestation?: { platformKey: string; measurement: string };
+  /** accept a SIMULATED attestation even though `attestation` is pinned (demo builds only, MATRA_DEMO_MODE=1) */
+  allowSimulatedAttestation?: boolean;
+  /**
+   * Refuse to seal routing data without a pinned `attestation` (non-demo production builds). Without a pin, whoever
+   * serves the attestation (the app server proxies it) could present its own key and read every survivor's states.
+   */
+  requireAttestationPin?: boolean;
+}
+
+/**
+ * Fetch and verify the matcher's attestation with a fresh nonce, BEFORE anything is sealed to its key or sent to an
+ * OPRF key holder. Pinned builds check the platform key and the measurement and refuse a simulated platform unless it
+ * is a demo build; unpinned (development) builds accept whatever the matcher presents, with one warning.
+ */
+let warnedUnpinnedMatcher = false;
+export async function verifiedMatcher(t: MatchTransport, pins?: MatchPins): Promise<VerifiedAttestation> {
+  const nonce = newAttestationNonce();
+  const doc = await t.attestation(nonce);
+  const pinned = pins?.attestation;
+  if (!pinned) {
+    if (pins?.requireAttestationPin)
+      throw new AttestationError('not_pinned', 'this build has no pinned matcher attestation, so it cannot tell the real matcher from an impostor');
+    if (!warnedUnpinnedMatcher)
+      console.warn('[matra] sealed matching: no pinned matcher attestation in this build; accepting the matcher’s simulated attestation (development only).');
+    warnedUnpinnedMatcher = true;
+    return verifyAttestation(doc, { nonce, allowSimulated: true });
+  }
+  return verifyAttestation(doc, {
+    nonce,
+    platformKey: pinned.platformKey,
+    expectedMeasurement: pinned.measurement,
+    allowSimulated: !!pins?.allowSimulatedAttestation,
+  });
 }
 
 /**
@@ -605,7 +724,10 @@ export interface MatchLabel {
   identifier: { kind: MatchContactBundle['identifier']['kind']; canonical: string; platform?: string };
   contact: MatchContactBundle['contact'];
   consentStatement: string;
+  /** labels sealed before routing: the incident (or else her home) state; re-seals route it as the incident state */
   state?: string;
+  /** the incident state and her home state, so re-seals keep their routing */
+  states?: MatchStates;
   keyEpoch: number;
   share: SealedShare;
 }
@@ -620,9 +742,64 @@ export async function decryptLabel(env: Envelope, masterKey: CryptoKey): Promise
   }
 }
 
-function checkPinnedKeys(config: MatchingConfig, pins?: MatchPins) {
-  if (pins?.keys && (pins.keys.a !== config.keyHolders.a.publicKey || pins.keys.b !== config.keyHolders.b.publicKey))
+/**
+ * The client's view of the threshold key set: the server's config, checked against the build-time pins (when set) and
+ * for consistency (checkThresholdKeys), before anything is sent to a holder.
+ */
+export function matchingOprfKeys(config: MatchingConfig, pins?: MatchPins): ThresholdKeyConfig {
+  const o = config.oprf;
+  if (!o || o.suite !== 'ristretto255-SHA512' || o.mode !== 'voprf') throw new Error('unsupported matching OPRF configuration');
+  if (o.holders.length !== o.m) throw new Error('matching OPRF configuration lists the wrong number of key holders');
+  const holders = [...o.holders].sort((x, y) => x.index - y.index);
+  if (
+    pins?.oprf &&
+    (pins.oprf.t !== o.t ||
+      pins.oprf.groupPublicKey !== o.groupPublicKey ||
+      pins.oprf.holders.length !== holders.length ||
+      holders.some((h, i) => h.index !== i + 1 || h.publicKey !== pins.oprf!.holders[i]))
+  )
     throw new Error('matching key holder keys do not match the keys pinned in this app');
+  const keys = {
+    t: o.t,
+    groupPublicKey: fromBase64(o.groupPublicKey),
+    holders: holders.map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })),
+  };
+  checkThresholdKeys(keys);
+  return keys;
+}
+
+/**
+ * Ask every key holder in parallel; any t valid (proof-checked) answers are enough. A rate limit (429) is surfaced
+ * as-is when it is why fewer than t answered (the account quota, charged once per blinded element). Fewer than t answers otherwise →
+ * MatchingError('holders_unavailable'); a bad proof → ThresholdOprfError naming the holder (from finalize). A bad
+ * proof alongside t valid answers still seals, and the bad indices go to `t.onBadHolders`.
+ */
+export async function evaluateMatchOprf(t: MatchTransport, keys: ThresholdKeyConfig, b: MatchBlind): Promise<Uint8Array> {
+  const req = { blinded: toBase64(b.blinded) };
+  const settled = await Promise.allSettled(keys.holders.map((h) => t.evaluate(h.index, req)));
+  const evals: HolderEvaluation[] = [];
+  const errors: unknown[] = [];
+  settled.forEach((r, i) => {
+    if (r.status === 'rejected') return void errors.push(r.reason);
+    try {
+      evals.push({ index: keys.holders[i]!.index, evaluated: fromBase64(r.value.evaluated), proof: fromBase64(r.value.proof) });
+    } catch {
+      evals.push({ index: keys.holders[i]!.index, evaluated: new Uint8Array(0), proof: new Uint8Array(0) }); // malformed: fails its proof
+    }
+  });
+  if (evals.length < keys.t) {
+    const limited = errors.find((e) => (e as { status?: number }).status === 429);
+    if (limited) throw limited;
+    throw new MatchingError('holders_unavailable', `only ${evals.length} of ${keys.holders.length} OPRF key holders answered; ${keys.t} are needed`);
+  }
+  try {
+    const { output, badHolders } = finalizeThresholdOprfReport(b, keys, evals);
+    if (badHolders.length) t.onBadHolders?.(badHolders);
+    return output;
+  } catch (e) {
+    if (e instanceof ThresholdOprfError && !e.badHolders.length) throw new MatchingError('holders_unavailable', e.message);
+    throw e;
+  }
 }
 
 /**
@@ -637,7 +814,8 @@ export async function submitMatchEntry(
     identifier: Extract<NormalizedIdentifier, { ok: true }>;
     contact: MatchContactBundle['contact'];
     consentStatement: string;
-    state?: string;
+    /** where it happened and where she lives (USPS codes): in her bundle, and sealed to the matcher for routing */
+    states?: MatchStates;
     /** what she sees in her list ("Ryan · phone number") */
     label: string;
     config?: MatchingConfig;
@@ -647,27 +825,27 @@ export async function submitMatchEntry(
   },
 ): Promise<{ entry: EscrowEntry; tag: string }> {
   const config = args.config ?? (await t.config());
-  checkPinnedKeys(config, args.pins);
+  const keys = matchingOprfKeys(config, args.pins);
   const counselors = counselorsToSealTo(config, args.pins?.rosterKey);
   if (!counselors.length) throw new Error('no counselor available to receive matches');
+  // The matcher's attestation is checked first: if it fails, no key holder is asked and nothing is charged or sealed.
+  const matcher = await verifiedMatcher(t, args.pins);
+  const states = cleanStates(args.states);
   const b = blindMatchIdentifier(args.identifier.canonical);
-  const req = { blinded: toBase64(b.blinded) };
-  const [ea, eb] = await Promise.all([t.evaluate('a', req), t.evaluate('b', req)]);
-  const y = finalizeSplitOprf(
-    b,
-    { publicKey: fromBase64(config.keyHolders.a.publicKey), evaluated: fromBase64(ea.evaluated), proof: fromBase64(ea.proof) },
-    { publicKey: fromBase64(config.keyHolders.b.publicKey), evaluated: fromBase64(eb.evaluated), proof: fromBase64(eb.proof) },
-  );
+  const y = await evaluateMatchOprf(t, keys, b);
   const secrets = derivePerpetratorSecrets(y);
   const x = await survivorShareX(args.masterKey, secrets.tag);
-  const bundle: MatchContactBundle = {
-    v: 1,
+  // Staged release: the summary goes with the group; the details only after the counselor's conflict check (server gate).
+  const { methods, language, details } = splitContact(args.contact);
+  const bundle: MatchSummaryBundle = {
+    v: 2,
     identifier: { kind: args.identifier.kind, canonical: args.identifier.canonical },
-    contact: args.contact,
+    states,
+    methods,
+    ...(language && { language }),
     consent: { statement: args.consentStatement, at: new Date().toISOString() },
-    ...(args.state && { state: args.state }),
   };
-  const built = await buildMatchEntry({ secrets, x, bundle, counselors });
+  const built = await buildMatchEntry({ secrets, x, bundle, contact: details, counselors });
   const label: MatchLabel = {
     v: 2,
     label: args.label,
@@ -678,16 +856,18 @@ export async function submitMatchEntry(
     },
     contact: args.contact,
     consentStatement: args.consentStatement,
-    ...(args.state && { state: args.state }),
+    ...((states.incident || states.survivor) && { states }),
     keyEpoch: config.keyEpoch,
     share: built.share,
   };
   const { entry } = await t.createEntry({
     tag: built.tag,
     bundle: built.bundle,
+    contactBundle: built.contactBundle!,
     seals: built.seals,
     labelEnvelope: await encryptLabel(label, args.masterKey),
     ...(args.replacesEntryId && { replacesEntryId: args.replacesEntryId }),
+    routing: await sealRouting({ v: 1, tag: built.tag, incidentState: states.incident, survivorState: states.survivor }, matcher.encKey),
   });
   return { entry, tag: secrets.tag };
 }
@@ -707,7 +887,7 @@ export async function refreshMatchEntries(
   const { entries } = await t.listEntries();
   if (!entries.length) return out;
   const config = args.config ?? (await t.config());
-  checkPinnedKeys(config, args.pins);
+  matchingOprfKeys(config, args.pins);
   const counselors = counselorsToSealTo(config, args.pins?.rosterKey);
   if (!counselors.length) return out;
   for (const e of entries) {
@@ -722,7 +902,7 @@ export async function refreshMatchEntries(
         identifier: { ok: true, kind: label.identifier.kind, canonical: label.identifier.canonical, ...(label.identifier.platform && { platform: label.identifier.platform }) },
         contact: label.contact,
         consentStatement: label.consentStatement,
-        ...(label.state && { state: label.state }),
+        states: label.states ?? (label.state ? { incident: label.state } : {}),
         label: label.label,
         config,
         ...(args.pins && { pins: args.pins }),
@@ -740,6 +920,16 @@ export async function refreshMatchEntries(
     out.sealsAdded += seals.length;
   }
   return out;
+}
+
+function cleanStates(s: MatchStates | undefined): MatchStates {
+  const one = (v: string | undefined) => {
+    const u = v?.trim().toUpperCase();
+    return u && /^[A-Z]{2}$/.test(u) ? u : undefined;
+  };
+  const incident = one(s?.incident);
+  const survivor = one(s?.survivor);
+  return { ...(incident && { incident }), ...(survivor && { survivor }) };
 }
 
 /** Encrypt a note to oneself. */
