@@ -364,6 +364,11 @@ export interface Share {
   expiresAt: string;
   revokedAt?: string;
   ledgerEntryId: string;
+  /**
+   * Her own list only: whether the attorney is verified by Matra right now. While false, the server refuses the
+   * attorney's access to this share (paused, not revoked); she decides whether to revoke or keep it.
+   */
+  attorneyVerified?: boolean;
 }
 
 export interface ShareBundle {

@@ -267,6 +267,8 @@ interface ShareRow {
   revoked_at: string | null;
   expires_at: string;
   ledger_entry_id: string;
+  /** only on her own share list: whether the attorney is verified right now (attorney_profiles.verified) */
+  attorney_verified?: number | null;
 }
 interface MatchEntryRow {
   id: string;
@@ -385,6 +387,7 @@ const toShare = (s: ShareRow): Share => ({
   expiresAt: s.expires_at,
   ...(s.revoked_at != null && { revokedAt: s.revoked_at }),
   ledgerEntryId: s.ledger_entry_id,
+  ...(s.attorney_verified != null && { attorneyVerified: s.attorney_verified === 1 }),
 });
 
 const DEFAULT_SHARE_DAYS = 90;
@@ -614,6 +617,21 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const p = q.profileByUser.get(attorneyId) as ProfileRow | undefined;
     const u = q.userById.get(attorneyId) as UserRow | undefined;
     return p ? `${p.display_name}${p.organization ? `, ${p.organization}` : ''} (${u?.username ?? 'attorney'})` : 'An attorney';
+  };
+
+  /**
+   * Attorney routes that read shared files need a verified attorney, like verifiedCounselor for counselors. Unverifying
+   * an attorney (verify-attorney --revoke) pauses access to every share at once without revoking her consent: the
+   * survivor decides whether to revoke or keep it (attorney-verification.ts tells her).
+   */
+  const assertVerifiedAttorney = (userId: string) => {
+    const p = q.profileByUser.get(userId) as ProfileRow | undefined;
+    if (!p || p.verified !== 1)
+      throw new HttpError(403, 'attorney_not_verified', 'Your attorney account is not verified right now, so files shared with you are paused.');
+  };
+  const verifiedAttorney = (req: Request, _res: Response, next: NextFunction) => {
+    assertVerifiedAttorney(req.user!.id);
+    next();
   };
 
   // ════════════ health ════════════
@@ -940,6 +958,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const meta = q.blobMetaById.get(bid) as BlobRow | undefined;
     if (!meta) throw new HttpError(404, 'blob_not_found', 'File not found.');
     if (meta.owner_id !== me.id) {
+      if (me.role === 'attorney') assertVerifiedAttorney(me.id);
       const grant =
         me.role === 'attorney'
           ? (db
@@ -1090,12 +1109,22 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   app.get('/api/shares', auth, (req, res) => {
     const me = req.user!;
-    const col = me.role === 'attorney' ? 'attorney_id' : 'survivor_id';
-    const rows = db.prepare(`SELECT * FROM shares WHERE ${col} = ? ORDER BY created_at DESC, rowid DESC`).all(me.id) as ShareRow[];
+    if (me.role === 'attorney') {
+      assertVerifiedAttorney(me.id);
+      const rows = db.prepare('SELECT * FROM shares WHERE attorney_id = ? ORDER BY created_at DESC, rowid DESC').all(me.id) as ShareRow[];
+      return res.json({ shares: rows.map(toShare) });
+    }
+    // Her own list also says whether each attorney is verified right now: an unverified attorney's access is paused.
+    const rows = db
+      .prepare(
+        `SELECT s.*, p.verified AS attorney_verified FROM shares s LEFT JOIN attorney_profiles p ON p.user_id = s.attorney_id
+          WHERE s.survivor_id = ? ORDER BY s.created_at DESC, s.rowid DESC`,
+      )
+      .all(me.id) as ShareRow[];
     res.json({ shares: rows.map(toShare) });
   });
 
-  app.get('/api/shares/:id/bundle', auth, attorneyOnly, (req, res) => {
+  app.get('/api/shares/:id/bundle', auth, attorneyOnly, verifiedAttorney, (req, res) => {
     const me = req.user!;
     const s = q.shareById.get(parse(S.id, req.params.id)) as ShareRow | undefined;
     if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
