@@ -1042,8 +1042,13 @@ export const STEPS: ScriptStep[] = [
     fields: [
       { key: 'toxicology', label: 'Did they test for alcohol or drugs?', type: 'choice', options: YES_NO_UNSURE },
       {
+        // The key stays 'fiveYearHold' so saved drafts still load. NJ now keeps an unreported ("Hold") kit for at
+        // least 20 years, not 5: AG Directive 2023-1 (Mar 13 2023) §III.C and §V.A, which supersedes the
+        // "Five-Year Hold Kit" wording of the 2018 AG Standards; restated in the Aug 2024 amendment.
+        // https://www.nj.gov/oag/dcj/agguide/directives/ag-Directive-2023-1_Procedures-and-Guidelines-for-Law-Enforcement-Testing-Tracking-Storage-Retention-and-Destruction-of-Sexual-Assault-Forensic-Examination-SAFE-Kits.pdf
+        // https://www.nj.gov/oag/dcj/agguide/directives/AG-Directive-2023-1_Amended-082024.pdf
         key: 'fiveYearHold',
-        label: 'Was the kit kept without a police report? (sometimes called an anonymous or "Five-Year Hold" kit)',
+        label: 'Was the kit kept without a police report? (sometimes called an anonymous or "Hold" kit)',
         type: 'choice',
         options: YES_NO_UNSURE,
       },
@@ -1055,8 +1060,11 @@ export const STEPS: ScriptStep[] = [
     phase: 'medical',
     kind: 'info',
     showIf: isNot('medical.care', 'yes'),
+    // NJ AG Directive 2024-02 (Apr 17 2024): SART activation is 7 days after the incident, and up to 9 days when
+    // she has continued pain, a visible injury or other extenuating circumstances, at the forensic nurse's judgment.
+    // https://www.nj.gov/oag/dcj/agguide/directives/ag-Directive-2024-02_Expanding-the-Timeframe-for-Multidisciplinary-Responses-to-Victims-of-Sexual-Assault.pdf
     say: [
-      'Something you may want to know: if this happened recently, you can still get a forensic exam. It is often free, and is usually possible up to about 5 days after.',
+      'Something you may want to know: if this happened recently, you can still get a forensic exam. It is often free, and is usually possible up to 7 days after, sometimes longer.',
       'You do not have to report to police to get one. The hotline at 1-800-656-4673 can help you find a hospital near you.',
     ],
   },

@@ -251,6 +251,14 @@ describe('script', () => {
     expect(all).not.toMatch(/alleged/);
     expect(all).not.toMatch(/\bwhy\b/);
   });
+
+  it('states the current NJ exam window and kit name (AG Directives 2024-02 and 2023-1)', () => {
+    const info = STEPS.find((s) => s.id === 'medical.examInfo')!.say.join(' ');
+    expect(info).toMatch(/usually possible up to 7 days after, sometimes longer/);
+    expect(info).not.toMatch(/5 days/);
+    expect(info).toMatch(/1-800-656-4673/);
+    expect(JSON.stringify(STEPS)).not.toMatch(/five-year/i);
+  });
 });
 
 describe('sealed match: unique identifiers only', () => {

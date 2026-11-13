@@ -176,7 +176,7 @@ export interface IntakeRecord {
     forensicExamCompleted?: boolean; // SANE / rape kit
     /** Forensic kit details (asked only if an exam was completed). */
     toxicologyTest?: TriAnswer;
-    /** Kit kept anonymously / without a police report (NJ "Five-Year Hold" kit). */
+    /** Kit kept anonymously / without a police report (NJ "Hold" kit, kept 20 years since AG Directive 2023-1; the field name predates it). */
     fiveYearHoldKit?: TriAnswer;
     kitReportedToPolice?: TriAnswer;
     injuries?: string;
