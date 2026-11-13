@@ -825,6 +825,8 @@ export interface SetUpRecoveryRequest {
 }
 /** DELETE /api/account/recovery */
 export interface TurnOffRecoveryRequest { authKey: string }
+/** POST /api/account/delete: her passphrase auth key again, not only a session. */
+export interface DeleteAccountRequest { authKey: string }
 export interface RecoverStartRequest { username: string; recoveryAuthKey: string }
 export interface RecoverStartResponse {
   /** single use, 10 minutes, held in server memory only */
@@ -962,7 +964,10 @@ export interface ApiError { error: string; code?: string }
  POST   /api/report-releases/:id/revoke                      -> { release: ReportRelease, ledgerEntry: LedgerEntry }
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
- POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)
+ POST   /api/account/delete  DeleteAccountRequest     -> { ok: true }  (401 invalid_credentials on a wrong passphrase. Deletes her
+                                                         ciphertext and wrapped keys from the live database, then empties
+                                                         the WAL; ledger hashes remain. Not a crypto-shred: earlier
+                                                         backups stay decryptable with her passphrase)
 
  GET    /api/dev/inspector                            -> InspectorSnapshot (dev / demo only: MATRA_INSPECTOR=1, and never in
                                                          production unless MATRA_DEMO_MODE=1; unauthenticated; inspector.ts)

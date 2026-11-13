@@ -15,6 +15,7 @@ const AUDIT_TEXT: Record<string, string> = {
   'auth.logout': 'Signed out',
   'auth.login_failed': 'Someone tried to sign in with the wrong passphrase',
   'auth.reauth_failed': 'Someone tried to change your recovery code with the wrong passphrase',
+  'auth.delete_reauth_failed': 'Someone tried to delete your space with the wrong passphrase',
   'auth.recovered': 'Your passphrase was reset with your recovery code',
   'recovery.set_up': 'You set up a recovery code',
   'recovery.replaced': 'You made a new recovery code (the old one stopped working)',

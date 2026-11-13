@@ -265,7 +265,7 @@ and New York, and a pilot partner with trained advocates."*
 | Sealed match | Her identifier is sealed. A routing state is sealed to the matcher | A separate opt-in, plus a safe contact method | She'll never see a match. A counselor, a licensed attorney, may contact her once |
 | Counselor, stage 1 | The counselor sees the identifier, states and contact methods, then contact details after a conflict check | Covered by her opt-in | The counselor reaches out once, privately, by the method she chose |
 | Counselor, stage 2 | Her full report goes to that counselor only | A new, separate **yes** for each request, after the counselor has spoken with her | Not shared with anyone else who named the same person. A no is final for this match |
-| Deletion | Her ciphertext and keys are destroyed; ledger hashes remain | Typed confirmation | Talk to a lawyer before deleting if a case is possible. Copies already downloaded can't be recalled |
+| Deletion | Her ciphertext and wrapped keys are deleted from the live database; ledger hashes remain. Not a crypto-shred: a server backup made earlier still opens with her passphrase | Typed confirmation and her passphrase | Talk to a lawyer before deleting if a case is possible. Copies already downloaded can't be recalled |
 
 Each of these stages raises at least one open question listed in section 7. None of the consent wording has been
 reviewed by counsel or by advocates yet.

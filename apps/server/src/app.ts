@@ -750,10 +750,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const recoveryLimiter = clients.limiter(10, 15 * 60_000); // per client: a wrong code is a typo, not a hobby
   app.locals.resetTokens = resetTokens;
 
-  /** Re-authenticate with the passphrase auth key before changing what can open her account. */
-  const reauth = async (u: UserRow, authKey: string) => {
+  /**
+   * Re-authenticate with the passphrase auth key before changing what can open her account (a recovery code) or
+   * deleting it. A session alone is not enough: a session can be left open on a shared device.
+   */
+  const reauth = async (u: UserRow, authKey: string, purpose: 'recovery' | 'delete' = 'recovery') => {
     if (!(await verifyAuthKey(authKey, u.auth_salt, u.auth_hash))) {
-      audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
+      if (purpose === 'delete') audit(u.id, 'auth.delete_reauth_failed', 'An attempt to delete the account with an incorrect passphrase');
+      else audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
       throw new HttpError(401, 'invalid_credentials', 'That passphrase is incorrect.');
     }
   };
@@ -2259,9 +2263,16 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ events: rows.map(toAudit) });
   });
 
-  // ════════════ account crypto-shred ════════════
-  app.post('/api/account/delete', auth, (req, res) => {
+  // ════════════ account deletion ════════════
+  // Deletes her rows (ciphertext, wrapped keys, shares, matches, activity) from the live database. secure_delete is ON,
+  // so freed pages are overwritten, and a TRUNCATE checkpoint afterwards empties the WAL. It is not a crypto-shred:
+  // her keys are wrapped under her passphrase, so a backup or copy of the database made earlier stays decryptable by
+  // anyone who has that copy and her passphrase (docs/SECURITY_WHITEPAPER.md §2).
+  app.post('/api/account/delete', auth, async (req, res) => {
     const me = req.user!;
+    rateLimit(req, 'account-delete', me.username);
+    const body = parse(S.deleteAccountRequest, req.body ?? {});
+    await reauth(q.userById.get(me.id) as UserRow, body.authKey, 'delete');
     db.transaction(() => {
       const recordIds = (db.prepare('SELECT id FROM records WHERE owner_id = ?').all(me.id) as Array<{ id: string }>)
         .map((r) => r.id)
@@ -2307,6 +2318,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
       appendLedger(db, 'account.shredded', me.id, sha256Hex(JSON.stringify({ userId: me.id, recordIds, blobIds })));
     })();
+    // Move the deleted pages out of the WAL file now rather than at some later automatic checkpoint (same as phone tokens).
+    checkpoint();
     void syncMatcher(); // her entries leave the matcher; a counselor's departure changes its roster
     res.json({ ok: true });
   });

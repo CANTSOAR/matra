@@ -729,6 +729,8 @@ test('8. delete everything: explained first (lawyer caution, what stays), typed 
   const button = page.getByTestId('delete-account');
   await expect(button).toBeDisabled();
   await page.getByTestId('delete-confirm-input').fill('DELETE');
+  await expect(button).toBeDisabled(); // her passphrase too, not only an open session
+  await page.getByTestId('delete-passphrase').fill(SURVIVOR_PASS);
   await expect(button).toBeEnabled();
   await button.click();
 

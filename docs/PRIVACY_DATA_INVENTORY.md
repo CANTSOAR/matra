@@ -24,7 +24,7 @@ every e2e test fails on a request to another origin.
 access logs with IPs; the number and time of each verification). Turning IP logging off at the edge is a deployment
 step ([DEPLOY.md](DEPLOY.md)); this code cannot enforce it.
 
-Retention key: **account** = until the account is deleted (crypto-shred, `POST /api/account/delete`);
+Retention key: **account** = until the account is deleted (`POST /api/account/delete`, with her passphrase: rows deleted from the live database with `secure_delete` on, then a TRUNCATE checkpoint; not a crypto-shred, so a backup taken earlier keeps them);
 **forever** = never deleted (append-only); **memory** = process memory only, never written.
 
 ## 1. App server database (SQLite, `MATRA_DB_PATH`)

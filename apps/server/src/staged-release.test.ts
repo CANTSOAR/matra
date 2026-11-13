@@ -348,10 +348,10 @@ describe('revocation, withdrawal and deletion', () => {
 
   it('deleting her account, or the counselor’s, removes every staged-release row about them', async () => {
     const { app, db, loc, a, release } = await released();
-    expect((await request(app).post('/api/account/delete').set(a.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(a.auth).send({ authKey: a.authKey })).status).toBe(200);
     for (const t of ['report_requests', 'report_releases', 'report_release_blobs']) expect(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get()).toEqual({ n: 0 });
     expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(loc.auth)).status).toBe(404);
-    expect((await request(app).post('/api/account/delete').set(loc.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(loc.auth).send({ authKey: loc.authKey })).status).toBe(200);
     expect(db.prepare('SELECT COUNT(*) n FROM conflict_checks').get()).toEqual({ n: 0 });
   });
 });

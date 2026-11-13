@@ -135,6 +135,11 @@ interface SessionCtx {
   turnOffRecovery(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
   /** Signed out: alias + recovery code → a reset she finishes by choosing a new passphrase. */
   beginRecovery(username: string, code: string, onProgress?: (p: Progress) => void): Promise<RecoveryReset>;
+  /**
+   * Signed in: check her passphrase on this device, then ask the server to delete her account (it checks the
+   * passphrase again). Does not sign her out here: the caller leaves the signed-in screens first, then locks.
+   */
+  deleteAccount(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -324,10 +329,10 @@ export function SessionProvider({
 
   /** Her account secret from her passphrase, checked on this device. The caller wipes it. */
   const accountSecretFromPassphrase = useCallback(
-    async (s: Session, passphrase: string) => {
+    async (s: Session, passphrase: string, wrongText = 'That passphrase isn’t right. Check for typos and try again.') => {
       const pre = await api.prelogin(s.user.username);
       const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
-      const wrong = () => new SessionError('That passphrase isn’t right. Check for typos and try again.');
+      const wrong = () => new SessionError(wrongText);
       let as: Uint8Array;
       try {
         as = s.user.keyVersion === 2 && s.user.wrappedAccountKey
@@ -403,6 +408,25 @@ export function SessionProvider({
         const next = { ...s, user };
         sessionRef.current = next;
         setSession(next);
+      }
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const deleteAccount = useCallback<SessionCtx['deleteAccount']>(
+    async (passphrase, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      onProgress?.('deriving');
+      // same words whether her device or the server finds the passphrase wrong
+      const { as, keys } = await accountSecretFromPassphrase(s, passphrase, 'That passphrase isn’t right. Nothing was deleted.');
+      as.fill(0);
+      onProgress?.('contacting');
+      try {
+        await api.deleteAccount({ authKey: keys.authKey });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) throw new SessionError('That passphrase isn’t right. Nothing was deleted.');
+        throw e;
       }
     },
     [api, accountSecretFromPassphrase],
@@ -581,6 +605,7 @@ export function SessionProvider({
       prepareRecoveryCode,
       turnOffRecovery,
       beginRecovery,
+      deleteAccount,
     }),
     [
       session,
@@ -600,6 +625,7 @@ export function SessionProvider({
       prepareRecoveryCode,
       turnOffRecovery,
       beginRecovery,
+      deleteAccount,
     ],
   );
 

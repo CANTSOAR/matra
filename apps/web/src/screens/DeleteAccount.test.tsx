@@ -12,6 +12,8 @@ function Home() {
   return <p>Public home{(loc.state as { deleted?: boolean } | null)?.deleted ? ' — deleted' : ''}</p>;
 }
 
+const PASS = 'acorn-maple-violin-otter-quartz';
+
 async function setup(opts: { deleteFails?: boolean } = {}) {
   const user = userEvent.setup();
   const { fetchImpl } = fakeAuthFetch(opts);
@@ -27,7 +29,7 @@ async function setup(opts: { deleteFails?: boolean } = {}) {
     </Harness>,
   );
   await act(async () => {
-    await current!.register({ username: 'wren-12', passphrase: 'acorn-maple-violin-otter-quartz', role: 'survivor', ageConfirmed18: true });
+    await current!.register({ username: 'wren-12', passphrase: PASS, role: 'survivor', ageConfirmed18: true });
   });
   return { user, fetchImpl: fetchImpl as unknown as { mock: { calls: [RequestInfo | URL, RequestInit | undefined][] } } };
 }
@@ -57,6 +59,9 @@ describe('Delete everything', () => {
     expect(screen.getByText(/This can’t be undone\./)).toBeInTheDocument();
     expect(screen.getByText(/Copies an attorney already downloaded or saved\./)).toBeInTheDocument();
     expect(screen.getByText(/fingerprints \(hashes\)/)).toBeInTheDocument();
+    // not a crypto-shred: an earlier backup still opens with her passphrase, and the page says so
+    expect(screen.getByText(/Any backup of our server made before you delete\./)).toBeInTheDocument();
+    expect(screen.queryByText(/they can’t be opened/)).not.toBeInTheDocument();
     expect(within(screen.getByTestId('delete-export')).getByRole('button', { name: 'Download my data' })).toBeInTheDocument();
 
     const button = screen.getByRole('button', { name: 'Delete everything now' });
@@ -65,20 +70,35 @@ describe('Delete everything', () => {
     expect(button).toBeDisabled();
     expect(deleteCalls(fetchImpl)).toHaveLength(0);
     await user.type(screen.getByLabelText(/To confirm, type DELETE/), 'e');
+    // the typed word is not enough: her passphrase too
+    expect(button).toBeDisabled();
+    await user.type(screen.getByLabelText(/type your passphrase/), PASS);
     expect(button).toBeEnabled();
     await user.click(button);
 
     expect(await screen.findByText('Public home — deleted', {}, { timeout: 15_000 })).toBeInTheDocument();
     expect(deleteCalls(fetchImpl)).toHaveLength(1);
+    expect(JSON.parse(String(deleteCalls(fetchImpl)[0][1]!.body))).toHaveProperty('authKey');
     expect(screen.getByTestId('state')).toHaveTextContent('out');
     expect(current!.session).toBeNull();
+  }, 60_000);
+
+  it('a wrong passphrase deletes nothing and says so', async () => {
+    const { user, fetchImpl } = await setup();
+    await user.type(screen.getByLabelText(/To confirm, type DELETE/), 'DELETE');
+    await user.type(screen.getByLabelText(/type your passphrase/), 'not-my-passphrase');
+    await user.click(screen.getByRole('button', { name: 'Delete everything now' }));
+    expect(await screen.findByRole('alert', {}, { timeout: 15_000 })).toHaveTextContent('That passphrase isn’t right. Nothing was deleted.');
+    expect(deleteCalls(fetchImpl)).toHaveLength(0); // checked on her device first
+    expect(screen.getByTestId('state')).toHaveTextContent('in:wren-12');
   }, 60_000);
 
   it('if deleting fails, nothing changes and she can try again', async () => {
     const { user } = await setup({ deleteFails: true });
     await user.type(screen.getByLabelText(/To confirm, type DELETE/), 'DELETE');
+    await user.type(screen.getByLabelText(/type your passphrase/), PASS);
     await user.click(screen.getByRole('button', { name: 'Delete everything now' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Nothing was deleted/);
+    expect(await screen.findByRole('alert', {}, { timeout: 15_000 })).toHaveTextContent(/Nothing was deleted/);
     expect(screen.getByTestId('state')).toHaveTextContent('in:wren-12');
     expect(screen.getByRole('button', { name: 'Delete everything now' })).toBeEnabled();
   }, 60_000);

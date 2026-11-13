@@ -403,7 +403,7 @@ describe('recovery code', () => {
     const { app, db } = makeApp();
     const u = await registerUser(app, 'wren.ten');
     const { code } = await setUpRecovery(app, u);
-    expect((await request(app).post('/api/account/delete').set(u.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(u.auth).send({ authKey: u.authKey })).status).toBe(200);
     expect(db.prepare('SELECT 1 FROM users WHERE username = ?').get('wren.ten')).toBeUndefined();
     expect((await recover(app, 'wren.ten', code, 'whatever words')).start.status).toBe(401);
   });
