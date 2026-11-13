@@ -88,7 +88,7 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 ### audit_events
 | Column | What / why | Retention |
 |---|---|---|
-| user_id, action, detail, at | her own activity trail shown to her ("an attorney opened your file at …"); no IP or device | account |
+| user_id, action, detail, at | her own activity trail shown to her ("an attorney opened your file at …"); no IP or device. Failed sign-ins and wrong recovery codes are capped at 10 rows each per UTC day | account |
 
 ### Sealed matching
 | Table | What / why | Retention |

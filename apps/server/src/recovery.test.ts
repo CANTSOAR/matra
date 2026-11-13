@@ -17,7 +17,7 @@ import {
   wrapAccountSecret,
 } from '@matra/crypto';
 import type { Envelope, PublicUser } from '@matra/shared';
-import { getDb, RECOVERY_FAILED_AUDIT_CAP } from './app.js';
+import { AUDIT_LIST_LIMIT, getDb, LOGIN_FAILED_AUDIT_CAP, RECOVERY_FAILED_AUDIT_CAP } from './app.js';
 import { hashAuthKey } from './auth.js';
 import { sha256Hex } from './ledger.js';
 import { createRecord, makeApp, registerUser, TEST_ITERATIONS, type TestUser } from './test-helpers.js';
@@ -397,6 +397,47 @@ describe('recovery code', () => {
     db.prepare(`UPDATE audit_events SET at = '2000-01-01T00:00:00.000Z' WHERE user_id = ? AND action = 'recovery.failed'`).run(u.user.id);
     expect((await request(app).post('/api/auth/recover/start').send({ username: 'wren.flood', recoveryAuthKey: wrongKey })).status).toBe(401);
     expect(count()).toBe(RECOVERY_FAILED_AUDIT_CAP + 1);
+  });
+
+  it('wrong passphrases write at most LOGIN_FAILED_AUDIT_CAP activity rows per day', async () => {
+    const { app, db } = makeApp();
+    const u = await registerUser(app, 'wren.knock');
+    const wrong = await registerUser(app, 'someone.else');
+    const count = () =>
+      (db.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'auth.login_failed'`).get(u.user.id) as { n: number }).n;
+    const now = new Date().toISOString();
+    for (let i = 0; i < LOGIN_FAILED_AUDIT_CAP - 1; i++)
+      db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)').run(`l${i}`, u.user.id, 'auth.login_failed', 'x', now);
+    for (let i = 0; i < 3; i++)
+      expect((await request(app).post('/api/auth/login').send({ username: 'wren.knock', authKey: wrong.authKey })).status).toBe(401);
+    expect(count()).toBe(LOGIN_FAILED_AUDIT_CAP);
+    db.prepare(`UPDATE audit_events SET at = '2000-01-01T00:00:00.000Z' WHERE user_id = ? AND action = 'auth.login_failed'`).run(u.user.id);
+    expect((await request(app).post('/api/auth/login').send({ username: 'wren.knock', authKey: wrong.authKey })).status).toBe(401);
+    expect(count()).toBe(LOGIN_FAILED_AUDIT_CAP + 1);
+  });
+
+  it('her activity always includes recovery-code events, however many newer rows there are', async () => {
+    const { app, db } = makeApp();
+    const u = await registerUser(app, 'wren.buried');
+    const { code } = await setUpRecovery(app, u);
+    const r = await recover(app, 'wren.buried', code, 'brand new passphrase words');
+    expect(r.finish?.status).toBe(200);
+    // push the recovery rows back in time, then bury them under more than a page of newer rows
+    db.prepare(`UPDATE audit_events SET at = '2001-01-01T00:00:00.000Z' WHERE user_id = ? AND (action LIKE 'recovery.%' OR action = 'auth.recovered')`).run(u.user.id);
+    const ins = db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)');
+    const now = new Date().toISOString();
+    db.transaction(() => {
+      for (let i = 0; i < AUDIT_LIST_LIMIT + 50; i++) ins.run(`n${i}`, u.user.id, 'record.created', `ledger #${i}`, now);
+    })();
+    const auth = { Authorization: `Bearer ${r.finish!.body.token}` }; // the reset signed out her old session
+    const events = (await request(app).get('/api/audit').set(auth)).body.events as Array<{ action: string; at: string }>;
+    const actions = events.map((e) => e.action);
+    expect(actions).toContain('recovery.used');
+    expect(actions).toContain('recovery.set_up');
+    expect(actions).toContain('auth.recovered');
+    expect(actions.filter((a) => a === 'record.created').length).toBeLessThanOrEqual(AUDIT_LIST_LIMIT);
+    // still newest first, with the older security rows at the end
+    expect(events[events.length - 1]!.at).toBe('2001-01-01T00:00:00.000Z');
   });
 
   it('deleting the account removes the recovery columns with the user row', async () => {

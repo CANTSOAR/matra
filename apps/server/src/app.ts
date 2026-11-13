@@ -473,6 +473,15 @@ export const HOUSEKEEPING_INTERVAL_MS = 10 * 60_000;
 export const RESET_TOKEN_TTL_MS = 10 * 60_000;
 /** At most this many 'recovery.failed' rows per account per UTC day, so wrong codes can't flood her activity list. */
 export const RECOVERY_FAILED_AUDIT_CAP = 10;
+/** Same for 'auth.login_failed': wrong passphrases from anyone who knows her alias can't flood her activity list. */
+export const LOGIN_FAILED_AUDIT_CAP = 10;
+/** Newest activity rows GET /api/audit returns. Security events (SECURITY_AUDIT_SQL) come back on top, however old. */
+export const AUDIT_LIST_LIMIT = 1000;
+/**
+ * Activity she must always be able to see, even under a flood of other rows: anything about her recovery code, and a
+ * passphrase reset with it (W20). Each is capped or rate-limited where it is written.
+ */
+const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action = 'auth.recovered')`;
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
@@ -597,6 +606,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     ),
     recoveryFailedSince: db.prepare(
       `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'recovery.failed' AND at >= ?`,
+    ),
+    loginFailedSince: db.prepare(
+      `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'auth.login_failed' AND at >= ?`,
     ),
     insertAudit: db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)'),
     recordById: db.prepare('SELECT * FROM records WHERE id = ?'),
@@ -727,7 +739,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     }
     if (!(await verifyAuthKey(body.authKey, u.auth_salt, u.auth_hash))) {
-      audit(u.id, 'auth.login_failed', 'A sign-in attempt with an incorrect passphrase');
+      // capped per UTC day, like recovery.failed, so wrong passphrases can't push everything else off her list
+      const today = new Date().toISOString().slice(0, 10);
+      const { n } = q.loginFailedSince.get(u.id, today) as { n: number };
+      if (n < LOGIN_FAILED_AUDIT_CAP) audit(u.id, 'auth.login_failed', 'A sign-in attempt with an incorrect passphrase');
       throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     }
     const token = createSession(db, u.id);
@@ -2271,10 +2286,17 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   // ════════════ audit ════════════
+  // The newest AUDIT_LIST_LIMIT rows, plus every security event (recovery code, reset) even if it is older than those,
+  // so no flood of other rows can hide that her recovery code was used. Newest first.
+  const auditList = db.prepare(
+    `SELECT * FROM audit_events
+      WHERE user_id = ?
+        AND (rowid IN (SELECT rowid FROM audit_events WHERE user_id = ? ORDER BY at DESC, rowid DESC LIMIT ${AUDIT_LIST_LIMIT})
+             OR ${SECURITY_AUDIT_SQL})
+      ORDER BY at DESC, rowid DESC`,
+  );
   app.get('/api/audit', auth, (req, res) => {
-    const rows = db
-      .prepare('SELECT * FROM audit_events WHERE user_id = ? ORDER BY at DESC, rowid DESC LIMIT 1000')
-      .all(req.user!.id) as AuditRow[];
+    const rows = auditList.all(req.user!.id, req.user!.id) as AuditRow[];
     res.json({ events: rows.map(toAudit) });
   });
 
