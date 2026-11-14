@@ -1,10 +1,10 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { deriveRecoveryKeys, derivePassphraseKeys, generateRecoveryCode, legacyAccountSecret, wrapAccountSecret } from '@matra/crypto';
+import { DEFAULT_KDF_ITERATIONS, deriveRecoveryKeys, derivePassphraseKeys, generateRecoveryCode, legacyAccountSecret, wrapAccountSecret } from '@matra/crypto';
 import type { RegisterRequest } from '@matra/shared';
 import { fakeAuthFetch } from '../test/fakeServer';
 import { Harness, current } from '../test/sessionHarness';
-import { RecoveryMaybeFinishedError, type RecoveryReset } from './session';
+import { RecoveryMaybeFinishedError, checkKdfIterations, type RecoveryReset } from './session';
 
 describe('session', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -44,6 +44,33 @@ describe('session', () => {
     for (const spy of [setItem, local, sess, cookie]) expect(spy).not.toHaveBeenCalled();
     if (idb) expect(idb).not.toHaveBeenCalled();
   }, 60_000);
+});
+
+describe('PBKDF2 rounds from the server', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('accepts the default or more, and refuses fewer (or nonsense)', () => {
+    expect(checkKdfIterations(DEFAULT_KDF_ITERATIONS)).toBe(DEFAULT_KDF_ITERATIONS);
+    expect(checkKdfIterations(DEFAULT_KDF_ITERATIONS * 2)).toBe(DEFAULT_KDF_ITERATIONS * 2);
+    for (const n of [1000, DEFAULT_KDF_ITERATIONS - 1, 0, -1, 600000.5, Number.NaN, '600000', undefined, 1e12])
+      expect(() => checkKdfIterations(n)).toThrow(/weaker protection/);
+  });
+
+  it('a server that lowers the count gets no auth key: sign-in stops before anything is sent', async () => {
+    const base = fakeAuthFetch();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://x');
+      if (url.pathname === '/api/auth/prelogin')
+        return new Response(JSON.stringify({ kdfSalt: 'AAAAAAAAAAAAAAAAAAAAAA==', kdfIterations: 1000 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return base.fetchImpl(input, init);
+    });
+    render(<Harness fetchImpl={fetchImpl as unknown as typeof fetch} />);
+    await act(async () => {
+      await expect(current!.login('bluebird-42', 'acorn-maple-violin-otter-quartz')).rejects.toThrow(/weaker protection/);
+    });
+    expect(fetchImpl.mock.calls.some(([u]) => String(u).endsWith('/api/auth/login'))).toBe(false);
+    expect(screen.getByTestId('state')).toHaveTextContent('out');
+  });
 });
 
 describe('recovery reset (W20)', () => {

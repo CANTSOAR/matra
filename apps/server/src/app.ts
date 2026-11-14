@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
 import {
+  DEFAULT_KDF_ITERATIONS,
   generateOprfKey,
   groupKeyFromShares,
   fromBase64,
@@ -160,6 +161,12 @@ export interface CreateAppOptions {
    * and not production unless MATRA_DEMO_MODE=1).
    */
   inspector?: boolean;
+  /**
+   * Fewest PBKDF2 rounds a client may register (or reset) a passphrase with. Default: DEFAULT_KDF_ITERATIONS (600,000)
+   * in production; 1,000 elsewhere, so tests can register accounts quickly. Her client refuses fewer than
+   * DEFAULT_KDF_ITERATIONS from prelogin anyway (apps/web/src/lib/session.tsx checkKdfIterations).
+   */
+  minKdfIterations?: number;
 }
 
 /**
@@ -267,6 +274,8 @@ interface ShareRow {
   revoked_at: string | null;
   expires_at: string;
   ledger_entry_id: string;
+  /** only on her own share list: whether the attorney is verified right now (attorney_profiles.verified) */
+  attorney_verified?: number | null;
 }
 interface MatchEntryRow {
   id: string;
@@ -385,6 +394,7 @@ const toShare = (s: ShareRow): Share => ({
   expiresAt: s.expires_at,
   ...(s.revoked_at != null && { revokedAt: s.revoked_at }),
   ledgerEntryId: s.ledger_entry_id,
+  ...(s.attorney_verified != null && { attorneyVerified: s.attorney_verified === 1 }),
 });
 
 const DEFAULT_SHARE_DAYS = 90;
@@ -463,6 +473,15 @@ export const HOUSEKEEPING_INTERVAL_MS = 10 * 60_000;
 export const RESET_TOKEN_TTL_MS = 10 * 60_000;
 /** At most this many 'recovery.failed' rows per account per UTC day, so wrong codes can't flood her activity list. */
 export const RECOVERY_FAILED_AUDIT_CAP = 10;
+/** Same for 'auth.login_failed': wrong passphrases from anyone who knows her alias can't flood her activity list. */
+export const LOGIN_FAILED_AUDIT_CAP = 10;
+/** Newest activity rows GET /api/audit returns. Security events (SECURITY_AUDIT_SQL) come back on top, however old. */
+export const AUDIT_LIST_LIMIT = 1000;
+/**
+ * Activity she must always be able to see, even under a flood of other rows: anything about her recovery code, and a
+ * passphrase reset with it (W20). Each is capped or rate-limited where it is written.
+ */
+const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action = 'auth.recovered')`;
 
 export function createApp(opts: CreateAppOptions): express.Express {
   const db: DB = openDb(opts.dbPath);
@@ -588,6 +607,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     recoveryFailedSince: db.prepare(
       `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'recovery.failed' AND at >= ?`,
     ),
+    loginFailedSince: db.prepare(
+      `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'auth.login_failed' AND at >= ?`,
+    ),
     insertAudit: db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)'),
     recordById: db.prepare('SELECT * FROM records WHERE id = ?'),
     blobMetaById: db.prepare(
@@ -616,6 +638,21 @@ export function createApp(opts: CreateAppOptions): express.Express {
     return p ? `${p.display_name}${p.organization ? `, ${p.organization}` : ''} (${u?.username ?? 'attorney'})` : 'An attorney';
   };
 
+  /**
+   * Attorney routes that read shared files need a verified attorney, like verifiedCounselor for counselors. Unverifying
+   * an attorney (verify-attorney --revoke) pauses access to every share at once without revoking her consent: the
+   * survivor decides whether to revoke or keep it (attorney-verification.ts tells her).
+   */
+  const assertVerifiedAttorney = (userId: string) => {
+    const p = q.profileByUser.get(userId) as ProfileRow | undefined;
+    if (!p || p.verified !== 1)
+      throw new HttpError(403, 'attorney_not_verified', 'Your attorney account is not verified right now, so files shared with you are paused.');
+  };
+  const verifiedAttorney = (req: Request, _res: Response, next: NextFunction) => {
+    assertVerifiedAttorney(req.user!.id);
+    next();
+  };
+
   // ════════════ health ════════════
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
@@ -629,9 +666,16 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json(fakeKdfSalt(pepper, username));
   });
 
+  const minKdfIterations = opts.minKdfIterations ?? (process.env.NODE_ENV === 'production' ? DEFAULT_KDF_ITERATIONS : 1_000);
+  const assertKdfIterations = (n: number) => {
+    if (n < minKdfIterations)
+      throw new HttpError(400, 'invalid_request', `kdfIterations: must be at least ${minKdfIterations}`);
+  };
+
   app.post('/api/auth/register', async (req, res) => {
     rateLimit(req, 'register', req.body?.username);
     const body = parse(S.registerRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
     if (q.userByName.get(body.username))
       throw new HttpError(409, 'username_taken', 'That username is not available.');
     const { hash, salt } = await hashAuthKey(body.authKey);
@@ -695,7 +739,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     }
     if (!(await verifyAuthKey(body.authKey, u.auth_salt, u.auth_hash))) {
-      audit(u.id, 'auth.login_failed', 'A sign-in attempt with an incorrect passphrase');
+      // capped per UTC day, like recovery.failed, so wrong passphrases can't push everything else off her list
+      const today = new Date().toISOString().slice(0, 10);
+      const { n } = q.loginFailedSince.get(u.id, today) as { n: number };
+      if (n < LOGIN_FAILED_AUDIT_CAP) audit(u.id, 'auth.login_failed', 'A sign-in attempt with an incorrect passphrase');
       throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     }
     const token = createSession(db, u.id);
@@ -732,10 +779,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const recoveryLimiter = clients.limiter(10, 15 * 60_000); // per client: a wrong code is a typo, not a hobby
   app.locals.resetTokens = resetTokens;
 
-  /** Re-authenticate with the passphrase auth key before changing what can open her account. */
-  const reauth = async (u: UserRow, authKey: string) => {
+  /**
+   * Re-authenticate with the passphrase auth key before changing what can open her account (a recovery code) or
+   * deleting it. A session alone is not enough: a session can be left open on a shared device.
+   */
+  const reauth = async (u: UserRow, authKey: string, purpose: 'recovery' | 'delete' = 'recovery') => {
     if (!(await verifyAuthKey(authKey, u.auth_salt, u.auth_hash))) {
-      audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
+      if (purpose === 'delete') audit(u.id, 'auth.delete_reauth_failed', 'An attempt to delete the account with an incorrect passphrase');
+      else audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
       throw new HttpError(401, 'invalid_credentials', 'That passphrase is incorrect.');
     }
   };
@@ -806,6 +857,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.post('/api/auth/recover/finish', async (req, res) => {
     rateLimit(req, 'recover-finish', '');
     const body = parse(S.recoverFinishRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
     const key = sha256Hex(body.resetToken);
     const pending = resetTokens.get(key);
     resetTokens.delete(key); // single use, whatever happens next
@@ -940,6 +992,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const meta = q.blobMetaById.get(bid) as BlobRow | undefined;
     if (!meta) throw new HttpError(404, 'blob_not_found', 'File not found.');
     if (meta.owner_id !== me.id) {
+      if (me.role === 'attorney') assertVerifiedAttorney(me.id);
       const grant =
         me.role === 'attorney'
           ? (db
@@ -1090,12 +1143,22 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   app.get('/api/shares', auth, (req, res) => {
     const me = req.user!;
-    const col = me.role === 'attorney' ? 'attorney_id' : 'survivor_id';
-    const rows = db.prepare(`SELECT * FROM shares WHERE ${col} = ? ORDER BY created_at DESC, rowid DESC`).all(me.id) as ShareRow[];
+    if (me.role === 'attorney') {
+      assertVerifiedAttorney(me.id);
+      const rows = db.prepare('SELECT * FROM shares WHERE attorney_id = ? ORDER BY created_at DESC, rowid DESC').all(me.id) as ShareRow[];
+      return res.json({ shares: rows.map(toShare) });
+    }
+    // Her own list also says whether each attorney is verified right now: an unverified attorney's access is paused.
+    const rows = db
+      .prepare(
+        `SELECT s.*, p.verified AS attorney_verified FROM shares s LEFT JOIN attorney_profiles p ON p.user_id = s.attorney_id
+          WHERE s.survivor_id = ? ORDER BY s.created_at DESC, s.rowid DESC`,
+      )
+      .all(me.id) as ShareRow[];
     res.json({ shares: rows.map(toShare) });
   });
 
-  app.get('/api/shares/:id/bundle', auth, attorneyOnly, (req, res) => {
+  app.get('/api/shares/:id/bundle', auth, attorneyOnly, verifiedAttorney, (req, res) => {
     const me = req.user!;
     const s = q.shareById.get(parse(S.id, req.params.id)) as ShareRow | undefined;
     if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
@@ -2223,16 +2286,30 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   // ════════════ audit ════════════
+  // The newest AUDIT_LIST_LIMIT rows, plus every security event (recovery code, reset) even if it is older than those,
+  // so no flood of other rows can hide that her recovery code was used. Newest first.
+  const auditList = db.prepare(
+    `SELECT * FROM audit_events
+      WHERE user_id = ?
+        AND (rowid IN (SELECT rowid FROM audit_events WHERE user_id = ? ORDER BY at DESC, rowid DESC LIMIT ${AUDIT_LIST_LIMIT})
+             OR ${SECURITY_AUDIT_SQL})
+      ORDER BY at DESC, rowid DESC`,
+  );
   app.get('/api/audit', auth, (req, res) => {
-    const rows = db
-      .prepare('SELECT * FROM audit_events WHERE user_id = ? ORDER BY at DESC, rowid DESC LIMIT 1000')
-      .all(req.user!.id) as AuditRow[];
+    const rows = auditList.all(req.user!.id, req.user!.id) as AuditRow[];
     res.json({ events: rows.map(toAudit) });
   });
 
-  // ════════════ account crypto-shred ════════════
-  app.post('/api/account/delete', auth, (req, res) => {
+  // ════════════ account deletion ════════════
+  // Deletes her rows (ciphertext, wrapped keys, shares, matches, activity) from the live database. secure_delete is ON,
+  // so freed pages are overwritten, and a TRUNCATE checkpoint afterwards empties the WAL. It is not a crypto-shred:
+  // her keys are wrapped under her passphrase, so a backup or copy of the database made earlier stays decryptable by
+  // anyone who has that copy and her passphrase (docs/SECURITY_WHITEPAPER.md §2).
+  app.post('/api/account/delete', auth, async (req, res) => {
     const me = req.user!;
+    rateLimit(req, 'account-delete', me.username);
+    const body = parse(S.deleteAccountRequest, req.body ?? {});
+    await reauth(q.userById.get(me.id) as UserRow, body.authKey, 'delete');
     db.transaction(() => {
       const recordIds = (db.prepare('SELECT id FROM records WHERE owner_id = ?').all(me.id) as Array<{ id: string }>)
         .map((r) => r.id)
@@ -2278,6 +2355,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
       appendLedger(db, 'account.shredded', me.id, sha256Hex(JSON.stringify({ userId: me.id, recordIds, blobIds })));
     })();
+    // Move the deleted pages out of the WAL file now rather than at some later automatic checkpoint (same as phone tokens).
+    checkpoint();
     void syncMatcher(); // her entries leave the matcher; a counselor's departure changes its roster
     res.json({ ok: true });
   });

@@ -329,7 +329,7 @@ describe('review fixes: group cleanup (L3)', () => {
     await request(app).delete(`/api/matching/entries/${ea.entry.id}`).set(a.auth);
     expect(count('match_groups')).toBe(1); // b's entry remains
     expect(count('counselor_notes')).toBe(1); // the note about a's (deleted) entry is gone
-    expect((await request(app).post('/api/account/delete').set(b.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(b.auth).send({ authKey: b.authKey })).status).toBe(200);
     expect([count('match_groups'), count('counselor_notes'), count('match_entries')]).toEqual([0, 0, 0]);
   });
 });

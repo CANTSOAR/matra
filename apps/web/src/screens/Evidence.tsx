@@ -4,6 +4,7 @@ import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { IconFile, IconImage } from '../components/icons';
 import { KeyNotice } from '../components/KeyNotice';
+import { UnreadableNote } from '../components/UnreadableNote';
 import { emptyDraft } from '../integration/intakeAdapter';
 import { NOTICES } from '../lib/disclosures';
 import { friendlyError, useRequiredSession } from '../lib/session';
@@ -17,6 +18,7 @@ import {
   resumeFrom,
   sealPayload,
   shortHash,
+  UnreadableVaultError,
   uploadEvidence,
 } from '../lib/vault';
 
@@ -76,6 +78,8 @@ export function Evidence() {
       resumeDraft: resume.draft,
       resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.draftRecord?.payload.evidence),
       inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)),
+      /** saved versions that couldn't be opened: resumeDraft may be older than her newest draft */
+      unreadable: vault.unreadable,
     };
   }, [api, session.masterKey, getWorkingData]);
   const existing = useAsync(loadExisting, [loadExisting]);
@@ -108,6 +112,17 @@ export function Evidence() {
       // If she chose a file before her space finished opening, open it now: otherwise her story would be saved over
       // with an empty draft (and the next screen would start from the beginning).
       const ex = existingRef.current ?? (await loadExisting());
+      if (ex.unreadable > 0) {
+        // Some saved versions couldn't be opened, so any draft here may be older than her newest, even one My story
+        // resumed into memory from this same partial vault, and saving would put it on top. Keep the files' details in
+        // memory (My story folds them in) and save nothing to her draft, like retrySealedMatches in space/adapters.ts.
+        await setWorkingData({
+          draft: mem?.draft ?? null,
+          evidence: mergeEvidence(mem?.evidence, added),
+          ...(mem?.savedDraftRecordId && { savedDraftRecordId: mem.savedDraftRecordId }),
+        });
+        throw new UnreadableVaultError(ex.unreadable);
+      }
       const vaultDraft = ex.vaultDraft;
       const draft = mem?.draft ?? ex.resumeDraft ?? emptyDraft();
       const evidence = mergeEvidence(ex.resumeEvidence, mem?.evidence, added);
@@ -149,6 +164,7 @@ export function Evidence() {
       >
         Evidence
       </PageTitle>
+      <UnreadableNote count={existing.data?.unreadable} />
 
       <section className="card stack" aria-labelledby="add">
         <h2 id="add">Add something</h2>

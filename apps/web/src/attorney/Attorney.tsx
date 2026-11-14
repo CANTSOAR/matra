@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { checkAttorneyKey, decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@matra/crypto';
 import type { EvidenceItem, IntakeRecord, LedgerEntry, LedgerProofResponse, ShareBundle } from '@matra/shared';
-import { envelopeHash } from '../api/client';
+import { ApiError, envelopeHash } from '../api/client';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { BriefPreview, downloadPdf, generateIncidentSummary } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
@@ -16,7 +16,19 @@ const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).joi
 
 export function AttorneyCases() {
   const { api, session, refreshProfile } = useRequiredSession();
-  const shares = useAsync(() => api.listShares().then((r) => r.shares), [api]);
+  // null: the server refuses an unverified attorney (403 attorney_not_verified); shares to her are paused, not gone
+  const shares = useAsync(
+    () =>
+      api
+        .listShares()
+        .then((r) => r.shares)
+        .catch((e) => {
+          if (e instanceof ApiError && e.code === 'attorney_not_verified') return null;
+          throw e;
+        }),
+    [api],
+  );
+  const paused = shares.data === null;
   const fp = useAsync(() => publicKeyFingerprint(session.user.publicKey), [session.user.publicKey]);
   // Is this key in the org-signed directory survivors' apps check against (W3)? Unpinned (development) builds say nothing.
   const listing = useAsync(
@@ -92,6 +104,15 @@ export function AttorneyCases() {
         <p className="small muted">Each file was shared with you by a survivor, with their consent. Every time you open one, they can see it.</p>
         {shares.loading && <Loading />}
         {shares.error && <ErrorNote>{shares.error}</ErrorNote>}
+        {/* Any unverified account: a new one with no files yet, or one Matra unverified (its sessions end, so after
+            signing back in its profile says unverified too). */}
+        {paused && (
+          <p className="muted" data-testid="attorney-paused">
+            Your account isn’t verified by Matra right now, so you can’t open shared files. If clients shared files with
+            you before, each of them decides whether to end or keep your access. Files they keep shared will show here
+            again if Matra verifies your account.
+          </p>
+        )}
         {shares.data && active.length === 0 && <p className="muted">No files have been shared with you yet.</p>}
         <ul className="list">
           {active.map((s) => (

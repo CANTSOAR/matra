@@ -65,5 +65,37 @@ describe('buildDataExport', () => {
     expect(Array.from(files.get('evidence/001-wrists.jpg')!)).toEqual(Array.from(photo));
     const manifest = JSON.parse(new TextDecoder().decode(files.get('evidence/manifest.json')));
     expect(manifest.files[0]).toMatchObject({ fileName: 'wrists.jpg', sha256: photoSha, sha256Matches: true });
+    expect(manifest.problems).toEqual([]);
+    expect(records.unreadableRecords).toBe(0);
+  });
+
+  it('says in the manifest and the result when saved versions could not be opened (never a silently partial copy)', async () => {
+    const { masterKey } = await deriveKeys('export test passphrase', newKdfSalt(), 1000);
+    const recKey = await generateContentKey();
+    const envelope = await encryptJSON({ kind: 'final', record: sampleRecord, savedAt: '2026-08-19T00:00:00Z' }, recKey);
+    const rec: VaultRecord = {
+      id: 'r'.repeat(32), ownerId: 'u', createdAt: '2026-08-19T00:00:00Z', contentHash: await envelopeHash(envelope),
+      ledgerEntryId: 'l1', envelope, ownerWrappedKey: await wrapKeyWithMaster(recKey, masterKey),
+    };
+    const lost = { ...rec, id: 's'.repeat(32), createdAt: '2026-08-20T00:00:00Z' };
+    const api = {
+      listRecords: async () => ({ records: [rec, lost] }),
+      getRecord: async (id: string) => {
+        if (id === lost.id) throw new Error('network');
+        return { record: rec };
+      },
+      getLedgerEntry: async () => { throw new Error('offline'); },
+      listBlobs: async () => ({ blobs: [] }),
+      listEscrow: async () => ({ entries: [] }),
+      listShares: async () => ({ shares: [] }),
+      listAudit: async () => ({ events: [] }),
+    } as unknown as ApiClient;
+
+    const out = await buildDataExport(api, masterKey, 'bluebird', new Date('2026-10-07T12:00:00Z'));
+    expect(out).toMatchObject({ recordCount: 1, unreadableRecords: 1, problems: [] });
+    const files = unzip(out.zip);
+    const manifest = JSON.parse(new TextDecoder().decode(files.get('evidence/manifest.json')));
+    expect(manifest.problems).toEqual(['1 saved version of your space could not be opened and is not in records.json']);
+    expect(JSON.parse(new TextDecoder().decode(files.get('records.json'))).unreadableRecords).toBe(1);
   });
 });

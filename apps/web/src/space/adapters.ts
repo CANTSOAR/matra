@@ -209,7 +209,11 @@ export async function lodgeMatches(
  * undoes the withdrawal of — an identifier. Returns how many identifiers were newly sealed.
  */
 export async function retrySealedMatches(api: ApiClient, masterKey: CryptoKey): Promise<number> {
-  const final = vault.latestOf(await vault.loadVault(api, masterKey, { withLedger: false }), 'final');
+  const opened = await vault.loadVault(api, masterKey, { withLedger: false });
+  // Some saved versions couldn't be opened: the "latest" sealed one here may be older than hers, and re-sealing from it
+  // would save that older version as the newest. Do nothing; the caller shows that it couldn't be set up right now.
+  if (opened.unreadable > 0) throw new vault.UnreadableVaultError(opened.unreadable);
+  const final = vault.latestOf(opened, 'final');
   const record = final?.payload.record;
   const before = final?.payload.escrowedHashes ?? [];
   if (!final || !record || !(await vault.hasUnsealedMatches(record, before))) return 0;

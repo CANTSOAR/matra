@@ -117,6 +117,9 @@ export const setUpRecoveryRequest = z.object({
 
 export const turnOffRecoveryRequest = z.object({ authKey: base64(128) });
 
+/** Deleting her account needs her passphrase again (its auth key), not only a session. */
+export const deleteAccountRequest = z.object({ authKey: base64(128) });
+
 export const recoverStartRequest = z.object({ username, recoveryAuthKey: base64(128) });
 
 export const recoverFinishRequest = z.object({

@@ -1,6 +1,7 @@
 # Matra demo / production image.
 #   docker build --build-arg MATRA_DEMO_MODE=1 -t matra .      (a fictional-data demo; a non-demo build must pin the
-#                                                              matcher: MATRA_ATTESTATION_PLATFORM_PUBKEY + _MEASUREMENT)
+#                                                              matcher: MATRA_ATTESTATION_PLATFORM_PUBKEY + _MEASUREMENT,
+#                                                              the org key and the OPRF key set, below)
 #   docker run -p 8080:8080 -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 \
 #     -e MATRA_OPRF_SHARE_1=… -e MATRA_OPRF_SHARE_2=… -e MATRA_OPRF_SHARE_3=… \
 #     -e MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) -e MATRA_DEMO_MODE=1 -e MATRA_SMS_PROVIDER=mock \
@@ -10,7 +11,7 @@
 # MATRA_SMS_PROVIDER=twilio and TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_VERIFY_SERVICE_SID (docs/DEPLOY.md).
 # The shares come from `npm run -w @matra/server oprf-ceremony` (threshold OPRF, default 2-of-3). The server refuses to
 # start in production without every share (env, or *_FILE paths OUTSIDE the data volume) or the remote-holder config.
-# Build-time pins for the web client (recommended for any non-demo build; values printed by the ceremony):
+# Build-time pins for the web client (required for any non-demo build, which fails without them; values printed by the ceremony):
 #   docker build --build-arg MATRA_OPRF_THRESHOLD=2 --build-arg MATRA_OPRF_GROUP_PUBKEY=… \
 #     --build-arg MATRA_OPRF_SHARE_PUBKEYS=pk1,pk2,pk3 --build-arg MATRA_COUNSELOR_ROSTER_PUBKEY=… -t matra .
 # See docs/DEPLOY.md. Never put real survivor data on an instance before the pre-launch checklist is done.

@@ -29,7 +29,7 @@ import {
 import type { AttorneyProfile, AuthResponse, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
-import { getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
+import { UnreadableVaultError, getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 import { mirror } from '../dev/mirror';
 
@@ -135,6 +135,27 @@ interface SessionCtx {
   turnOffRecovery(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
   /** Signed out: alias + recovery code → a reset she finishes by choosing a new passphrase. */
   beginRecovery(username: string, code: string, onProgress?: (p: Progress) => void): Promise<RecoveryReset>;
+  /**
+   * Signed in: check her passphrase on this device, then ask the server to delete her account (it checks the
+   * passphrase again). Does not sign her out here: the caller leaves the signed-in screens first, then locks.
+   */
+  deleteAccount(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
+}
+
+/** The most PBKDF2 rounds she will run (the server's own limit); more would only freeze her browser. */
+const MAX_KDF_ITERATIONS = 10_000_000;
+
+/**
+ * The server tells her client how many PBKDF2 rounds to run on her passphrase (prelogin). A lower count would make the
+ * auth key her client then sends, and the keys it unlocks, cheaper to guess offline, so a malicious or broken server
+ * could weaken her passphrase. Refuse anything below DEFAULT_KDF_ITERATIONS before deriving or sending anything.
+ */
+export function checkKdfIterations(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < DEFAULT_KDF_ITERATIONS || n > MAX_KDF_ITERATIONS)
+    throw new SessionError(
+      'This app stopped before using your passphrase: the server asked for weaker protection than it should. Nothing was sent. Please try again later.',
+    );
+  return n;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -296,7 +317,7 @@ export function SessionProvider({
       onProgress?.('contacting');
       const pre = await api.prelogin(name);
       onProgress?.('deriving');
-      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, checkKdfIterations(pre.kdfIterations));
       onProgress?.('contacting');
       let res;
       try {
@@ -324,10 +345,10 @@ export function SessionProvider({
 
   /** Her account secret from her passphrase, checked on this device. The caller wipes it. */
   const accountSecretFromPassphrase = useCallback(
-    async (s: Session, passphrase: string) => {
+    async (s: Session, passphrase: string, wrongText = 'That passphrase isn’t right. Check for typos and try again.') => {
       const pre = await api.prelogin(s.user.username);
-      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
-      const wrong = () => new SessionError('That passphrase isn’t right. Check for typos and try again.');
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, checkKdfIterations(pre.kdfIterations));
+      const wrong = () => new SessionError(wrongText);
       let as: Uint8Array;
       try {
         as = s.user.keyVersion === 2 && s.user.wrappedAccountKey
@@ -403,6 +424,25 @@ export function SessionProvider({
         const next = { ...s, user };
         sessionRef.current = next;
         setSession(next);
+      }
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const deleteAccount = useCallback<SessionCtx['deleteAccount']>(
+    async (passphrase, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      onProgress?.('deriving');
+      // same words whether her device or the server finds the passphrase wrong
+      const { as, keys } = await accountSecretFromPassphrase(s, passphrase, 'That passphrase isn’t right. Nothing was deleted.');
+      as.fill(0);
+      onProgress?.('contacting');
+      try {
+        await api.deleteAccount({ authKey: keys.authKey });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) throw new SessionError('That passphrase isn’t right. Nothing was deleted.');
+        throw e;
       }
     },
     [api, accountSecretFromPassphrase],
@@ -581,6 +621,7 @@ export function SessionProvider({
       prepareRecoveryCode,
       turnOffRecovery,
       beginRecovery,
+      deleteAccount,
     }),
     [
       session,
@@ -600,6 +641,7 @@ export function SessionProvider({
       prepareRecoveryCode,
       turnOffRecovery,
       beginRecovery,
+      deleteAccount,
     ],
   );
 
@@ -620,7 +662,7 @@ export function useRequiredSession(): SessionCtx & { session: Session } {
 }
 
 export function friendlyError(e: unknown): string {
-  if (e instanceof SessionError) return e.message;
+  if (e instanceof SessionError || e instanceof UnreadableVaultError) return e.message;
   if (e instanceof ApiError) {
     // 409 from register is the alias; other conflicts (e.g. phone_limit_reached) carry their own message
     if (e.status === 409 && (!e.code || e.code === 'username_taken')) return 'Someone already uses that alias. Please try another one.';

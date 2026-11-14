@@ -35,10 +35,14 @@ export function fakeAuthFetch({ deleteFails = false }: { deleteFails?: boolean }
       }
       case 'POST /api/auth/logout':
         return json(200, { ok: true });
-      case 'POST /api/account/delete':
+      case 'POST /api/account/delete': {
         if (deleteFails) return json(500, { error: 'Something went wrong' });
+        // like the server: her passphrase's auth key again, not only a session
+        const u = users.values().next().value;
+        if (!u || body?.authKey !== u.authKey) return json(401, { error: 'That passphrase is incorrect.', code: 'invalid_credentials' });
         users.clear();
         return json(200, { ok: true });
+      }
       case 'GET /api/me':
         return json(200, { user: toUser(users.values().next().value!) });
       default:

@@ -12,6 +12,8 @@ export interface DataExport {
   fileName: string;
   recordCount: number;
   evidenceCount: number;
+  /** Saved versions of her space that could not be opened, so are missing from records.json (manifest problems too). */
+  unreadableRecords: number;
   /** Evidence files that could not be decrypted or failed their hash check (listed in the manifest too). */
   problems: string[];
 }
@@ -107,11 +109,16 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     escrow.entries.map(async (e) => ({ label: await escrowLabel(e.labelEnvelope, masterKey), sealedAt: e.createdAt, ledgerEntryId: e.ledgerEntryId })),
   );
 
+  // Saved versions that couldn't be opened are not in records.json: say so in the manifest's problems list too, so this
+  // copy is never taken as complete.
+  const unreadableProblem = vault.unreadable > 0
+    ? [`${vault.unreadable} saved version${vault.unreadable === 1 ? '' : 's'} of your space could not be opened and ${vault.unreadable === 1 ? 'is' : 'are'} not in records.json`]
+    : [];
   const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n';
   const files: ZipEntry[] = [
     { name: 'README.txt', data: README(alias, at), date: now },
-    { name: 'records.json', data: json({ exportedAt: at, alias, records }), date: now },
-    { name: 'evidence/manifest.json', data: json({ exportedAt: at, files: manifest, problems }), date: now },
+    { name: 'records.json', data: json({ exportedAt: at, alias, records, unreadableRecords: vault.unreadable }), date: now },
+    { name: 'evidence/manifest.json', data: json({ exportedAt: at, files: manifest, problems: [...unreadableProblem, ...problems] }), date: now },
     ...entries,
     { name: 'escrow.json', data: json({ exportedAt: at, sealed: escrowLabels }), date: now },
     { name: 'shares.json', data: json({ exportedAt: at, shares: shares.shares }), date: now },
@@ -122,6 +129,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     fileName: `matra-my-data-${at.slice(0, 10)}.zip`,
     recordCount: records.filter((r) => r.kind !== 'your preferences').length,
     evidenceCount: entries.length,
+    unreadableRecords: vault.unreadable,
     problems,
   };
 }

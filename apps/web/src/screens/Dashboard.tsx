@@ -4,6 +4,7 @@ import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/sha
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { escrowLabel, finals, hasUnsealedMatches, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { UnreadableNote } from '../components/UnreadableNote';
 import { PhoneStepCard } from '../components/PhoneStepCard';
 import { ExportCard } from '../components/ExportCard';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
@@ -15,6 +16,7 @@ const AUDIT_TEXT: Record<string, string> = {
   'auth.logout': 'Signed out',
   'auth.login_failed': 'Someone tried to sign in with the wrong passphrase',
   'auth.reauth_failed': 'Someone tried to change your recovery code with the wrong passphrase',
+  'auth.delete_reauth_failed': 'Someone tried to delete your space with the wrong passphrase',
   'auth.recovered': 'Your passphrase was reset with your recovery code',
   'recovery.set_up': 'You set up a recovery code',
   'recovery.replaced': 'You made a new recovery code (the old one stopped working)',
@@ -31,6 +33,9 @@ const AUDIT_TEXT: Record<string, string> = {
   'share.revoked': 'You took back an attorney’s access',
   'attorney.opened_share': 'Attorney opened your file',
   'attorney.downloaded_evidence': 'Attorney downloaded an evidence file',
+  // verify-attorney (server attorney-verification.ts): her share is paused, not revoked; she decides
+  'attorney.unverified': 'An attorney you shared with is no longer verified by Matra. Their access is paused: you can revoke it or keep it',
+  'attorney.reverified': 'An attorney you shared with is verified by Matra again, so their access is back on',
   // staged release (her side)
   'report.released': 'You shared your report with a legal options counselor',
   'report.declined': 'You decided not to share your report',
@@ -324,6 +329,7 @@ export function Dashboard() {
         {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
         {!vault.loading && !vault.error && (
           <>
+            <UnreadableNote count={vault.data?.unreadable} />
             {hasDraft && (
               <p className="small">
                 {working.data ? (
@@ -603,6 +609,8 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
   const [error, setError] = useState<string | null>(null);
   const name = attorney ? attorney.displayName : 'Attorney';
   const expired = share.status === 'active' && Date.parse(share.expiresAt) <= Date.now();
+  // the attorney is not verified right now: the server refuses their access until they are (her share stays)
+  const paused = share.status === 'active' && !expired && share.attorneyVerified === false;
   // keep the length she chose when she shared (from her consent text), not always 90 days
   const days = shareLengthDays(share);
   async function renew() {
@@ -642,8 +650,14 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
             {share.status === 'active' && <> · {expired ? 'ended' : 'until'} {formatDate(share.expiresAt)}</>}
           </span>
         </span>
-        {share.status === 'active' ? expired ? <span className="badge neutral">Expired</span> : <span className="badge ok">Has access</span> : <span className="badge neutral">Revoked {formatDate(share.revokedAt)}</span>}
+        {share.status === 'active' ? expired ? <span className="badge neutral">Expired</span> : paused ? <span className="badge neutral">Paused</span> : <span className="badge ok">Has access</span> : <span className="badge neutral">Revoked {formatDate(share.revokedAt)}</span>}
       </div>
+      {paused && (
+        <p className="small muted" style={{ margin: 0 }} data-testid="share-paused">
+          This attorney is not verified by Matra right now, so they can’t open your file. You can revoke their access, or
+          keep it in case they are verified again.
+        </p>
+      )}
       {share.status === 'active' &&
         (confirming ? (
           <div className="card warn stack">

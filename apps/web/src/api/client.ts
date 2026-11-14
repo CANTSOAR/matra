@@ -49,6 +49,7 @@ import type {
   RegisterRequest,
   SetUpRecoveryRequest,
   TurnOffRecoveryRequest,
+  DeleteAccountRequest,
   Share,
   ShareBundle,
   VaultRecord,
@@ -329,7 +330,7 @@ export class ApiClient {
   listAudit() {
     return this.json<{ events: AuditEvent[] }>('GET', '/api/audit');
   }
-  deleteAccount() {
-    return this.json<{ ok: true }>('POST', '/api/account/delete');
+  deleteAccount(req: DeleteAccountRequest) {
+    return this.json<{ ok: true }>('POST', '/api/account/delete', req);
   }
 }

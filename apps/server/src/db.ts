@@ -10,13 +10,14 @@
  *             `supersedes`. DELETE RAISE(ABORT)s *unless* the owner is listed
  *             in `shred_authorizations`.
  *
- * Crypto-shredding (POST /api/account/delete) is the one legitimate way to
+ * Account deletion (POST /api/account/delete; not a crypto-shred: earlier
+ * backups still open with her passphrase) is the one legitimate way to
  * remove records. It runs in a single transaction that
  *   1. inserts the owner's id into `shred_authorizations`,
  *   2. deletes that owner's rows (the records trigger now allows it),
  *   3. deletes the authorization row again,
  * so the authorization never survives the transaction and can only ever
- * cover the account being shredded. (A TEMP table cannot be used here
+ * cover the account being deleted. (A TEMP table cannot be used here
  * because SQLite forbids triggers in `main` from referencing `temp` objects.)
  * Ledger rows are never deleted: they hold only ids, hashes and timestamps.
  *
@@ -164,13 +165,13 @@ const MIGRATIONS: string[] = [
     OR NEW.prev_hash IS NOT COALESCE((SELECT entry_hash FROM ledger ORDER BY seq DESC LIMIT 1), '${GENESIS_HASH}')
   BEGIN SELECT RAISE(ABORT, 'ledger insert does not extend the hash chain'); END;
 
-  -- records: immutable; deletion only during an authorized crypto-shred
+  -- records: immutable; deletion only during an authorized account deletion
   CREATE TRIGGER records_no_update BEFORE UPDATE ON records
   BEGIN SELECT RAISE(ABORT, 'records are immutable (WORM); create a new version with supersedes'); END;
 
   CREATE TRIGGER records_guarded_delete BEFORE DELETE ON records
   WHEN NOT EXISTS (SELECT 1 FROM shred_authorizations WHERE owner_id = OLD.owner_id)
-  BEGIN SELECT RAISE(ABORT, 'records are immutable (WORM); deletion only via account crypto-shred'); END;
+  BEGIN SELECT RAISE(ABORT, 'records are immutable (WORM); deletion only via account deletion'); END;
   `,
   // ── v2: share expiry. Existing rows get created_at + 90 days. ──────────
   `
@@ -453,7 +454,7 @@ export function openDb(dbPath: string): DB {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  db.pragma('secure_delete = ON'); // overwrite freed pages so shredded ciphertext doesn't linger on disk
+  db.pragma('secure_delete = ON'); // overwrite freed pages so deleted ciphertext doesn't linger in the live file
   migrate(db);
   return db;
 }

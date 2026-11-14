@@ -36,8 +36,10 @@ function ortRuntimeFromModels(): Plugin {
  *   MATRA_OPRF_THRESHOLD          t (default 2 when the keys below are set)
  *   MATRA_OPRF_GROUP_PUBKEY       base64 group public key k·G of the threshold OPRF
  *   MATRA_OPRF_SHARE_PUBKEYS      base64 share public keys of holders 1..m, comma-separated, in index order
- *   MATRA_COUNSELOR_ROSTER_PUBKEY base64 Ed25519 key of the org that signs the counselor roster
- * Unset (development): nothing is pinned and the client logs a warning.
+ *   MATRA_COUNSELOR_ROSTER_PUBKEY base64 Ed25519 key of the org that signs the counselor roster and the attorney
+ *                                 directory (W3)
+ * Unset (development): nothing is pinned and the client logs a warning. A production build that is not a demo
+ * (MATRA_DEMO_MODE=1) fails without them: see assertProductionPins below.
  */
 if (process.env.MATRA_OPRF_PUBKEY_A || process.env.MATRA_OPRF_PUBKEY_B)
   throw new Error('MATRA_OPRF_PUBKEY_A/B were replaced by MATRA_OPRF_GROUP_PUBKEY + MATRA_OPRF_SHARE_PUBKEYS (threshold OPRF; see docs/DEPLOY.md).');
@@ -93,11 +95,41 @@ if (attestationPins.measurement && !/^[0-9a-f]{64}$/.test(attestationPins.measur
   throw new Error('MATRA_MATCHER_MEASUREMENT must be 64 hex characters (npm run -w @matra/matcher measure)');
 const demoBuild = process.env.MATRA_DEMO_MODE === '1';
 
-/** Throws for a production build of the app (not the voice-only test page) with no matcher pins, unless a demo build. */
-export function assertMatcherPinned(o: { command: string; mode: string; pinned: boolean; demo: boolean; harnessOnly: boolean }) {
-  if (o.command === 'build' && o.mode === 'production' && !o.harnessOnly && !o.pinned && !o.demo)
+/**
+ * Sealed matching is part of every build of the web app today (there is no build flag that leaves it out). If one is
+ * ever added, pass `matching: false` for such a build and the OPRF pins stop being required.
+ */
+const MATCHING_IN_BUILD = true;
+
+/**
+ * Throws for a production build of the app (not the voice-only test page) that is missing a pin, unless it is a
+ * fictional-data demo build (MATRA_DEMO_MODE=1). Development servers, `vite build --mode development` and the e2e
+ * builds (which set MATRA_DEMO_MODE=1) are not affected.
+ *   - matcher pins: an unpinned client would seal every survivor's states to whatever key the app server hands it (W18)
+ *   - roster / directory key: an unpinned client trusts the app server's attorney keys, so the operator could swap in
+ *     its own key and receive shared records (W3); the share screen also refuses unpinned keys in such a build
+ *   - OPRF pins (when the build includes sealed matching): an unpinned client accepts whatever key set the server sends,
+ *     so the operator could evaluate identifiers under keys it holds (W2, W14). Part-set pins already fail above.
+ */
+export function assertProductionPins(o: {
+  command: string;
+  mode: string;
+  demo: boolean;
+  harnessOnly: boolean;
+  matcherPinned: boolean;
+  rosterPinned: boolean;
+  oprfPinned: boolean;
+  matching: boolean;
+}) {
+  if (o.command !== 'build' || o.mode !== 'production' || o.harnessOnly || o.demo) return;
+  const missing = [
+    ...(o.matcherPinned ? [] : ['the matcher pins MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT']),
+    ...(o.rosterPinned ? [] : ['the organization key MATRA_COUNSELOR_ROSTER_PUBKEY (counselor roster and attorney directory)']),
+    ...(o.matching && !o.oprfPinned ? ['the OPRF pins MATRA_OPRF_THRESHOLD, MATRA_OPRF_GROUP_PUBKEY and MATRA_OPRF_SHARE_PUBKEYS'] : []),
+  ];
+  if (missing.length)
     throw new Error(
-      'A production build needs the matcher pins MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT (see docs/DEPLOY.md). ' +
+      `A production build needs ${missing.join('; ')} (see docs/DEPLOY.md). ` +
         'Set MATRA_DEMO_MODE=1 only for a fictional-data demo build.',
     );
 }
@@ -133,12 +165,16 @@ const config = {
 } as any;
 
 export default defineConfig(({ command, mode }) => {
-  assertMatcherPinned({
+  assertProductionPins({
     command,
     mode,
-    pinned: !!attestationPins.measurement,
     demo: demoBuild,
     harnessOnly: process.env.MATRA_VOICE_HARNESS === 'only',
+    matcherPinned: !!attestationPins.measurement,
+    rosterPinned: !!matchPins.rosterKey,
+    // all-or-nothing is enforced above, so the group key stands for the whole set
+    oprfPinned: !!matchPins.oprfGroup && matchPins.oprfShares.length > 0,
+    matching: MATCHING_IN_BUILD,
   });
   return config;
 });

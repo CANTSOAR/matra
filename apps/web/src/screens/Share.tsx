@@ -4,11 +4,12 @@ import { checkAttorneyKey, wrapKeyForRecipient, type AttorneyKeyCheck } from '@m
 import type { AttorneyProfile, Share as ShareT } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, US_STATES, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
+import { UnreadableNote } from '../components/UnreadableNote';
 import { NOTICES } from '../lib/disclosures';
 import { shareLengthSentence } from '../lib/shareTerms';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { blobKeyFor, finals, loadVault, type OpenedRecord } from '../lib/vault';
-import { MATCH_PINS } from '../matchPins';
+import { MATCH_PINS, attorneyShareable } from '../matchPins';
 
 type Scope = ShareT['scope'][number];
 const SCOPE_LABEL: Record<Scope, string> = {
@@ -40,8 +41,8 @@ export function buildConsentStatement(p: {
   ].join('\n');
 }
 
-/** May she share with this attorney's key? Verified by the org-signed directory, or (development builds) unpinned. */
-const canShare = (c: AttorneyKeyCheck) => c.status === 'verified' || c.status === 'unpinned';
+/** May she share with this attorney's key? Verified by the org-signed directory, or unpinned in dev/demo builds only. */
+const canShare = (c: AttorneyKeyCheck) => attorneyShareable(c);
 
 /** The attorney as the signed directory names them (the server's copy of the name can't override it). */
 function signedAttorney(a: AttorneyProfile, c: AttorneyKeyCheck): AttorneyProfile {
@@ -85,7 +86,7 @@ function AttorneyCard({ a, check, onChoose }: { a: AttorneyProfile; check: Attor
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <h3 style={{ margin: 0 }}>{shown.displayName}</h3>
             {check.status === 'verified' && <span className="badge ok">Verified by Matra</span>}
-            {check.status === 'unpinned' && <span className="badge ok">Verified attorney</span>}
+            {check.status === 'unpinned' && canShare(check) && <span className="badge ok">Verified attorney</span>}
             {!canShare(check) && <span className="badge warn">Can’t confirm right now</span>}
           </div>
           {shown.organization && <p style={{ margin: 0 }}>{shown.organization}</p>}
@@ -156,7 +157,16 @@ export function Share() {
 
   if (chosen && current) {
     const attorney = signedAttorney(chosen.a, chosen.check);
-    return <Consent record={current} attorney={attorney} check={chosen.check} onCancel={() => setChosen(null)} onDone={(at) => setDone({ attorney, at })} />;
+    return (
+      <Consent
+        record={current}
+        attorney={attorney}
+        check={chosen.check}
+        unreadable={vault.data?.unreadable ?? 0}
+        onCancel={() => setChosen(null)}
+        onDone={(at) => setDone({ attorney, at })}
+      />
+    );
   }
 
   return (
@@ -170,6 +180,8 @@ export function Share() {
       </PageTitle>
       {vault.loading && <Loading label="Opening your space…" />}
       {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
+      {/* before she picks anyone: the version offered here may not be her newest */}
+      <UnreadableNote count={vault.data?.unreadable} />
       {!vault.loading && !current && !vault.error && (
         <div className="card stack">
           <p>Once your story is sealed, you’ll be able to share it here — only if you want to.</p>
@@ -216,12 +228,15 @@ function Consent({
   record,
   attorney,
   check,
+  unreadable,
   onCancel,
   onDone,
 }: {
   record: OpenedRecord;
   attorney: AttorneyProfile;
   check: AttorneyKeyCheck;
+  /** saved versions that couldn't be opened: `record` may be older than her newest, so sharing stays off */
+  unreadable: number;
   onCancel(): void;
   onDone(at: string): void;
 }) {
@@ -250,7 +265,7 @@ function Consent({
     : '';
 
   async function share() {
-    if (!agreed || !keyOk || !fp || !statement) return;
+    if (!agreed || !keyOk || !fp || !statement || unreadable > 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -304,7 +319,7 @@ function Consent({
             {check.organization ? `, ${check.organization}` : ''}. Your file will be locked so only this key can open it.
           </p>
         )}
-        {check.status === 'unpinned' && (
+        {check.status === 'unpinned' && keyOk && (
           <p className="card warn small" style={{ margin: 0 }}>
             <strong>Development version:</strong> this copy of the app has no Matra signing key to check the attorney’s
             key against, so it uses the key the server sent. Real versions check it for you.
@@ -364,8 +379,9 @@ function Consent({
         </label>
         {busy && <Loading label="Locking your file for this attorney, on your device…" />}
         {error && <ErrorNote>{error}</ErrorNote>}
+        <UnreadableNote count={unreadable} />
         <div className="row">
-          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !keyOk || !statement || busy}>
+          <button className="btn btn-primary" onClick={() => void share()} disabled={!agreed || !keyOk || !statement || busy || unreadable > 0}>
             Yes, share with {attorney.displayName}
           </button>
           <button className="btn" onClick={onCancel} disabled={busy}>
