@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUICK_EXIT_URL, QuickExitButton, exitDeps } from './quickExit';
 import { fakeAuthFetch } from '../test/fakeServer';
@@ -31,6 +31,32 @@ describe('quick exit', () => {
     expect(current!.session).toBeNull();
     expect(replace).toHaveBeenCalledWith(QUICK_EXIT_URL);
     expect(document.title).toBe('Notes');
+  }, 60_000);
+
+  it('idle lock: a survivor leaves to the same neutral page as Quick exit, with the same wipe', async () => {
+    const { fetchImpl } = fakeAuthFetch();
+    render(<Harness fetchImpl={fetchImpl} idleMs={50} />);
+    await act(async () => {
+      await current!.register({ username: 'wren', passphrase: 'pebble-lantern-fjord-mango-heron', role: 'survivor', ageConfirmed18: true });
+    });
+    await waitFor(() => expect(replace).toHaveBeenCalledWith(QUICK_EXIT_URL));
+    expect(screen.getByTestId('state')).toHaveTextContent('out');
+    expect(current!.session).toBeNull();
+    // no "Welcome back" idle note is queued for whoever opens the app next
+    expect(current!.lockReason).toBeNull();
+    expect(document.body.style.visibility).toBe('hidden');
+    expect(document.title).toBe('Notes');
+  }, 60_000);
+
+  it('idle lock: an attorney is signed out with the idle note, not sent to the neutral page', async () => {
+    const { fetchImpl } = fakeAuthFetch();
+    render(<Harness fetchImpl={fetchImpl} idleMs={50} />);
+    await act(async () => {
+      await current!.register({ username: 'counsel-1', passphrase: 'pebble-lantern-fjord-mango-heron', role: 'attorney' });
+    });
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('out'));
+    expect(current!.lockReason).toBe('idle');
+    expect(replace).not.toHaveBeenCalled();
   }, 60_000);
 
   it('triggers on Escape pressed three times quickly', () => {

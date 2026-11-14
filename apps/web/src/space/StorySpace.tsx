@@ -29,7 +29,7 @@ import {
 } from './ops';
 import { PickedUp } from './PickedUp';
 import { SpaceReview } from './Review';
-import { SafetyAsk, SafetyHelp } from './SafetyGate';
+import { RecentAsk, RecentCare, SafetyAsk, SafetyHelp } from './SafetyGate';
 import { Composer, Journal, LockIcon } from './StartAnywhere';
 import { StoryMap } from './StoryMap';
 import { TopicCards, TopicPanel } from './TopicViews';
@@ -108,6 +108,10 @@ export function StorySpace({
   const [fileStatus, setFileStatus] = useState<string | undefined>();
   const [breakOpen, setBreakOpen] = useState(false);
   const [seal, setSeal] = useState<{ phase: 'idle' | 'sealing' | 'sealed'; error?: string }>({ phase: 'idle' });
+  // "Did this happen in the last week?" comes once, right after the safety question, so it never returns on a later
+  // visit. Her answer stays in this state only. It is never put in the draft, so it is never saved, sealed, logged
+  // on the ledger or sent to the server.
+  const [recent, setRecent] = useState<'ask' | 'care' | null>(null);
 
   // ───────────── draft + autosave (same contract as IntakeChat) ─────────────
   const draftRef = useRef(draft);
@@ -269,9 +273,44 @@ export function StorySpace({
     return (
       <div className="space-root space-root-gate" ref={rootRef}>
         {stage === 'ask' ? (
-          <SafetyAsk onAnswer={(v) => setDraft(answerSafety(draftRef.current, v), true)} />
+          <SafetyAsk
+            onAnswer={(v) => {
+              const next = answerSafety(draftRef.current, v);
+              setDraft(next, true);
+              if (safetyStage(next) === 'done') setRecent('ask');
+            }}
+          />
         ) : (
-          <SafetyHelp onContinue={() => setDraft(continuePastHelp(draftRef.current), true)} onLeave={onExit ?? defaultExit} />
+          <SafetyHelp
+            onContinue={() => {
+              setDraft(continuePastHelp(draftRef.current), true);
+              setRecent('ask');
+            }}
+            onLeave={onExit ?? defaultExit}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (recent && entries.length === 0) {
+    return (
+      <div className="space-root space-root-gate" ref={rootRef}>
+        {recent === 'ask' ? (
+          <RecentAsk
+            onAnswer={(yes) => {
+              setRecent(yes ? 'care' : null);
+              if (!yes) go({ kind: 'home' }); // straight on, with focus on the open page's heading
+            }}
+          />
+        ) : (
+          <RecentCare
+            onContinue={() => {
+              setRecent(null);
+              go({ kind: 'home' });
+            }}
+            onLeave={onExit ?? defaultExit}
+          />
         )}
       </div>
     );

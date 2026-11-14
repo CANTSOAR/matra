@@ -1,7 +1,8 @@
 /**
  * Plain-language notices for the key moments (PRD N4; Legal Research Memo §2, §6, §7A; Security Whitepaper §7):
- * before she starts writing, when versions are saved or sealed, before sharing, when a file is downloaded, before
- * deleting, and when evidence is added. Plus the sealed-match consent she agrees to (Memo §7A).
+ * before she starts writing, when versions are saved or sealed, before sharing, before she downloads her summary to
+ * give to someone, when a file is downloaded, before deleting, and when evidence is added. Plus the sealed-match
+ * consent she agrees to (Memo §7A).
  *
  * One source of truth: screens render these through <KeyNotice>, and the interview script builds its words from them,
  * so every place says the same thing. Style: short sentences, plain words, calm, never alarming, never legal advice.
@@ -77,6 +78,24 @@ export const NOTICES = {
     more: [
       'Downloads usually go to a “Downloads” folder, and some devices copy them to an online backup. If someone else uses this device, think about where the file is saved.',
       'Your sealed story in Matra stays locked. Only the downloaded copy is unlocked.',
+    ],
+  },
+
+  /**
+   * Before downloading the Incident Summary: once she hands it to someone, it can reach people she never chose, such
+   * as the defense through criminal discovery (Memo §2) or the other party in a school process (34 C.F.R.
+   * 106.45(b)(5)(vi)). Say so plainly, once, without telling her what to do.
+   */
+  beforeGiving: {
+    id: 'before-giving',
+    title: 'Before you give this to anyone',
+    body: [
+      'If you give this summary to anyone, like police, a school or a lawyer, it may later be seen by others.',
+      'That can include the other side in a criminal case or a school process.',
+    ],
+    more: [
+      'Many people talk with an advocate or a lawyer before they share it. A free advocate at 1-800-656-4673 can help you think it through.',
+      NOT_ADVICE,
     ],
   },
 

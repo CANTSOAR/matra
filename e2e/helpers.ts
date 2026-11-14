@@ -280,10 +280,16 @@ export function tinyPdf(): Buffer {
 
 const panel = (page: Page) => page.locator('[data-topic-panel]');
 
-/** Safety comes first: "Yes" / "No" / "Not sure". */
+/**
+ * Safety comes first: "Yes" / "No" / "Not sure". After "Yes" comes the optional "last week" question, answered "No"
+ * here. After "No" or "Not sure" the help screen comes first, and the caller goes on from there.
+ */
 export async function storySafety(page: Page, answer: 'Yes' | 'No' | 'Not sure' = 'Yes') {
   await expect(page.getByRole('heading', { name: /are you somewhere safe right now/i })).toBeVisible({ timeout: 60_000 });
   await page.getByRole('button', { name: answer, exact: true }).click();
+  if (answer !== 'Yes') return;
+  await expect(page.getByRole('heading', { name: 'Did this happen in the last week or so?' })).toBeVisible();
+  await page.getByRole('button', { name: 'No', exact: true }).click();
 }
 
 /** Type a piece of her story (verbatim) and add it. */

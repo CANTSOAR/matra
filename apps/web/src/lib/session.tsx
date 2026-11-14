@@ -32,6 +32,7 @@ import type { IntakeDraft } from '../integration/intakeAdapter';
 import { getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 import { mirror } from '../dev/mirror';
+import { quickExit } from './quickExit';
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
 
@@ -549,10 +550,14 @@ export function SessionProvider({
   // ── auto-lock after inactivity ──
   useEffect(() => {
     if (!session) return;
-    let timer = window.setTimeout(() => lock('idle'), idleMs);
+    // Whoever picks up a device she walked away from shouldn't see a "Welcome back" sign-in that shows she has an
+    // account. A survivor leaves the way Quick exit does: the same wipe, then the same neutral page. Attorneys and
+    // counselors still get the sign-in form with the idle note.
+    const onIdle = session.user.role === 'survivor' ? quickExit : () => lock('idle');
+    let timer = window.setTimeout(onIdle, idleMs);
     const reset = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => lock('idle'), idleMs);
+      timer = window.setTimeout(onIdle, idleMs);
     };
     const events = ['pointerdown', 'keydown', 'scroll', 'touchstart', 'wheel'] as const;
     events.forEach((ev) => window.addEventListener(ev, reset, { passive: true }));

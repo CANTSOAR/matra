@@ -53,3 +53,59 @@ export function SafetyHelp({ onContinue, onLeave }: { onContinue: () => void; on
     </section>
   );
 }
+
+/** "Did this happen in the last week?" One tap, or skip. The answer goes straight back to the caller. */
+export function RecentAsk({ onAnswer }: { onAnswer: (recent: boolean) => void }) {
+  const h = useRef<HTMLHeadingElement>(null);
+  useEffect(() => h.current?.focus({ preventScroll: true }), []);
+  return (
+    <section className="space-gate" aria-labelledby="space-recent-title">
+      <h2 id="space-recent-title" className="space-gate-title" ref={h} tabIndex={-1}>
+        {COPY.recent.title}
+      </h2>
+      <p className="space-lead">{COPY.recent.lead}</p>
+      <div className="space-gate-choices" role="group" aria-labelledby="space-recent-title">
+        <button type="button" className="space-btn space-btn-choice" onClick={() => onAnswer(true)}>
+          {COPY.recent.yes}
+        </button>
+        <button type="button" className="space-btn space-btn-choice" onClick={() => onAnswer(false)}>
+          {COPY.recent.no}
+        </button>
+        <button type="button" className="space-btn space-btn-choice" onClick={() => onAnswer(true)}>
+          {COPY.recent.unsure}
+        </button>
+      </div>
+      <button type="button" className="space-btn space-btn-link" onClick={() => onAnswer(false)}>
+        {COPY.recent.skip}
+      </button>
+    </section>
+  );
+}
+
+export function RecentCare({ onContinue, onLeave }: { onContinue: () => void; onLeave: () => void }) {
+  const h = useRef<HTMLHeadingElement>(null);
+  useEffect(() => h.current?.focus({ preventScroll: true }), []);
+  return (
+    <section className="space-gate space-gate-help" aria-labelledby="space-care-title" data-testid="recent-care">
+      <h2 id="space-care-title" className="space-gate-title" ref={h} tabIndex={-1}>
+        {COPY.recent.careTitle}
+      </h2>
+      <ul className="bullets space-care-list">
+        {COPY.recent.care.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <div className="space-resources">
+        <Resources />
+      </div>
+      <div className="space-actions">
+        <button type="button" className="space-btn space-btn-primary" onClick={onContinue}>
+          {COPY.recent.keepGoing}
+        </button>
+        <button type="button" className="space-btn space-btn-secondary" onClick={onLeave}>
+          {COPY.safety.leave}
+        </button>
+      </div>
+    </section>
+  );
+}

@@ -50,6 +50,8 @@ function entriesOf(r: IntakeRecord): StoryEntry[] {
   return x.narrative.entries ?? x.entries ?? [];
 }
 
+const RECENT = 'Did this happen in the last week or so?';
+
 const NARRATIVE = 'It was around March 14, at his apartment.\n\n  He said "stay quiet"…  😶\t{I think}  ';
 
 function safeDraft(extra: Partial<IntakeDraft> = {}): IntakeDraft {
@@ -101,14 +103,48 @@ describe('StorySpace', () => {
     await user.click(screen.getByRole('button', { name: 'Leave this page now' }));
     expect(onExit).toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: "I'd like to keep going" }));
+    await user.click(screen.getByRole('button', { name: 'No' })); // not in the last week
     expect(screen.getByRole('heading', { name: 'Start wherever feels right.' })).toBeInTheDocument();
   });
 
-  it('goes straight to the open page when she is safe', async () => {
+  it('when she is safe, asks only the optional "last week" question before the open page', async () => {
     const { user, last } = setup({ initialDraft: undefined });
     await user.click(screen.getByRole('button', { name: 'Yes' }));
     expect(last().answers['safety.now']).toBe('yes');
     expect(screen.queryByRole('link', { name: /1-800-656-4673/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: RECENT })).toHaveFocus();
+    expect(screen.queryByLabelText('What you would like to share')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Skip this' }));
+    expect(screen.getByLabelText('What you would like to share')).toBeInTheDocument();
+  });
+
+  it('"Yes, in the last week" shows calm care information, and her answer never reaches the draft', async () => {
+    const { user, changes } = setup({ initialDraft: undefined });
+    await user.click(screen.getByRole('button', { name: 'Yes' })); // safe
+    const saved = changes.length;
+    await user.click(screen.getByRole('button', { name: 'Yes' })); // in the last week
+    const care = screen.getByTestId('recent-care');
+    expect(within(care).getByRole('heading', { name: 'Care you can get soon after' })).toHaveFocus();
+    expect(care).toHaveTextContent('without reporting to police');
+    expect(care).toHaveTextContent('usually possible up to 7 days after, sometimes longer');
+    expect(care).toHaveTextContent('ideally within 24 hours. It can be started up to 72 hours after.');
+    expect(within(care).getByRole('link', { name: /1-800-656-4673/ })).toHaveAttribute('href', 'tel:+18006564673');
+    await user.click(within(care).getByRole('button', { name: 'Keep going' }));
+    expect(screen.getByLabelText('What you would like to share')).toBeInTheDocument();
+    // transient UI state only: the shell got no draft change, so nothing about it is saved, sealed or sent
+    expect(changes).toHaveLength(saved);
+  });
+
+  it('"No" goes straight on, and the question does not come back on a later visit', async () => {
+    const first = setup({ initialDraft: undefined });
+    await first.user.click(screen.getByRole('button', { name: 'Yes' }));
+    await first.user.click(screen.getByRole('button', { name: 'No' }));
+    expect(screen.queryByTestId('recent-care')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('What you would like to share')).toBeInTheDocument();
+    const draft = first.last();
+    first.unmount();
+    setup({ initialDraft: draft });
+    expect(screen.queryByRole('heading', { name: RECENT })).not.toBeInTheDocument();
     expect(screen.getByLabelText('What you would like to share')).toBeInTheDocument();
   });
 

@@ -319,6 +319,8 @@ test('3. incident summary: her words verbatim; summary + VCCO draft download as 
   await expect(preview.getByText('08901')).toHaveCount(0);
   // Before downloading: the PDFs aren't locked once they leave Matra.
   await expect(page.getByTestId('notice-download-file')).toContainText('it is not encrypted');
+  // and that whoever she gives it to may not be the last to read it
+  await expect(page.getByTestId('notice-before-giving')).toContainText('it may later be seen by others');
   await shot(page, '09-brief-preview');
 
   for (const [button, prefix] of [

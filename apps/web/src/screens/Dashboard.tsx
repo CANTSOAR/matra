@@ -291,7 +291,7 @@ export function Dashboard() {
                 <span className="dot-icon sage"><IconBook /></span>
                 <span className="step-text">
                   <strong>Prepare a summary</strong>
-                  <span>In your own words, to bring to police, an advocate or a lawyer — only if you choose.</span>
+                  <span>In your own words. You decide whether to share it, and with whom.</span>
                 </span>
                 <span className="chev" aria-hidden="true">›</span>
               </Link>

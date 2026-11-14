@@ -8,9 +8,9 @@ function Probe() {
   return <div data-testid="state">{current.session ? `in:${current.session.user.username}` : 'out'}</div>;
 }
 
-export function Harness({ fetchImpl, children }: { fetchImpl: typeof fetch; children?: ReactNode }) {
+export function Harness({ fetchImpl, idleMs, children }: { fetchImpl: typeof fetch; idleMs?: number; children?: ReactNode }) {
   return (
-    <SessionProvider fetchImpl={fetchImpl}>
+    <SessionProvider fetchImpl={fetchImpl} idleMs={idleMs}>
       <Probe />
       {children}
     </SessionProvider>

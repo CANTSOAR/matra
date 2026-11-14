@@ -61,7 +61,7 @@ export function Brief() {
       <PageTitle
         eyebrow="Summary"
         testId="summary-title"
-        lead="Your sealed story, organized in your own words, to bring to police, an advocate or a lawyer — if and when you decide to. Downloading it doesn’t send it anywhere."
+        lead="Your sealed story, organized in your own words. It’s yours: you decide whether to share it, and with whom. Downloading it doesn’t send it anywhere."
       >
         Incident summary
       </PageTitle>
@@ -104,6 +104,7 @@ export function Brief() {
               <input type="checkbox" checked={redact} onChange={(e) => setRedact(e.target.checked)} />
               <span>Hide my contact information (phone, email, address) in the summary</span>
             </label>
+            <KeyNotice notice={NOTICES.beforeGiving} />
             <KeyNotice notice={NOTICES.downloadFile} />
             <div className="row">
               <button className="btn btn-primary" onClick={() => void download('summary')} disabled={!!busy}>

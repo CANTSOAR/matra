@@ -39,4 +39,12 @@ describe('KeyNotice', () => {
     expect(NOTICES.sharing.body.join(' ')).toMatch(/can’t erase what they already saved/);
     expect(NOTICES.keepOriginals.body.join(' ')).toMatch(/keep the original file, and the phone or device it came from/);
   });
+
+  it('before she downloads her summary: says who else may see it, and stays information, not advice', () => {
+    const body = NOTICES.beforeGiving.body.join(' ');
+    expect(body).toMatch(/police, a school or a lawyer, it may later be seen by others/);
+    expect(body).toMatch(/the other side in a criminal case or a school process/);
+    expect(body).not.toMatch(/\byou should\b|\bdon’t\b|\bdo not\b|\bnever\b/i);
+    expect(NOTICES.beforeGiving.more).toContain('This is general information, not legal advice.');
+  });
 });
