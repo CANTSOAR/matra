@@ -104,7 +104,7 @@ export const TOPICS: Topic[] = [
     section: 'person',
     title: 'The person',
     why: 'Only what you know and feel okay sharing. Some people know them well, some not at all.',
-    steps: ['person.list', 'person.escrow', 'person.matchContact'],
+    steps: ['person.list', ...(__MATRA_MATCHING__ ? ['person.escrow', 'person.matchContact'] : [])],
     keySteps: ['person.list'],
   },
   {

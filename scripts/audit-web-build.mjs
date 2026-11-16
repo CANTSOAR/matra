@@ -8,6 +8,12 @@
  *   3. JS / CSS / HTML / JSON: every http(s) host named anywhere is on the allowlist below, each with the reason it
  *      appears; nothing on the tracker list appears at all. A new host fails the build until someone looks at it.
  *
+ *   4. Sealed matching left out of a MATRA_MATCHING=off build (the pilot): no matching, escrow, counselor or report API
+ *      route, no OPRF code, no matching or counselor screen route. The mode is read from the build itself
+ *      (matra-build.json, written by apps/web/vite.config.ts), never from this shell's environment; a build without it
+ *      fails. A build made with MATRA_MATCHING=on skips this check. (Tree-shaking can leave an empty chunk behind, named after a
+ *      module it emptied; what counts is that none of these strings is in any shipped file.)
+ *
  * Hosts in shipped code are not the same as requests: the CSP (apps/server/src/app.ts WEB_CSP) is what stops the
  * browser from contacting anything but this origin (connect-src/script-src/img-src… 'self'), and the e2e suite fails
  * on any request to another origin (e2e/helpers.ts). This audit catches a dependency or a change that would ADD one.
@@ -25,6 +31,7 @@ const ALLOWED_HOSTS = {
   'online.rainn.org': 'a link the survivor can choose to follow (RAINN online hotline)',
   'www.google.com': 'quick exit navigates the tab away to a neutral site (a navigation the survivor chose, not a request from the app)',
   'www.njoag.gov': 'links to the NJ VCCO application forms',
+  'creativecommons.org': 'the CC BY 4.0 licence link in the passphrase word-list credit (NOTICE; a link she can choose to follow)',
   'huggingface.co': 'transformers.js default model host; disabled (env.allowRemoteModels = false, remoteHost overridden; CSP connect-src self)',
   'cdn.jsdelivr.net': 'ONNX Runtime default wasm path; overridden to /models/ort/ (apps/web/src/voice/worker.ts; CSP script-src self)',
   'react.dev': 'React error-message text',
@@ -44,9 +51,30 @@ const FORBIDDEN = [
   'plausible.io', 'cloudflareinsights', 'newrelic', 'nr-data.net', 'datadoghq', 'clarity.ms', 'facebook.net', 'intercom.io',
 ];
 
+/**
+ * Strings a build without sealed matching must not contain (case-insensitive): the API routes it would call, the OPRF
+ * client, and the app's own matching and counselor screen routes. Plain words like "counselor" in survivor-facing copy
+ * ("a school counselor") are fine; these are route and protocol strings.
+ */
+const MATCHING_ONLY = [
+  '/api/matching', '/api/escrow', '/api/counselor', '/api/report-requests', '/api/report-releases', 'oprf',
+  'vault/matching', 'vault/requests', 'counselor/matches', 'counselor/reports',
+];
 const problems = [];
 if (!fs.existsSync(DIST)) {
   console.error(`[audit-web] ${DIST} does not exist; build the web app first.`);
+  process.exit(1);
+}
+
+/** The MATRA_MATCHING this build was made with, from its own matra-build.json. */
+let matchingMode;
+try {
+  matchingMode = JSON.parse(fs.readFileSync(path.join(DIST, 'matra-build.json'), 'utf8')).matching;
+} catch {
+  matchingMode = undefined;
+}
+if (matchingMode !== 'off' && matchingMode !== 'on') {
+  console.error(`[audit-web] ${DIST}/matra-build.json is missing or doesn't say "off" or "on": rebuild with apps/web/vite.config.ts.`);
   process.exit(1);
 }
 
@@ -73,6 +101,9 @@ for (const f of files) {
   }
   // 3. hosts + trackers
   for (const bad of FORBIDDEN) if (lower.includes(bad)) problems.push(`${rel(f)}: mentions ${bad}`);
+  // 4. sealed matching left out
+  if (matchingMode === 'off')
+    for (const m of MATCHING_ONLY) if (lower.includes(m)) problems.push(`${rel(f)}: contains "${m}", but this is a MATRA_MATCHING=off build`);
   for (const m of text.matchAll(/\b(?:https?|wss?):\/\/([a-z0-9.-]+)/gi)) {
     const h = m[1].toLowerCase().replace(/\.$/, '');
     if (!hosts.has(h)) hosts.set(h, new Set());
@@ -86,6 +117,12 @@ if (problems.length) {
   console.error(`[audit-web] ${problems.length} problem(s) in ${DIST}:`);
   for (const p of problems) console.error(`  - ${p}`);
   console.error('[audit-web] Every host the shipped app names must be on the allowlist in scripts/audit-web-build.mjs, with a reason.');
+  if (matchingMode === 'off')
+    console.error('[audit-web] A MATRA_MATCHING=off build must not ship sealed-matching code: put it behind __MATRA_MATCHING__ (apps/web/src/build-flags.d.ts).');
   process.exit(1);
 }
-console.log(`[audit-web] ok: ${files.length} files, no third-party requests or trackers; hosts named: ${[...hosts.keys()].sort().join(', ') || 'none'}`);
+console.log(
+  `[audit-web] ok: ${files.length} files, no third-party requests or trackers` +
+    `${matchingMode === 'off' ? ', no sealed-matching code (MATRA_MATCHING=off)' : ' (MATRA_MATCHING=on: matching check skipped)'}; ` +
+    `hosts named: ${[...hosts.keys()].sort().join(', ') || 'none'}`,
+);

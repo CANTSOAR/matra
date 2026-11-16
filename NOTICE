@@ -1,0 +1,22 @@
+Matra
+Copyright the Matra contributors. Licensed under the GNU Affero General Public License v3.0 (see LICENSE).
+
+This product includes material from third parties under the terms below.
+
+-------------------------------------------------------------------------------
+EFF Short Wordlist #1
+-------------------------------------------------------------------------------
+Used in: apps/web/src/lib/wordlist.ts (the words generated passphrases are made of)
+
+Source: "EFF's New Wordlists for Random Passphrases", Joseph Bonneau, Electronic Frontier Foundation, 2016.
+        https://www.eff.org/deeplinks/2016/07/new-wordlists-random-passphrases
+        https://www.eff.org/files/2016/09/08/eff_short_wordlist_1.txt
+Copyright Electronic Frontier Foundation.
+Licence: Creative Commons Attribution 4.0 International (CC BY 4.0),
+         https://creativecommons.org/licenses/by/4.0/
+         (as stated on EFF's copyright page, https://www.eff.org/copyright, checked 2026-11-15)
+
+Changes made: the dice numbers were dropped and 261 of the 1,296 words were removed (screens for violent, sexual,
+bodily, alcohol, drug and other distressing words, words easily confused with another, words phones autocorrect, and
+"yo-yo" for its hyphen). 1,035 words remain, unchanged and
+in the original order. EFF does not endorse Matra.

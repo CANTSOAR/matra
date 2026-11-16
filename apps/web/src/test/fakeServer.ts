@@ -19,6 +19,8 @@ export function fakeAuthFetch({ deleteFails = false }: { deleteFails?: boolean }
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://x');
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    // no draft slot yet (lib/draftSlot.ts)
+    if (url.pathname.startsWith('/api/vault/slots/') && (init?.method ?? 'GET') === 'GET') return json(200, { slot: null, draftMode: 'slot' });
     switch (`${init?.method ?? 'GET'} ${url.pathname}`) {
       case 'POST /api/auth/register': {
         users.set(body.username, body);
@@ -35,10 +37,14 @@ export function fakeAuthFetch({ deleteFails = false }: { deleteFails?: boolean }
       }
       case 'POST /api/auth/logout':
         return json(200, { ok: true });
-      case 'POST /api/account/delete':
+      case 'POST /api/account/delete': {
         if (deleteFails) return json(500, { error: 'Something went wrong' });
+        // like the server: her passphrase's auth key again, not only a session
+        const u = users.values().next().value;
+        if (!u || body?.authKey !== u.authKey) return json(401, { error: 'That passphrase is incorrect.', code: 'invalid_credentials' });
         users.clear();
         return json(200, { ok: true });
+      }
       case 'GET /api/me':
         return json(200, { user: toUser(users.values().next().value!) });
       default:

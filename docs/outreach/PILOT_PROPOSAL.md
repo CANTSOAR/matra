@@ -8,9 +8,9 @@
 
 Matra is a nonprofit, open-source (AGPL-3.0) web tool for adult (18+) sexual-assault survivors:
 - **Trauma-informed intake.** She can start anywhere, typing or speaking, or answer one question at a time. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. She can skip any question. Prompts are non-leading and sensory. Her words are stored verbatim. Quick Exit is always available.
-- **Zero-knowledge vault.** Content is encrypted on her device. The operator stores only ciphertext and **cannot read it**. The operator can see metadata (account existence, timing, sizes, share relationships).
+- **Zero-knowledge vault.** Content is encrypted on her device. The operator stores only ciphertext and **cannot read it from what it stores** (it also serves the app's code, so a modified app could capture a passphrase: threat model W4). The operator can see metadata (account existence, timing, sizes, share relationships).
 - **Outputs generated on her device:** an **Incident Summary in the Survivor's Own Words**, an **evidence inventory** (photo location data stripped, SHA-256 hashes), and an **NJ VCCO application draft** that states the eligibility rules accurately.
-- **Consent-based sharing.** Only if she chooses, she shares a scoped, re-encrypted copy with a verified attorney she picks. She can revoke at any time, and she sees every time the attorney opens it.
+- **Consent-based sharing.** Only if she chooses, she shares her sealed account (all of it, stated plainly on the screen) and any evidence files she ticks one by one with a verified attorney she picks, under a made-up label for that share. She can revoke at any time, and she sees every time the attorney opens it.
 - **Never:** automatic sending to police, schools, or employers; legal advice from software; fees of any kind.
 
 **Honest status:** a working prototype that uses invented data only. **No independent security audit yet.** The legal analysis has not yet been reviewed by licensed counsel.
@@ -43,8 +43,8 @@ If any gate isn't met, Phase B doesn't start. The pilot continues in Phase A or 
 
 ## 5. Safeguards during the pilot
 - **Survivor control.** She decides what to write, seal, share, and revoke. Nothing is sent anywhere automatically.
-- **Honest disclosures before she writes, seals, shares, or deletes:** Matra can't read her records, but a court can order *her* to produce them; anything given to police is shared with the defense; every sealed version is kept; a lost passphrase can't be recovered; revocation can't recall copies an attorney already downloaded.
-- **Adults only.** [Partner] follows its own mandatory-reporting duties (e.g., N.J.S.A. 9:6-8.10). Matra has no role in those decisions and cannot read content.
+- **Honest disclosures before she writes, seals, shares, or deletes:** Matra's server holds only locked copies of her records, but a court can order *her* to produce them; anything given to police is shared with the defense; every sealed version is kept (her unsealed draft is saved over, not versioned); a lost passphrase can't be recovered; revocation can't recall copies an attorney already downloaded.
+- **Adults only.** [Partner] follows its own mandatory-reporting duties (e.g., N.J.S.A. 9:6-8.10). Matra has no role in those decisions and holds only ciphertext.
 - **No individual-level data** to funders, to [Partner]'s leadership beyond normal case files, or to anyone else. Aggregate metrics are reported with small-cell suppression (n<10).
 - **Safety planning.** Advocates cover device safety, shared devices, and Quick Exit limits (browser history and downloads can remain).
 - **Feedback without stories.** Feedback covers the product, never survivors' accounts.
@@ -85,8 +85,8 @@ If any gate isn't met, Phase B doesn't start. The pilot continues in Phase A or 
 
 ## 10. Exit and data-deletion plan
 - **Either party may exit** on [30] days' written notice, or immediately for a safety concern.
-- **Survivors keep control.** Each survivor can export her data and crypto-shred her account at any time. On pilot end, survivors receive at least **90 days' notice** and step-by-step help (from advocates) to export and delete. Matra never decrypts content, because it can't. Encrypted data moves to another organization only if Matra itself closes, and then only to the Designated Successor and only with that survivor's individual opt-in. Silence is never consent ([Succession and Data Promise](../SUCCESSION_AND_DATA_PROMISE.md)).
-- **After the notice period**, remaining accounts are crypto-shredded: ciphertext and keys are destroyed. **Ledger entries (hashes only, no content) remain** by design, and the ledger will show that records existed and were deleted. Advocates should tell survivors with pending or anticipated litigation to speak with a lawyer **before** deleting (spoliation risk).
+- **Survivors keep control.** Each survivor can export her data and delete her account at any time (deleted from the live database; a backup made earlier keeps a locked copy until it expires). On pilot end, survivors receive at least **90 days' notice** and step-by-step help (from advocates) to export and delete. Matra never decrypts content, because it can't. Encrypted data moves to another organization only if Matra itself closes, and then only to the Designated Successor and only with that survivor's individual opt-in. Silence is never consent ([Succession and Data Promise](../SUCCESSION_AND_DATA_PROMISE.md)).
+- **After the notice period**, remaining accounts are deleted: ciphertext and wrapped keys are deleted from the database, and backups are destroyed on a documented schedule. **Ledger entries (hashes only, no content) remain** by design, and the ledger will show that records existed and were deleted. Advocates should tell survivors with pending or anticipated litigation to speak with a lawyer **before** deleting (spoliation risk).
 - **Attorneys** handle downloaded copies under the MOU: delete within [10] days if no attorney-client relationship formed, otherwise follow the engagement and retention rules.
 - **Server logs** are kept at most [30] days with truncated IPs, then deleted. Backups are deleted on the same schedule.
 - **Continuity option.** Because the code is AGPL, [Partner] may self-host its own deployment under the pilot agreement's self-hosting terms.

@@ -1,8 +1,10 @@
 import fs from 'node:fs';
-import { createApp, flushPhoneTokens } from './app.js';
+import { createApp, flushPhoneTokens, type CreateAppOptions } from './app.js';
+import { loadMatchingMode } from './matching-off.js';
 import {
   WEB_DIST_DIR,
   loadDemoMode,
+  loadDraftMode,
   loadMatcherConfig,
   loadMatchingSettings,
   loadOprfLimits,
@@ -10,6 +12,7 @@ import {
   loadPepper,
   loadPhoneVerification,
   resolveDbPath,
+  resolveDraftsDbPath,
 } from './config.js';
 import { RemoteHolderPool } from './holders.js';
 import { inspectorEnabled } from '@matra/shared';
@@ -18,6 +21,14 @@ const production = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT) || 4000;
 const host = process.env.HOST || (production ? '0.0.0.0' : undefined);
 const dbPath = resolveDbPath();
+const draftsDbPath = resolveDraftsDbPath(dbPath);
+// MATRA_DRAFT_MODE=slot|keep-versions (packages/shared/src/slots.ts): the launch default waits on counsel (Q-004).
+const draftMode = loadDraftMode();
+console.log(
+  draftMode === 'slot'
+    ? '[matra] drafts: MATRA_DRAFT_MODE=slot — a draft save replaces the one before; only sealed versions are kept.'
+    : '[matra] drafts: MATRA_DRAFT_MODE=keep-versions — every draft save is also kept as a record with a ledger entry.',
+);
 const corsOrigins = process.env.MATRA_CORS_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean);
 const autoVerifyAttorneys = process.env.MATRA_AUTO_VERIFY_ATTORNEYS === '1';
 if (autoVerifyAttorneys) console.warn('[matra] WARNING: MATRA_AUTO_VERIFY_ATTORNEYS=1 — new attorneys are auto-verified (dev only).');
@@ -40,39 +51,36 @@ const inspector = inspectorEnabled(process.env);
 if (process.env.MATRA_INSPECTOR === '1' && !inspector) console.warn('[matra] MATRA_INSPECTOR=1 ignored: production without MATRA_DEMO_MODE=1.');
 if (inspector) console.warn('[matra] MATRA_INSPECTOR=1 — GET /api/dev/inspector shows every account’s ciphertext and metadata, unauthenticated (dev / demo only).');
 
-// Threshold OPRF key holders: all m shares in this process (dev / single-host demo), or m remote holder processes
-// (MATRA_OPRF_HOLDER_URLS). Production refuses to start without every share or the pinned remote config, and never
-// generates shares; see config.ts loadOprfThreshold and docs/DEPLOY.md.
-const oprf = loadOprfThreshold();
 const pepper = loadPepper();
-// SMS phone verification before sealed matching (W13): production refuses the mock provider unless MATRA_DEMO_MODE=1,
-// and refuses to start without MATRA_PHONE_HASH_KEY (src/sms.ts, docs/DEPLOY.md).
-const phone = loadPhoneVerification();
-console.log(`[matra] sealed matching: phone verification ${phone.required ? `required (${phone.verifier.name} SMS provider)` : 'OFF (development)'}`);
-const matchingSettings = loadMatchingSettings();
-// The matcher service (W15, W18): a separate process (MATRA_MATCHER_URL), or in-process with simulated attestation,
-// which production refuses unless MATRA_DEMO_MODE=1.
-const matcher = loadMatcherConfig(process.env, { releaseDelayHours: matchingSettings.releaseDelayHours });
-console.log(`[matra] sealed matching: ${matcher.description}`);
-if (oprf.remote) {
-  // Each reachable holder must serve exactly its pinned share public key; a down holder only warns (t of m suffice).
-  const { reachable } = await new RemoteHolderPool(oprf.t, oprf.remote, pepper).verifyKeys();
-  console.log(`[matra] OPRF: ${oprf.t}-of-${oprf.m} remote key holders, ${reachable} reachable`);
-} else if (production) {
-  console.warn(`[matra] WARNING: all ${oprf.m} OPRF key shares are loaded into this process: no separation against the operator (docs/threat-model.md W14).`);
-}
 
-const app = createApp({
-  dbPath,
-  pepper,
-  corsOrigins,
-  autoVerifyAttorneys,
-  logRequests: process.env.MATRA_LOG_REQUESTS !== '0', // route pattern + status + ms only (privacy.ts)
-  webDir,
-  demoBanner,
-  trustProxy,
-  inspector,
-  matching: {
+// Sealed matching (MATRA_MATCHING=off|on, src/matching-off.ts). Production must say which; the pilot runs "off", and
+// then nothing below is loaded: no OPRF key shares, no phone-token key, no matcher, no SMS provider.
+const matchingMode = loadMatchingMode();
+let matching: CreateAppOptions['matching'] = false;
+if (matchingMode === 'off') {
+  console.log('[matra] sealed matching: OFF (MATRA_MATCHING=off). Matching, counselor and report routes answer 404.');
+} else {
+  // Threshold OPRF key holders: all m shares in this process (dev / single-host demo), or m remote holder processes
+  // (MATRA_OPRF_HOLDER_URLS). Production refuses to start without every share or the pinned remote config, and never
+  // generates shares; see config.ts loadOprfThreshold and docs/DEPLOY.md.
+  const oprf = loadOprfThreshold();
+  // SMS phone verification before sealed matching (W13): production refuses the mock provider unless MATRA_DEMO_MODE=1,
+  // and refuses to start without MATRA_PHONE_HASH_KEY (src/sms.ts, docs/DEPLOY.md).
+  const phone = loadPhoneVerification();
+  console.log(`[matra] sealed matching: phone verification ${phone.required ? `required (${phone.verifier.name} SMS provider)` : 'OFF (development)'}`);
+  const matchingSettings = loadMatchingSettings();
+  // The matcher service (W15, W18): a separate process (MATRA_MATCHER_URL), or in-process with simulated attestation,
+  // which production refuses unless MATRA_DEMO_MODE=1.
+  const matcher = loadMatcherConfig(process.env, { releaseDelayHours: matchingSettings.releaseDelayHours });
+  console.log(`[matra] sealed matching: ${matcher.description}`);
+  if (oprf.remote) {
+    // Each reachable holder must serve exactly its pinned share public key; a down holder only warns (t of m suffice).
+    const { reachable } = await new RemoteHolderPool(oprf.t, oprf.remote, pepper).verifyKeys();
+    console.log(`[matra] OPRF: ${oprf.t}-of-${oprf.m} remote key holders, ${reachable} reachable`);
+  } else if (production) {
+    console.warn(`[matra] WARNING: all ${oprf.m} OPRF key shares are loaded into this process: no separation against the operator (docs/threat-model.md W14).`);
+  }
+  matching = {
     oprf,
     limits: loadOprfLimits(),
     ...matchingSettings,
@@ -86,11 +94,26 @@ const app = createApp({
       allowedCountryCodes: phone.allowedCountryCodes,
       sendLimits: phone.sendLimits,
     },
-  },
+  };
+}
+
+const app = createApp({
+  dbPath,
+  draftsDbPath,
+  draftMode,
+  pepper,
+  corsOrigins,
+  autoVerifyAttorneys,
+  logRequests: process.env.MATRA_LOG_REQUESTS !== '0', // route pattern + status + ms only (privacy.ts)
+  webDir,
+  demoBanner,
+  trustProxy,
+  inspector,
+  matching,
 });
 
 const onListen = () => {
-  console.log(`[matra] ${production ? 'production' : 'dev'} server on http://${host ?? 'localhost'}:${port}  (db: ${dbPath})`);
+  console.log(`[matra] ${production ? 'production' : 'dev'} server on http://${host ?? 'localhost'}:${port}  (db: ${dbPath}; drafts: ${draftsDbPath})`);
   if (webDir) console.log(`[matra] serving web app from ${webDir}${demoBanner ? ' with the DEMO banner' : ''}`);
 };
 const server = host ? app.listen(port, host, onListen) : app.listen(port, onListen);

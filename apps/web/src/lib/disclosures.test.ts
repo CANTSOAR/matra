@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { STEPS } from '../intake/script';
 import { MATCHING_EXPLANATION } from '../counselor/SurvivorMatching';
-import { CONFLICT_CHECK_STATEMENT_VERSION } from '@matra/shared';
+import { CONFLICT_CHECK_STATEMENT_VERSION, consentMatches, writtenAccountSentence } from '@matra/shared';
 import { CONFLICT_CHECK_STATEMENT, MATCHING_CONSENT_LINES, REPORT_REQUEST_LINES, buildReportConsentStatement } from './disclosures';
-import { MATCHING_CONSENT_STATEMENT } from './vault';
+import { MATCHING_CONSENT_STATEMENT } from './matching';
+
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
 
 describe('sealed-match consent (Memo §7A)', () => {
   const shown = STEPS.find((s) => s.id === 'person.escrow')!.say;
@@ -37,7 +43,7 @@ describe('staged release copy (W21, Q-052 intent)', () => {
   const statement = buildReportConsentStatement({
     counselor: { displayName: 'Demo — Counselor', organization: 'Demo LOC' },
     fingerprint: 'ABCD-EF01-2345-6789-ABCD-EF01-2345-6789',
-    withEvidence: 0,
+    files: 0,
     sealedAt: '2026-11-11T00:00:00.000Z',
     expiresInDays: 90,
     at: '2026-11-11T01:00:00.000Z',
@@ -47,7 +53,15 @@ describe('staged release copy (W21, Q-052 intent)', () => {
     expect(statement).toContain('ABCD-EF01-2345-6789-ABCD-EF01-2345-6789');
     expect(statement).toMatch(/with no one else/);
     expect(statement).toMatch(/not shared with anyone else who named the same person/);
-    expect(statement).toMatch(/not sharing any evidence files/);
+    expect(statement).toMatch(/not sharing any of the evidence files themselves/);
+  });
+
+  it('says her written account is always shared and what it holds, in the words the server checks', () => {
+    expect(statement).toContain(writtenAccountSentence());
+    expect(statement).toMatch(/my name and legal name/);
+    expect(statement).toMatch(/the list of all my evidence files.*including files I don’t share/);
+    expect(consentMatches(statement, { files: 0 })).toBe(true);
+    expect(consentMatches(statement, { files: 1 })).toBe(false);
   });
 
   it('is honest about what stopping can and cannot do, and says no is fine', () => {

@@ -59,6 +59,15 @@ describe('groupActivity', () => {
   });
 });
 
+describe('describeAudit', () => {
+  it('tells her when an attorney she shared with is no longer verified, and that she decides', () => {
+    expect(describeAudit(ev('attorney.unverified', '2026-10-07T03:00:00Z'))).toBe(
+      'An attorney you shared with is no longer verified by Matra. Their access is paused: you can revoke it or keep it',
+    );
+    expect(describeAudit(ev('attorney.reverified', '2026-10-07T04:00:00Z'))).toMatch(/verified by Matra again/);
+  });
+});
+
 describe('formatRange', () => {
   it('shows one date and a time range for a run within a day', () => {
     const s = formatRange('2026-10-07T14:04:00', '2026-10-07T14:31:00');

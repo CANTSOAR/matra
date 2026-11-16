@@ -403,7 +403,9 @@ function eligibility(r: IntakeRecord, now: Date) {
       text: (r.priorReports.length ? 'Your intake lists a report, but not one to police or a prosecutor. ' : 'No police report is recorded. ') + 'Under current New Jersey law the crime must be reported to police or another law ' +
         'enforcement agency within 9 months of when it happened (or was reasonably discovered)' +
         (dl ? ` — for the date you gave, by ${formatDateUTC(dl)}` : '') +
-        '. A forensic exam with a “Five-Year Hold Kit” alone does not currently meet this requirement. Bills pending in ' +
+        // Unreported kits are called "Hold" kits since AG Directive 2023-1 (Mar 13 2023) §V.A replaced the 2018
+        // Standards' "Five-Year Hold Kit" (retention is now 20 years). https://www.nj.gov/oag/dcj/agguide/directives/AG-Directive-2023-1_Amended-082024.pdf
+        '. A forensic exam with an unreported (“Hold”) kit alone does not currently meet this requirement. Bills pending in ' +
         'the Legislature (S1294 / A6254) would create an exception for survivors who received forensic medical services; ' +
         'as of this draft we could not confirm they have become law. Ask a victim advocate.',
     });

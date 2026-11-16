@@ -16,6 +16,7 @@
   - Verified attorneys **`attorney.nj1`** (NJ), **`attorney.ny1`** (NY), and **`attorney.nj2`** (NJ/NY), passphrase `demo-attorney-passphrase`.
   - Verified Legal Options Counselors **`counselor.ny`** (licensed NY), **`counselor.nj`** (licensed NJ), **`counselor.pa`** (licensed PA), passphrase `demo-counselor-passphrase`, on a roster signed with the demo organization key. Counselors sign in through the **Legal options counselors** link on the welcome page.
   - Jane's phone check uses the mock SMS provider: the code is shown on screen ("Demo: your code is …"). Use a fictional number such as `(201) 555-0113`.
+- This demo runs with `MATRA_MATCHING=on` so that step 10 exists. The pilot setting is `MATRA_MATCHING=off`, which has no sealed match, phone step or counselor screen at all; if the audience is a pilot partner, skip step 10 and say that matching is off for any pilot.
 - What is simulated, say it if asked: the matcher's attestation is signed by a demo key on this laptop, not by enclave hardware; the SMS provider is a mock that texts nobody; all keys (including all three OPRF shares) sit on one machine, which a real deployment never allows.
 - Have a **sample photo with GPS EXIF** on the desktop (for example, one taken with a phone that has location on) and an EXIF viewer ready (`exiftool` or an online viewer used **only** with the demo photo).
 - Use two browser profiles: Profile A for the survivor, Profile B for the attorney and, later, the counselor.
@@ -72,8 +73,8 @@
 - Optional: on **Your vault**, **Download my data** produces one .zip decrypted on her device (records, evidence, manifest with hashes). It warns first that the file is not encrypted.
 
 ### 7. Share to an attorney (6:00-7:00)
-- Choose **`attorney.nj1`** from the verified list. Read the consent text aloud. Select the scope (record plus evidence). Share.
-- **Talking point:** *"The record key is re-encrypted to this attorney's public key. The exact consent text is hashed into the ledger. Only verified attorneys appear."*
+- Choose **`attorney.nj1`** from the verified list. Read the consent text aloud: her written account is always shared, whole, and it says what that holds. Tick the evidence files to share (none are ticked to start). Share.
+- **Talking point:** *"The key to this sealed version is re-wrapped to this attorney's public key on her device. The exact consent text is hashed into the ledger. Only verified attorneys appear. The screen says plainly that the whole written account goes, and lists it. The attorney sees her under a made-up label for this share (`Client` and five characters), not the name she signs in with."*
 
 ### 8. Attorney view and access log (7:00-8:00)
 - In Profile B, log in as `attorney.nj1`. Open the incoming share and decrypt. Download the photo.
@@ -82,7 +83,7 @@
 
 ### 9. Revoke (8:00-8:30)
 - As the survivor, **revoke**. In Profile B, refresh: access is denied.
-- **Talking point (be explicit):** *"Revocation stops future access. It can't un-download what the attorney already saved. That's why the partner MOU has deletion duties."*
+- **Talking point (be explicit):** *"Revocation stops future access, and we delete the attorney's copy of the key from our database. It can't un-download what the attorney already saved. That's why the partner MOU has deletion duties."*
 - Log out of `attorney.nj1` in Profile B before step 10.
 
 ### 10. Confidential matching and the counselor (8:30-9:30), **framed as a prototype**
@@ -112,7 +113,7 @@ Keep http://localhost:5173/inspector open next to the app, in the same browser. 
 ## Anticipated hard questions, with honest answers
 
 **"Can a defense attorney subpoena this?"**
-They can't get content from *us*, because we can't decrypt it. We can be compelled to produce metadata: that an account exists, when it was used, and who it shared with. *She* can be ordered to produce her records, subject to a motion to quash. If she gives anything to police, it's discoverable, and inconsistencies are impeachment material. We say this to her up front.
+We hold only ciphertext, so there is no plaintext for us to hand over. We can be compelled to produce metadata: that an account exists, when it was used, and who it shared with. *She* can be ordered to produce her records, subject to a motion to quash. If she gives anything to police, it's discoverable, and inconsistencies are impeachment material. We say this to her up front. One honest limit on "we can't read it": our server also delivers the app's code, so someone who took over the server could ship a changed app that captures a passphrase (threat model W4), and nothing yet lets her check the code she was served. Whether we could be ordered to do that is for counsel.
 
 **"Is anything she writes privileged?"**
 Not by default. A personal journal isn't privileged just because it's encrypted. Communications with her lawyer for legal advice are. That's why we're building an **attorney-first** path, where her lawyer can ask her to prepare her account for counsel. Licensed counsel needs to confirm how far that goes.
@@ -120,8 +121,8 @@ Not by default. A personal journal isn't privileged just because it's encrypted.
 **"Does this help with 'she waited too long' arguments?"**
 It can corroborate. A sealed, timestamped record may rebut a claim of *recent* fabrication if it predates the alleged motive (N.J.R.E. 803(a)(2); *Tome*). It doesn't replace her testimony, and the app isn't a fresh complaint.
 
-**"Every saved version is kept. Doesn't that create impeachment material?"**
-Yes, and that's a real trade-off. Next phase: private drafts stay on her device and unsealed, sealing is a deliberate step, and warnings explain the trade-off. We want counsel's view on the right default.
+**"Every sealed version is kept. Doesn't that create impeachment material?"**
+Yes, and that's a real trade-off. Her draft isn't versioned: it's one encrypted copy, saved over as she writes, with no ledger entry. Only sealing, a deliberate step, makes a kept, timestamped version, and warnings explain the trade-off. A deployment can instead keep every draft save (`MATRA_DRAFT_MODE=keep-versions`). We want counsel's view on the right default.
 
 **"Is your ledger admissible? Who certifies it?"**
 Hashes support authentication. They don't overcome hearsay or confrontation objections. We'll need a named custodian, a documented procedure, and external timestamp anchoring before we'd suggest anyone rely on it in court.

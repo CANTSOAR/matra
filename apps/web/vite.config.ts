@@ -31,13 +31,37 @@ function ortRuntimeFromModels(): Plugin {
 }
 
 /**
+ * MATRA_MATCHING=off|on (one switch, also read by the app server; @matra/shared matching-mode.ts). Off — the pilot
+ * default — builds the app WITHOUT sealed matching: `__MATRA_MATCHING__` is a literal false, so the matching screens,
+ * the escrow and match-contact questions, the phone step, the counselor portal and their API calls are left out of the
+ * bundle (scripts/audit-web-build.mjs checks for their route strings). A production build must say which (see
+ * assertProductionPins); development defaults to off. With it off, the OPRF and matcher pins are not used and must not
+ * be set (a pin for a feature the build doesn't have means someone expected matching to be in it).
+ */
+const matchingRaw = (process.env.MATRA_MATCHING ?? '').trim().toLowerCase();
+if (matchingRaw && matchingRaw !== 'on' && matchingRaw !== 'off')
+  throw new Error(`MATRA_MATCHING must be "off" or "on", got "${process.env.MATRA_MATCHING}"`);
+const MATCHING_IN_BUILD = matchingRaw === 'on';
+if (!MATCHING_IN_BUILD) {
+  const pins = ['MATRA_OPRF_THRESHOLD', 'MATRA_OPRF_GROUP_PUBKEY', 'MATRA_OPRF_SHARE_PUBKEYS', 'MATRA_ATTESTATION_PLATFORM_PUBKEY', 'MATRA_MATCHER_MEASUREMENT'].filter(
+    (v) => (process.env[v] ?? '').trim() !== '',
+  );
+  if (pins.length)
+    throw new Error(
+      `MATRA_MATCHING is ${matchingRaw ? 'off' : 'off (the default)'}, but the sealed-matching pins ${pins.join(', ')} are set. Remove them, or set MATRA_MATCHING=on.`,
+    );
+}
+
+/**
  * Build-time pins for sealed matching (docs/SECURITY_WHITEPAPER.md §4a). Production builds set them all, so the app
  * server cannot substitute OPRF keys or counselors it controls (values from `npm run -w @matra/server oprf-ceremony`):
  *   MATRA_OPRF_THRESHOLD          t (default 2 when the keys below are set)
  *   MATRA_OPRF_GROUP_PUBKEY       base64 group public key k·G of the threshold OPRF
  *   MATRA_OPRF_SHARE_PUBKEYS      base64 share public keys of holders 1..m, comma-separated, in index order
- *   MATRA_COUNSELOR_ROSTER_PUBKEY base64 Ed25519 key of the org that signs the counselor roster
- * Unset (development): nothing is pinned and the client logs a warning.
+ *   MATRA_COUNSELOR_ROSTER_PUBKEY base64 Ed25519 key of the org that signs the counselor roster and the attorney
+ *                                 directory (W3)
+ * Unset (development): nothing is pinned and the client logs a warning. A production build that is not a demo
+ * (MATRA_DEMO_MODE=1) fails without them: see assertProductionPins below.
  */
 if (process.env.MATRA_OPRF_PUBKEY_A || process.env.MATRA_OPRF_PUBKEY_B)
   throw new Error('MATRA_OPRF_PUBKEY_A/B were replaced by MATRA_OPRF_GROUP_PUBKEY + MATRA_OPRF_SHARE_PUBKEYS (threshold OPRF; see docs/DEPLOY.md).');
@@ -93,21 +117,69 @@ if (attestationPins.measurement && !/^[0-9a-f]{64}$/.test(attestationPins.measur
   throw new Error('MATRA_MATCHER_MEASUREMENT must be 64 hex characters (npm run -w @matra/matcher measure)');
 const demoBuild = process.env.MATRA_DEMO_MODE === '1';
 
-/** Throws for a production build of the app (not the voice-only test page) with no matcher pins, unless a demo build. */
-export function assertMatcherPinned(o: { command: string; mode: string; pinned: boolean; demo: boolean; harnessOnly: boolean }) {
-  if (o.command === 'build' && o.mode === 'production' && !o.harnessOnly && !o.pinned && !o.demo)
+/**
+ * Throws for a production build of the app (not the voice-only test page) that doesn't set MATRA_MATCHING, or that is
+ * missing a pin, unless (for the pins) it is a fictional-data demo build (MATRA_DEMO_MODE=1). Development servers,
+ * `vite build --mode development` and the e2e dev servers are not affected.
+ *   - matcher pins (when the build includes sealed matching): an unpinned client would seal every survivor's states to
+ *     whatever key the app server hands it (W18)
+ *   - roster / directory key: an unpinned client trusts the app server's attorney keys, so the operator could swap in
+ *     its own key and receive shared records (W3); the share screen also refuses unpinned keys in such a build
+ *   - OPRF pins (when the build includes sealed matching): an unpinned client accepts whatever key set the server sends,
+ *     so the operator could evaluate identifiers under keys it holds (W2, W14). Part-set pins already fail above.
+ */
+export function assertProductionPins(o: {
+  command: string;
+  mode: string;
+  demo: boolean;
+  harnessOnly: boolean;
+  matcherPinned: boolean;
+  rosterPinned: boolean;
+  oprfPinned: boolean;
+  matching: boolean;
+  /** MATRA_MATCHING was set ("off" or "on"): a production build must say which, demo or not */
+  matchingExplicit: boolean;
+}) {
+  if (o.command !== 'build' || o.mode !== 'production' || o.harnessOnly) return;
+  if (!o.matchingExplicit)
+    throw new Error('A production build must set MATRA_MATCHING: "off" (the pilot: sealed matching left out) or "on" (see docs/DEPLOY.md).');
+  if (o.demo) return;
+  const missing = [
+    ...(!o.matching || o.matcherPinned ? [] : ['the matcher pins MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT']),
+    ...(o.rosterPinned ? [] : ['the organization key MATRA_COUNSELOR_ROSTER_PUBKEY (counselor roster and attorney directory)']),
+    ...(o.matching && !o.oprfPinned ? ['the OPRF pins MATRA_OPRF_THRESHOLD, MATRA_OPRF_GROUP_PUBKEY and MATRA_OPRF_SHARE_PUBKEYS'] : []),
+  ];
+  if (missing.length)
     throw new Error(
-      'A production build needs the matcher pins MATRA_ATTESTATION_PLATFORM_PUBKEY and MATRA_MATCHER_MEASUREMENT (see docs/DEPLOY.md). ' +
+      `A production build needs ${missing.join('; ')} (see docs/DEPLOY.md). ` +
         'Set MATRA_DEMO_MODE=1 only for a fictional-data demo build.',
     );
 }
 
+/**
+ * Writes `matra-build.json` ({ "matching": "off" | "on" }) next to index.html, so the server can refuse to serve a build
+ * made for the other mode (apps/server/src/matching-off.ts) and the bundle audit checks the build it is given, not
+ * whatever MATRA_MATCHING its own shell has (scripts/audit-web-build.mjs).
+ */
+export const BUILD_INFO_FILE = 'matra-build.json';
+function matraBuildInfo(): Plugin {
+  return {
+    name: 'matra:build-info',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: BUILD_INFO_FILE, source: JSON.stringify({ matching: MATCHING_IN_BUILD ? 'on' : 'off' }) + '\n' });
+    },
+  };
+}
+
 const config = {
-  plugins: [react()],
+  plugins: [react(), matraBuildInfo()],
   define: {
-    __MATRA_MATCH_PINS__: JSON.stringify(matchPins),
+    // a build without sealed matching carries only the org key (attorney directory), not the OPRF pin fields
+    __MATRA_MATCH_PINS__: JSON.stringify(MATCHING_IN_BUILD ? matchPins : { rosterKey: matchPins.rosterKey }),
     __MATRA_ATTESTATION__: JSON.stringify(attestationPins),
     __MATRA_DEMO__: JSON.stringify(demoBuild),
+    __MATRA_MATCHING__: JSON.stringify(MATCHING_IN_BUILD),
   },
   // The transcription worker (src/voice/worker.ts) is an ES module worker: it code-splits and uses import.meta.
   worker: { format: 'es', plugins: () => [ortRuntimeFromModels()] },
@@ -133,12 +205,17 @@ const config = {
 } as any;
 
 export default defineConfig(({ command, mode }) => {
-  assertMatcherPinned({
+  assertProductionPins({
     command,
     mode,
-    pinned: !!attestationPins.measurement,
     demo: demoBuild,
     harnessOnly: process.env.MATRA_VOICE_HARNESS === 'only',
+    matcherPinned: !!attestationPins.measurement,
+    rosterPinned: !!matchPins.rosterKey,
+    // all-or-nothing is enforced above, so the group key stands for the whole set
+    oprfPinned: !!matchPins.oprfGroup && matchPins.oprfShares.length > 0,
+    matching: MATCHING_IN_BUILD,
+    matchingExplicit: matchingRaw !== '',
   });
   return config;
 });

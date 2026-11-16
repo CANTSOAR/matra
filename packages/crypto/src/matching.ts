@@ -13,8 +13,11 @@
  *            same blinded element to every holder, verifies EACH holder's DLEQ proof against its published (build-time
  *            pinned) share public key, refuses inconsistent or degenerate key sets, combines any t valid evaluations
  *            with Lagrange coefficients in the exponent and unblinds:  P̂ = Finalize(input, blind, Σ λ_i·Eval_i) =
- *            VOPRF_k(input). Fewer than t holders learn nothing about x_id and cannot compute P̂ (offline dictionary
- *            attacks over phone numbers need t shares). This t is the KEY threshold; the MATCH threshold (2 distinct
+ *            VOPRF_k(input). Fewer than t holders learn nothing about x_id and cannot compute P̂, so an OFFLINE
+ *            dictionary attack over phone numbers needs t shares. An ONLINE attack needs no shares: it asks t holders to
+ *            evaluate each guess, and only the per-account budget (and each holder's own counter) limits it. Those limits
+ *            bind survivor accounts through an honest app server, not an operator who runs the holders or holds the
+ *            holder-token key (threat model W14). This t is the KEY threshold; the MATCH threshold (2 distinct
  *            survivors) below is separate.
  *   KDF    : HKDF-SHA256(salt = "matra/match/v2") with distinct info labels:
  *              a  (slope)              = HKDF(P̂, "slope")     ∈ F_p, p = 2^256 + 297 (Callisto's field)
@@ -40,6 +43,9 @@
  *            never be taken for the real one), derives K_P from that k and opens EVERY entry's ce with it — a decoy
  *            cannot hide real reports in either order. Extra lines, foreign self-consistent lines, off-line points,
  *            duplicated shares and differing identifiers are reported as alerts.
+ *            The ≥ 2 survivors rule is the SERVER's release rule, not a cryptographic one: ONE counselor seal plus P̂ for
+ *            the identifier (one OPRF evaluation of a guess) gives k, K_P, ke and so opens that single entry's bundle and
+ *            contact details (threat model W1, W14, W21).
  *
  * ── Deviations from P1 (deliberate) ──────────────────────────────────────────────────────────────────
  *   • VOPRF with per-holder DLEQ proofs (P1 used a plain OPRF): a malicious key holder cannot silently return a

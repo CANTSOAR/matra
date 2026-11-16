@@ -16,6 +16,8 @@ x-image: &image
     context: .
     args:
       MATRA_DEMO_MODE: "1"
+      # the demo stack shows sealed matching end to end (the pilot builds and runs with MATRA_MATCHING=off)
+      MATRA_MATCHING: "on"
       MATRA_OPRF_THRESHOLD: ${MATRA_OPRF_THRESHOLD:?run npm run stack:init first}
       MATRA_OPRF_GROUP_PUBKEY: ${MATRA_OPRF_GROUP_PUBKEY}
       MATRA_OPRF_SHARE_PUBKEYS: ${MATRA_OPRF_SHARE_PUBKEYS}
@@ -28,6 +30,7 @@ x-image: &image
 x-demo-env: &demo-env
   NODE_ENV: production
   MATRA_DEMO_MODE: "1"
+  MATRA_MATCHING: "on"
   MATRA_INSPECTOR: "1"
   PORT: "8080"
 

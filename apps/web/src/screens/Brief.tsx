@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
+import { VaultStopped } from '../components/UnreadableNote';
 import {
   BriefPreview,
   downloadPdf,
@@ -12,11 +13,13 @@ import {
 } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { NOTICES } from '../lib/disclosures';
-import { finals, loadVault } from '../lib/vault';
+import { finals, loadSpace } from '../lib/vault';
 
 export function Brief() {
   const { api, session } = useRequiredSession();
-  const vault = useAsync(() => loadVault(api, session.masterKey), [api, session.masterKey]);
+  // Fails closed (lib/vault.ts loadSpace): a summary she may hand to someone is only made from a space that loaded
+  // cleanly, so it is never silently of an older version.
+  const vault = useAsync(() => loadSpace(api, session.masterKey).then((s) => s.vault), [api, session.masterKey]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [redact, setRedact] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -66,7 +69,7 @@ export function Brief() {
         Incident summary
       </PageTitle>
       {vault.loading && <Loading label="Opening your space…" />}
-      {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
+      {vault.error && <VaultStopped error={vault.error} onRetry={() => void vault.reload()} />}
       {!vault.loading && !vault.error && sealed.length === 0 && (
         <div className="card stack">
           <p>Once your story is sealed, you can prepare a summary here. There’s no rush.</p>

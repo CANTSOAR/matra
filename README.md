@@ -1,8 +1,8 @@
 # Matra
 
-Matra is open-source, non-profit software for adult (18+) survivors of sexual assault. A survivor writes down what happened once, through a warm, trauma-informed intake: she can start anywhere and tell it her way, typed or spoken (transcribed on her device), or answer one question at a time. Every question can be skipped, and her words are never rewritten. Her record and evidence files are encrypted in her browser, so the operator cannot read them. She can then choose to share a record, with explicit and revocable consent, with a verified attorney. The attorney's portal decrypts only what she shared. Matra also generates an incident-summary PDF and an NJ VCCO draft on her device, keeps a hash-chain integrity ledger, and lets her download all her data at any time. A demo-only matching feature (being rebuilt along the lines of Callisto's published OPRF design) matches unique identifiers, never names. Matches are never shown to survivors. A Legal Options Counselor, a licensed attorney, sees the matched group and contacts each survivor who opted in. A match is a lead, not evidence.
+Matra is open-source, non-profit software for adult (18+) survivors of sexual assault. A survivor writes down what happened once, through a warm, trauma-informed intake: she can start anywhere and tell it her way, typed or spoken (transcribed on her device), or answer one question at a time. Every question can be skipped, and her words are never rewritten. Her record and evidence files are encrypted in her browser, so the server stores only ciphertext and the operator cannot read them from what it stores. (The browser code comes from the same server, so an operator who changed it could capture her passphrase; see the status note below.) She can then choose to share her sealed account, with explicit and revocable consent, with a verified attorney, plus any evidence files she ticks one by one. The attorney's portal decrypts only what she shared, and the share screen lists exactly what that is. While she writes, her draft is saved over in a separate encrypted slot (no new ledger entry each time); sealing keeps only her account as a permanent version. Matra also generates an incident-summary PDF and an NJ VCCO draft on her device, keeps a hash-chain integrity ledger, and lets her download all her data at any time. A demo-only matching feature (built along the lines of Callisto's published OPRF design) matches unique identifiers, never names. It is off by default and off for the pilot (`MATRA_MATCHING=off`): a pilot build and server contain none of it. When it is on, matches are never shown to survivors, and a Legal Options Counselor, a licensed attorney, sees the matched group and contacts each survivor who opted in. A match is a lead, not evidence.
 
-**Status: MVP / pre-pilot prototype. Do not use it with real survivor data.** It has had no independent security audit and no review by licensed counsel. The integrity ledger is self-hosted and not yet externally anchored. Matra cannot decrypt records, but the survivor (and anyone she shares with) can still be compelled to produce them, and metadata is visible to the operator. See [docs/SECURITY_WHITEPAPER.md](docs/SECURITY_WHITEPAPER.md) and [docs/threat-model.md](docs/threat-model.md).
+**Status: MVP / pre-pilot prototype. Do not use it with real survivor data.** It has had no independent security audit and no review by licensed counsel. The integrity ledger is self-hosted and not yet externally anchored. Matra's server cannot decrypt records, but the survivor (and anyone she shares with) can still be compelled to produce them, and metadata is visible to the operator. The operator also delivers the app's code, so someone who controlled the server could ship a changed app that captures a passphrase (threat model W4); nothing yet lets a survivor check the code she was served. Passphrases are six random words made on her device; the strength rules are enforced by the app, not the server. See [docs/SECURITY_WHITEPAPER.md](docs/SECURITY_WHITEPAPER.md) and [docs/threat-model.md](docs/threat-model.md).
 
 ## Commitments
 
@@ -10,7 +10,7 @@ Written down so they can be held against us. Full text in [GOVERNANCE.md](GOVERN
 
 - No business model, no equity, no sale of data, no advertising, no analytics or telemetry.
 - Licensed under [AGPL-3.0-only](LICENSE). Every deployment must offer its users the source.
-- The operator cannot read survivor records. Where the operator can still see something (metadata), we say so in the security docs.
+- The server stores survivor records only as ciphertext, so the operator cannot read them from what it stores. Where the operator can still see something (metadata), and the limit that it also serves the app's code (threat model W4), we say so in the security docs.
 - Attorney routing is run on a non-profit basis with no referral fees and no fee sharing ([docs/LEGAL_RESEARCH_MEMO.md](docs/LEGAL_RESEARCH_MEMO.md) section 5).
 - Survivors' data is theirs. We never delete it without her individual consent. She gets at least 90 days' notice of any shutdown or material change, export always, migration to a named successor only if she opts in, and no silent confidentiality downgrade. See [docs/SUCCESSION_AND_DATA_PROMISE.md](docs/SUCCESSION_AND_DATA_PROMISE.md) (parts still need board and counsel adoption).
 - Built to last: diversified funding, reserves before real data, and a funded wind-down plan ([docs/SUSTAINABILITY_PLAN.md](docs/SUSTAINABILITY_PLAN.md)).
@@ -24,6 +24,7 @@ Requires Node.js and npm.
 npm install
 npm run seed     # creates fictional demo accounts (synthetic data only)
 npm run dev      # API on http://localhost:4000, web app on http://localhost:5173
+                 # sealed matching is off by default; MATRA_MATCHING=on npm run seed / npm run dev turn it on
 npm test
 npm run typecheck
 ```
@@ -33,10 +34,10 @@ Open http://localhost:5173.
 Production build (the API server also serves the built web app, under a strict CSP):
 
 ```sh
-npm run build
-NODE_ENV=production MATRA_PEPPER=$(openssl rand -hex 32) npm start   # http://localhost:4000
-npm run e2e          # browser suite against the dev stack
-npm run e2e:prod     # the same suite against the production build
+MATRA_DEMO_MODE=1 MATRA_MATCHING=off npm run build    # production builds must say MATRA_MATCHING=off|on
+NODE_ENV=production MATRA_MATCHING=off MATRA_PEPPER=$(openssl rand -hex 32) npm start   # http://localhost:4000
+npm run e2e          # browser suites: the demo path (matching on), the pilot path (off), the demo stack
+npm run e2e:prod     # the demo path against a production build (build it with MATRA_MATCHING=on)
 ```
 
 Deploying a demo instance (Docker / Render): see [docs/DEPLOY.md](docs/DEPLOY.md).
@@ -49,7 +50,7 @@ Deploying a demo instance (Docker / Render): see [docs/DEPLOY.md](docs/DEPLOY.md
 | `attorney.nj1` | Verified attorney (NJ) | `demo-attorney-passphrase` |
 | `attorney.ny1` | Verified attorney (NY) | `demo-attorney-passphrase` |
 | `attorney.nj2` | Verified attorney (NJ/NY) | `demo-attorney-passphrase` |
-| `counselor.demo` | Legal Options Counselor (sealed-matching demo; sign in via "I’m an attorney" or `/counselor`) | `demo-counselor-passphrase` |
+| `counselor.demo` | Legal Options Counselor (sealed-matching demo, only seeded with `MATRA_MATCHING=on`; sign in via "I’m an attorney" or `/counselor`) | `demo-counselor-passphrase` |
 
 All names and organizations are fictional and labelled "Demo —". For a guided walkthrough, see [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
@@ -58,11 +59,14 @@ All names and organizations are fictional and labelled "Demo —". For a guided 
 | Variable | Purpose |
 |---|---|
 | `MATRA_DB_PATH` | SQLite database location (default `apps/server/data/matra.db`) |
+| `MATRA_DRAFTS_DB_PATH` | Her draft slots' own SQLite file (default `<name>-drafts.db` beside `MATRA_DB_PATH`). Back it up, restore it and delete it together with the main database. See docs/DEPLOY.md |
+| `MATRA_DRAFT_MODE` | `slot` (default): her draft is saved over as she writes, and only a seal is a kept, ledgered version. `keep-versions`: every draft save is also kept as a record. Which one launches is for counsel (docs/DEPLOY.md) |
 | `MATRA_PEPPER` | Server secret (used for enumeration-resistant fake login salts), at least 32 characters. **Required in production.** In development one is generated in `apps/server/data/pepper.key` |
 | `MATRA_CORS_ORIGINS` | Comma-separated allowed origins (rarely needed; the Vite dev server proxies `/api`) |
 | `MATRA_DEMO_BANNER` | `1` shows a "DEMO — do not enter real information" banner on every page (production serving) |
 | `MATRA_TRUST_PROXY` | Number of reverse-proxy hops to trust for client IPs (rate limiting), e.g. `1` on Render |
-| `MATRA_OPRF_SHARE_<i>` (or `_FILE` variants), `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_HOLDERS` | The sealed-matching threshold OPRF key shares (default 2-of-3), from `npm run -w @matra/server oprf-ceremony`. In production run each holder as its own process (`npm run -w @matra/server holder`; see docs/DEPLOY.md) and keep shares secret; in development a ceremony runs once into `apps/server/data/oprf-share-<i>.key`. `MATRA_REQUIRE_OPRF_KEYS=1` makes a missing share fatal |
+| `MATRA_MATCHING` | `off` or `on`: sealed matching in this deployment, for the server and the web build. Off (the default outside production, and the pilot setting) leaves it out entirely and refuses every matching variable below. **Required in production.** See docs/DEPLOY.md |
+| `MATRA_OPRF_SHARE_<i>` (or `_FILE` variants), `MATRA_OPRF_THRESHOLD`, `MATRA_OPRF_HOLDERS` | With `MATRA_MATCHING=on`: the sealed-matching threshold OPRF key shares (default 2-of-3), from `npm run -w @matra/server oprf-ceremony`. In production run each holder as its own process (`npm run -w @matra/server holder`; see docs/DEPLOY.md) and keep shares secret; in development a ceremony runs once into `apps/server/data/oprf-share-<i>.key`. `MATRA_REQUIRE_OPRF_KEYS=1` makes a missing share fatal |
 | `MATRA_OPRF_PER_DAY`, `MATRA_OPRF_LIFETIME` | Per-account rate limits on matching evaluations (defaults 10/day, 50 lifetime) |
 | `MATRA_AUTO_VERIFY_ATTORNEYS` | `1` auto-verifies new attorney accounts. **Development only.** Otherwise use `npm run -w @matra/server verify-attorney -- <username>` |
 

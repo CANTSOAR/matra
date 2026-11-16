@@ -7,8 +7,10 @@ import { createMatcher } from './index.js';
 import { createMatcherApp } from './app.js';
 import { loadMatcherSettings } from './config.js';
 import { matcherDebugState } from './debug.js';
-import { inspectorEnabled } from '@matra/shared';
+import { assertMatchingService, inspectorEnabled } from '@matra/shared';
 
+// The matcher exists only for sealed matching: it refuses to run where MATRA_MATCHING=off.
+assertMatchingService(process.env, 'The matcher');
 const s = loadMatcherSettings();
 const { matcher, store } = createMatcher({ dbPath: s.dbPath, keys: s.keys, releaseDelayMs: s.releaseDelayMs, rosterKey: s.rosterKey });
 const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');

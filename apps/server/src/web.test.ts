@@ -10,6 +10,7 @@ import { TEST_PEPPER } from './test-helpers.js';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matra-web-'));
 fs.mkdirSync(path.join(dir, 'assets'));
 fs.writeFileSync(path.join(dir, 'index.html'), '<!doctype html><html><head><title>Notes</title></head><body><div id="root"></div></body></html>');
+fs.writeFileSync(path.join(dir, 'matra-build.json'), '{"matching":"off"}\n'); // what vite.config.ts writes; createApp checks it
 fs.writeFileSync(path.join(dir, 'assets', 'index-abc123.js'), 'console.log(1)');
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 

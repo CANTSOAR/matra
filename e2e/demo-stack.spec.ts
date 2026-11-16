@@ -71,7 +71,7 @@ test('2. the attorney opens the story Riley shared with them (seeded), decrypted
   await signIn(page, 'attorney.nj1', ATTORNEY_PASS, 'attorney');
   await expect(page.getByTestId('attorney-directory-status')).toContainText('Matra’s signed attorney directory lists this key as yours');
   await page.getByRole('link', { name: 'Open' }).first().click();
-  await expect(page.getByRole('heading', { name: 'Client: riley.demo' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: 'Client RLDM3' })).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('main')).toContainText('He was my landlord.');
   const checks = page.getByTestId('case-checks');
   await expect(checks.locator('[data-check="account"]')).toContainText('This account has not changed since it was sealed on');

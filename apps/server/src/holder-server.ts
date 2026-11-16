@@ -5,8 +5,10 @@
  */
 import { createHolderApp } from './holder.js';
 import { loadHolderSettings } from './config.js';
-import { inspectorEnabled } from '@matra/shared';
+import { assertMatchingService, inspectorEnabled } from '@matra/shared';
 
+// A key holder exists only for sealed matching: it refuses to run where MATRA_MATCHING=off.
+assertMatchingService(process.env, 'An OPRF key holder');
 const s = loadHolderSettings();
 const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 const app = createHolderApp({ index: s.index, share: s.share, tokenPublicKey: s.tokenPublicKey, dbPath: s.dbPath, limits: s.limits, dailyBudget: s.dailyBudget, logRequests: process.env.MATRA_LOG_REQUESTS !== '0', debug: inspectorEnabled(process.env) });

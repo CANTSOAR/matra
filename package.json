@@ -24,8 +24,9 @@
     "stack:down": "docker compose --env-file .stack/stack.env down",
     "stack:logs": "docker compose --env-file .stack/stack.env logs -f",
     "stack:reset": "docker compose --env-file .stack/stack.env down -v; node scripts/stack-init.mjs && npm run stack:up",
-    "e2e": "playwright test && playwright test -c playwright.demo.config.ts",
+    "e2e": "playwright test && playwright test -c playwright.pilot.config.ts && playwright test -c playwright.demo.config.ts",
     "e2e:demo": "playwright test -c playwright.demo.config.ts",
+    "e2e:pilot": "playwright test -c playwright.pilot.config.ts",
     "e2e:prod": "playwright test -c playwright.prod.config.ts",
     "legal": "node scripts/legal-bank.mjs"
   },
