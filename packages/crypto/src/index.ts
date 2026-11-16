@@ -8,7 +8,8 @@
  *        ├─ key version 1: HKDF("matra/master") → masterKey (AES-256-GCM, never leaves the device)
  *        │                 HKDF("matra/match-x") → matchKey (HMAC, sealed-match share x-coordinates)
  *        └─ key version 2: HKDF("matra/kek") → KEK_pass, which unwraps the account secret
- *   account secret AS (64 bytes) = master (32) ‖ matchX (32). For an account that moves from version 1 to 2, AS is
+ *   account secret AS (64 bytes) = master (32) ‖ matchX (32). Both versions also derive HKDF(AS, "matra/slot-name/v1")
+ *   → slotNameKey (HMAC), which names her draft slots opaquely (./slots.ts). For an account that moves from version 1 to 2, AS is
  *   exactly the bytes version 1 derived, so nothing is re-encrypted. In version 2 the server stores
  *   AES-GCM(KEK_pass, AS) and, if she set one up, AES-GCM(KEK_rec, AS) where KEK_rec comes from her recovery code
  *   (./recovery.ts). Changing the passphrase then only re-wraps AS.
@@ -80,6 +81,27 @@ export function matchKeyFor(masterKey: CryptoKey): CryptoKey | undefined {
   return MATCH_KEYS.get(masterKey);
 }
 
+// masterKey → slotNameKey, for the lifetime of the in-memory key objects only (never persisted).
+const SLOT_NAME_KEYS = new WeakMap<CryptoKey, CryptoKey>();
+
+/**
+ * The HMAC key that names her draft slots (./slots.ts slotName), derived alongside `masterKey` from the account secret
+ * by every unlock path (undefined for keys from elsewhere, so a slot is never named without it).
+ */
+export function slotNameKeyFor(masterKey: CryptoKey): CryptoKey | undefined {
+  return SLOT_NAME_KEYS.get(masterKey);
+}
+
+/**
+ * HKDF(AS, "matra/slot-name/v1") as a non-extractable HMAC-SHA256 key. Taken from the account secret rather than the
+ * passphrase seed, so key versions 1 and 2 (same AS) name the same slots. `masterKey` itself is a non-extractable AES
+ * key, so nothing can be derived from it.
+ */
+async function deriveSlotNameKey(accountSecret: Uint8Array): Promise<CryptoKey> {
+  const ikm = await subtle.importKey('raw', accountSecret as BufferSource, 'HKDF', false, ['deriveKey']);
+  return subtle.deriveKey(hkdf('matra/slot-name/v1'), ikm, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign']);
+}
+
 export function newKdfSalt(): string {
   return toBase64(randomBytes(16));
 }
@@ -140,6 +162,7 @@ export async function importAccountSecret(accountSecret: Uint8Array): Promise<{ 
     'sign',
   ]);
   MATCH_KEYS.set(masterKey, matchKey);
+  SLOT_NAME_KEYS.set(masterKey, await deriveSlotNameKey(accountSecret));
   return { masterKey, matchKey };
 }
 
@@ -157,6 +180,21 @@ export async function unwrapAccountSecret(wrapped: Envelope, kek: CryptoKey): Pr
     throw new Error('Not an account secret');
   }
   return as;
+}
+
+/**
+ * A new passphrase for the same account secret (changing the passphrase, plan PR 8): a fresh salt, the new auth key,
+ * and AS wrapped under the new KEK_pass. AS itself is unchanged, so every record and file key, her private key, her
+ * draft-slot names and a recovery code's wrap of AS stay valid. The caller wipes `accountSecret`.
+ */
+export async function passphraseMaterialFor(
+  accountSecret: Uint8Array,
+  newPassphrase: string,
+  iterations = DEFAULT_KDF_ITERATIONS,
+): Promise<{ kdfSalt: string; kdfIterations: number; authKey: string; wrappedAccountKey: Envelope; keys: PassphraseKeys }> {
+  const kdfSalt = newKdfSalt();
+  const keys = await derivePassphraseKeys(newPassphrase, kdfSalt, iterations);
+  return { kdfSalt, kdfIterations: iterations, authKey: keys.authKey, wrappedAccountKey: await wrapAccountSecret(accountSecret, keys.kek), keys };
 }
 
 /**
@@ -181,6 +219,13 @@ export async function unlockAccount(
   ]);
   const matchKey = await subtle.deriveKey(hkdf('matra/match-x'), keys.ikm, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign']);
   MATCH_KEYS.set(masterKey, matchKey);
+  // The slot-name key comes from AS (the bytes version 2 would wrap), so it doesn't change when she moves to version 2.
+  const as = await legacyAccountSecret(keys.ikm);
+  try {
+    SLOT_NAME_KEYS.set(masterKey, await deriveSlotNameKey(as));
+  } finally {
+    as.fill(0);
+  }
   return { masterKey, matchKey };
 }
 
@@ -314,3 +359,4 @@ export * from './matching';
 export * from './recovery';
 export * from './ledger';
 export * from './directory';
+export * from './slots';

@@ -5,21 +5,46 @@
  * Privacy invariants (enforced here AND by the production CSP `connect-src 'self'`):
  *  - audio arrives by postMessage and never leaves this worker except as text back to the page;
  *  - every model / runtime file is fetched from our own origin under /models/ (see scripts/fetch-models.mjs);
- *    remote model hosts and CDNs are disabled, so a misconfiguration fails closed instead of calling out.
+ *    remote model hosts and CDNs are disabled, so a misconfiguration fails closed instead of calling out;
+ *  - every one of those files is pinned by size and SHA-256 in src/ml/manifest.json and checked here, in the browser,
+ *    before it is used: on download and on every read from the cache. A file that does not match is refused, the
+ *    load fails, and nothing falls back to an unchecked copy (src/ml/verify.ts, src/ml/cache.ts);
+ *  - the one file the browser cannot check, because ONNX Runtime import()s it by URL (the CPU JS glue, which also starts
+ *    ORT's thread workers), is not fetched from /models/ at all: it is part of the app build, pinned at build time
+ *    (src/ml/ortPaths.ts, manifest.json "bundled"). A swapped /models/ort/*.mjs is never executed.
  */
 import { env, pipeline, Tensor, TextStreamer } from '@huggingface/transformers';
-import manifest from './model-manifest.json';
 import { isSilent, joinTranscripts, planChunks, resample, WHISPER_RATE } from './audio';
 import type { Device, FromWorker, ToWorker } from './protocol';
-import { CACHE_NAME, MODELS_BASE, ORT_BASE, runtimeCacheKey } from './config';
+import { runtimeFile, type Pinned } from '../ml/manifest';
+import { loadPinnedFile, VerifiedCache } from '../ml/cache';
+import { defaultEnv, makeVerifiedFetch } from '../ml/verify';
+import { ortWasmPaths } from '../ml/ortPaths';
+// The CPU glue is part of the app build (a content-hashed file under /assets/), not a /models/ file: see ml/manifest.json.
+import ortGlueUrl from 'onnxruntime-web/ort-wasm-simd-threaded.mjs?url';
+import { CACHE_NAME, MODELS_BASE, MODEL_ID, ORT_BASE, RUNTIME_CACHE_NAME, SPEECH, runtimeCacheKey } from './config';
 
 
 // ── fail-closed configuration ────────────────────────────────────────────────────────────────────────────────
+const loaderEnv = defaultEnv();
+/** Bytes of each model file received so far, for the setup progress bar (transformers.js only sees finished files). */
+const fileLoaded: Record<string, number> = {};
+let reportProgress: () => void = () => {};
 env.allowRemoteModels = false;
 env.allowLocalModels = true;
 env.localModelPath = MODELS_BASE;
 env.remoteHost = '/models/__remote_disabled__/'; // belt and braces: even if re-enabled, never a third-party host
-env.useBrowserCache = typeof caches !== 'undefined';
+// Every file transformers.js reads, from the network or from the cache, goes through our checks: the fetch only
+// serves pinned files from our origin and verifies them, the cache only returns bytes that still match their hash.
+env.fetch = makeVerifiedFetch(loaderEnv, (p: Pinned, loaded) => {
+  if (p.model) {
+    fileLoaded[p.file.path] = Math.max(fileLoaded[p.file.path] ?? 0, loaded);
+    reportProgress();
+  }
+}) as typeof env.fetch;
+env.useBrowserCache = false;
+env.useCustomCache = true;
+env.customCache = new VerifiedCache(CACHE_NAME, loaderEnv) as any;
 env.cacheKey = CACHE_NAME;
 // transformers.js would otherwise turn the wasm glue into a blob: URL (needs script-src blob:) — we load it ourselves.
 env.useWasmCache = false;
@@ -40,36 +65,12 @@ function getAsr(prefer?: Device | 'auto') {
   return asr;
 }
 
-/** Fetch a same-origin file with byte progress, through the Cache API so the one-time download stays one-time. */
-async function fetchCached(url: string, onBytes: (n: number) => void): Promise<{ buf: ArrayBuffer; fromCache: boolean }> {
-  const cache = typeof caches !== 'undefined' ? await caches.open(CACHE_NAME).catch(() => null) : null;
-  const key = runtimeCacheKey(url.slice(ORT_BASE.length));
-  const hit = await cache?.match(key);
-  if (hit) {
-    const buf = await hit.arrayBuffer();
-    onBytes(buf.byteLength);
-    return { buf, fromCache: true };
-  }
-  const res = await fetch(url, { credentials: 'same-origin' });
-  if (!res.ok || !res.body) throw new Error(`could not load ${url} (${res.status})`);
-  const reader = res.body.getReader();
-  const parts: Uint8Array[] = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parts.push(value);
-    got += value.length;
-    onBytes(value.length);
-  }
-  const bytes = new Uint8Array(got);
-  let o = 0;
-  for (const p of parts) {
-    bytes.set(p, o);
-    o += p.length;
-  }
-  await cache?.put(key, new Response(bytes.slice(), { headers: { 'content-type': 'application/wasm' } })).catch(() => {});
-  return { buf: bytes.buffer, fromCache: false };
+const runtimeCache = new VerifiedCache(RUNTIME_CACHE_NAME, loaderEnv);
+
+/** Load one pinned runtime file (cache first, else our origin), checked against the manifest either way. */
+async function loadRuntime(file: string, onBytes: (n: number) => void): Promise<{ buf: ArrayBuffer; fromCache: boolean }> {
+  const { bytes, fromCache } = await loadPinnedFile(ORT_BASE + file, runtimeCache, loaderEnv, onBytes, runtimeCacheKey(file));
+  return { buf: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, fromCache };
 }
 
 async function hasWebGpu(): Promise<boolean> {
@@ -90,12 +91,12 @@ async function load(prefer: Device | 'auto' = 'auto'): Promise<{ pipe: Asr; devi
   // falling back to the CPU with GPU<->CPU copies (headless may also use a software adapter). Making WebGPU the
   // default needs fp16/q4 weights (a second, larger download) and real-device numbers, so 'auto' = CPU (wasm).
   const gpu = prefer === 'webgpu' && (await hasWebGpu());
-  const runtime = gpu ? manifest.ort.webgpu : manifest.ort.wasm;
-  const modelBytes = manifest.files.reduce((n, f) => n + f.size, 0);
-  const total = modelBytes + runtime.size;
+  const wasmFile = runtimeFile(gpu ? 'webgpu-wasm' : 'cpu-wasm');
+  const modelBytes = SPEECH.files.reduce((n, f) => n + f.size, 0);
+  const total = modelBytes + wasmFile.size;
 
   let wasmLoaded = 0;
-  const fileLoaded: Record<string, number> = {};
+  for (const k of Object.keys(fileLoaded)) delete fileLoaded[k];
   let fromCache = true;
   let lastPost = 0;
   const report = (force = false) => {
@@ -105,16 +106,18 @@ async function load(prefer: Device | 'auto' = 'auto'): Promise<{ pipe: Asr; devi
     const loaded = Math.min(total, wasmLoaded + Object.values(fileLoaded).reduce((a, b) => a + b, 0));
     post({ type: 'load-progress', loaded, total, fromCache });
   };
+  reportProgress = () => report();
 
   // 1. ONNX Runtime wasm, from our origin only. The bundle's default would be cdn.jsdelivr.net.
-  const { buf, fromCache: wasmCached } = await fetchCached(ORT_BASE + runtime.wasm, (n) => {
+  const { buf, fromCache: wasmCached } = await loadRuntime(wasmFile.path, (n) => {
     wasmLoaded += n;
     report();
   });
   fromCache = fromCache && wasmCached;
   onnx.wasm.wasmBinary = buf;
-  // CPU build: its matching JS glue from our origin. WebGPU build: the glue embedded in the bundle.
-  onnx.wasm.wasmPaths = gpu ? { wasm: ORT_BASE + runtime.wasm } : { mjs: ORT_BASE + (runtime as typeof manifest.ort.wasm).mjs, wasm: ORT_BASE + runtime.wasm };
+  // CPU build: its matching JS glue, which is built into the app (src/ml/ortPaths.ts says why it is not a /models/ file).
+  // WebGPU build: the glue embedded in the bundle.
+  onnx.wasm.wasmPaths = ortWasmPaths({ gpu, wasmUrl: ORT_BASE + wasmFile.path, glueUrl: ortGlueUrl });
   onnx.wasm.proxy = false;
   // Threads need cross-origin isolation (SharedArrayBuffer, i.e. COOP + COEP headers). Without it: 1 thread, no warning.
   // (The WebGPU build's glue is bundled into this worker and cannot spawn its own thread workers, so it stays at 1.)
@@ -128,14 +131,14 @@ async function load(prefer: Device | 'auto' = 'auto'): Promise<{ pipe: Asr; devi
     } else if (info.status === 'download') {
       fromCache = false;
     } else if (info.status === 'done' && info.file) {
-      const f = manifest.files.find((x) => x.path === info.file);
+      const f = SPEECH.files.find((x) => x.path === info.file);
       if (f) fileLoaded[info.file] = f.size;
       report();
     }
   };
   const make = (device: Device) =>
-    pipeline('automatic-speech-recognition', manifest.modelId, {
-      dtype: manifest.dtype as any,
+    pipeline('automatic-speech-recognition', MODEL_ID, {
+      dtype: SPEECH.dtype as any,
       device,
       progress_callback,
     });
@@ -151,7 +154,7 @@ async function load(prefer: Device | 'auto' = 'auto'): Promise<{ pipe: Asr; devi
     device = 'wasm';
     pipe = await make(device);
   }
-  for (const f of manifest.files) fileLoaded[f.path] = f.size;
+  for (const f of SPEECH.files) fileLoaded[f.path] = f.size;
   report(true);
   post({ type: 'ready', device, loadMs: Math.round(performance.now() - t0) });
   return { pipe, device };

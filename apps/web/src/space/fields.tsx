@@ -206,6 +206,8 @@ export function StepField({ step, value, onChange, draft, onAddFiles }: StepFiel
       );
     }
     case 'escrow': {
+      // only a build with sealed matching has an escrow step (intake/script.ts)
+      if (!__MATRA_MATCHING__) return null;
       const people = asGroup(draft.answers['person.list']);
       const choices = asRecord(value);
       const opts: Array<[string, string]> = [
@@ -267,7 +269,7 @@ export function StepField({ step, value, onChange, draft, onAddFiles }: StepFiel
   }
 }
 
-/** Fields that help recognize someone online (and can be used for a sealed match). */
+/** Fields that help recognize someone online (and, in a build with sealed matching, can be used for one). */
 const ONLINE_KEYS = ['email', 'phone', 'handle', 'platform', 'otherId'];
 const MATCHABLE_KEYS = ['email', 'phone', 'handle'];
 
@@ -327,7 +329,7 @@ function GroupItemFields({
                   {COPY.panel.online}
                 </p>
                 {online.map(field)}
-                {MATCHABLE_KEYS.some(filled) && (
+                {__MATRA_MATCHING__ && MATCHABLE_KEYS.some(filled) && (
                   <p className="space-hint space-online-why" role="note">
                     {COPY.panel.onlineWhy}
                   </p>

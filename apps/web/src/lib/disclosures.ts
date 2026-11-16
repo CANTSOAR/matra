@@ -8,6 +8,8 @@
  * Never say "subpoena-proof", "bulletproof", "admissible" or "tamper-proof".
  */
 
+import { COUNSELOR_SUMMARY_SENTENCE, sharedFilesSentence, writtenAccountSentence, type DraftMode } from '@matra/shared';
+
 export interface Notice {
   id: string;
   title: string;
@@ -36,7 +38,10 @@ export const NOTICES = {
     ],
   },
 
-  /** When a version is saved or sealed (Memo §2 "Drafts and versions"). */
+  /**
+   * At review/seal, when every draft save is ALSO kept as a version (MATRA_DRAFT_MODE=keep-versions; Memo §2 "Drafts and
+   * versions"). Use savedVersionsNotice(mode), which picks this one or sealedVersions.
+   */
   savedVersions: {
     id: 'saved-versions',
     title: 'Every saved version is kept',
@@ -47,6 +52,22 @@ export const NOTICES = {
     more: [
       'Memories after something like this often come back in pieces, or in a different order. That’s normal.',
       'Keeping every version shows when you wrote what, and that nothing was changed later. Earlier versions stay in your space until you delete your account.',
+      NOT_ADVICE,
+    ],
+  },
+
+  /** At review/seal, when her draft is saved over as she writes (MATRA_DRAFT_MODE=slot, the default). */
+  sealedVersions: {
+    id: 'saved-versions',
+    title: 'Sealed versions are kept',
+    body: [
+      'Each time you seal your story, it’s kept as a new version, and earlier sealed versions are kept too.',
+      'While you write, your draft is saved over as you go, so only your newest draft is kept.',
+      'If you are ever asked to hand over your records, that can include every sealed version.',
+    ],
+    more: [
+      'Memories after something like this often come back in pieces, or in a different order. That’s normal.',
+      'Keeping every sealed version shows when you sealed what, and that nothing was changed later. Sealed versions stay in your space until you delete your account.',
       NOT_ADVICE,
     ],
   },
@@ -114,7 +135,7 @@ export const NOTICES = {
 /**
  * Sealed-match consent (Memo §7A). She sees these lines, in this order, wherever she can opt in (the story space and
  * the one-question-at-a-time interview), and on the "What you've sealed" page. The exact same words, joined, are
- * stored in her encrypted contact bundle (lib/vault.ts MATCHING_CONSENT_STATEMENT), so the counselor sees exactly
+ * stored in her encrypted contact bundle (lib/matching.ts MATCHING_CONSENT_STATEMENT), so the counselor sees exactly
  * what she was told.
  *
  * Accuracy (threat model W2/W14): say the identifier is sealed and that only a counselor sees a match. Never claim
@@ -158,11 +179,19 @@ export const REPORT_REQUEST_LINES: readonly string[] = [
   'If you say no, the counselor only learns that you decided not to share. You never have to give a reason, and you won’t be asked again through Matra about this sealed match.',
 ];
 
-/** The exact consent text stored with a report release (and hashed into its ledger entry). */
+/** What the counselor's app does with her account (it shows the summary; it has no PDF download). */
+export const COUNSELOR_SUMMARY_LINE = 'Their app shows your written account laid out as an incident summary.';
+
+/**
+ * The exact consent text stored with a report release (and hashed into its ledger entry). Like the attorney share's,
+ * it is plain text on the server, so it says what is shared in fixed words (@matra/shared consent.ts) and never anything
+ * from her account; the server checks the account and file sentences against what is wrapped.
+ */
 export function buildReportConsentStatement(p: {
   counselor: { displayName: string; organization?: string };
   fingerprint: string;
-  withEvidence: number;
+  /** how many evidence files themselves she ticked */
+  files: number;
   sealedAt: string;
   expiresInDays: number;
   at: string;
@@ -170,10 +199,17 @@ export function buildReportConsentStatement(p: {
   const who = `${p.counselor.displayName}${p.counselor.organization ? ` of ${p.counselor.organization}` : ''}`;
   return [
     `I choose to share my sealed Matra account (sealed ${p.sealedAt}) with ${who}, the legal options counselor who asked for it, and with no one else.`,
-    p.withEvidence > 0 ? `I am also sharing ${p.withEvidence} evidence file${p.withEvidence === 1 ? '' : 's'} I chose.` : 'I am not sharing any evidence files.',
+    writtenAccountSentence(),
+    COUNSELOR_SUMMARY_SENTENCE,
+    sharedFilesSentence(p.files),
     `It is encrypted on my device so that only the holder of the key with fingerprint ${p.fingerprint} can open it.`,
     'It is not shared with anyone else who named the same person.',
     `Access ends after ${p.expiresInDays} days unless I stop it sooner. Stopping ends future access, but it can’t take back what was already read.`,
     `Agreed at ${p.at}.`,
   ].join('\n');
+}
+
+/** The review/seal notice that is true for this server's MATRA_DRAFT_MODE (lib/draftSlot.ts useDraftMode). */
+export function savedVersionsNotice(mode: DraftMode): Notice {
+  return mode === 'keep-versions' ? NOTICES.savedVersions : NOTICES.sealedVersions;
 }

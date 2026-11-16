@@ -15,15 +15,16 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import manifest from '../apps/web/src/voice/model-manifest.json' with { type: 'json' };
+import manifest from '../apps/web/src/ml/manifest.json' with { type: 'json' };
 import { expect, test } from './helpers';
 
 const SENTENCE =
   'I was at a party on Saturday night with some friends. Around eleven, he offered to walk me home. I told him no, but he followed me anyway.';
 
-const MODEL_DIR = path.resolve('apps/web/public/models', manifest.modelId);
+const MODEL = manifest.models[0];
+const MODEL_DIR = path.resolve('apps/web/public/models', MODEL.id);
 const HARNESS = path.resolve(process.env.MATRA_WEB_DIR || 'apps/web/dist', 'src/voice/harness/index.html');
-const haveModels = manifest.files.every((f) => fs.existsSync(path.join(MODEL_DIR, f.path)));
+const haveModels = MODEL.files.every((f) => fs.existsSync(path.join(MODEL_DIR, f.path)));
 const haveHarness = fs.existsSync(HARNESS);
 
 function makeWav(): string | null {
@@ -199,6 +200,6 @@ test.describe('@voice on-device transcription (production build)', () => {
     console.log(`[voice] ${requests.length} requests, all same-origin: ${foreign.length === 0}`);
     expect(foreign, 'requests to other origins').toEqual([]);
     expect(requests.some((u) => u.includes('/models/ort/'))).toBe(true);
-    expect(requests.some((u) => u.includes(`/models/${manifest.modelId}/onnx/`))).toBe(true);
+    expect(requests.some((u) => u.includes(`/models/${MODEL.id}/onnx/`))).toBe(true);
   });
 });

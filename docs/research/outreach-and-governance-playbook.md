@@ -79,7 +79,7 @@ An advisory board for this product must provide institutional credibility, legal
 
 Domain experts in this space are frequently pitched by well-meaning developers whose apps are naive, legally hazardous, or exploitative. To earn their attention, demonstrate technical humility and deep awareness of the legal pitfalls:
 
-1. **Acknowledge the Third-Party Subpoena Risk Immediately:** Show them you know that unprivileged intake databases can be subpoenaed by defense attorneys. Explain the zero-knowledge model and its limit: Matra cannot decrypt records, but the survivor (and anyone she shares with) can still be compelled, and metadata is producible.
+1. **Acknowledge the Third-Party Subpoena Risk Immediately:** Show them you know that unprivileged intake databases can be subpoenaed by defense attorneys. Explain the zero-knowledge model and its limit: Matra's server cannot decrypt records (and the operator also serves the app's code, a limit to name), but the survivor (and anyone she shares with) can still be compelled, and metadata is producible.
 2. **Present a Working Artifact, Not an Idea:** Bring a working intake prototype and a sample PDF export of the generated evidentiary brief. Ask for their critique of the artifact.
 3. **Keep the Commitment Light:** Request 1 hour per month or a quarterly review session. Do not ask for a heavy operational burden.
 
@@ -88,7 +88,7 @@ Domain experts in this space are frequently pitched by well-meaning developers w
 > **Subject:** Civic tech inquiry: trauma-informed evidentiary compiler & zero-knowledge architecture
 > Dear [Professor / Director Last Name],
 > I am developing an early-stage civic tech project designed to reduce the administrative and trauma burden on survivors reporting sexual violence.
-> Many digital tools either push reports directly into institutional systems or create readable databases that can be subpoenaed. We have built an open-source, non-profit prototype in which a survivor records her account once through a non-leading intake, keeps it encrypted so we cannot read it, and chooses whether to share it with a verified attorney. It has not been audited and holds only synthetic data.
+> Many digital tools either push reports directly into institutional systems or create readable databases that can be subpoenaed. We have built an open-source, non-profit prototype in which a survivor records her account once through a non-leading intake, keeps it encrypted so our server stores only ciphertext, and chooses whether to share it with a verified attorney. It has not been audited and holds only synthetic data.
 > Because intake workflows must strictly align with non-leading cognitive interviewing protocols and trauma neurobiology, we are forming a small unpaid advisory council to review our question tree and legal assumptions.
 > I have a functional intake prototype and sample evidentiary brief ready. Would you be open to a 20-minute introductory call so I can show you the architecture and get your critical feedback on our evidentiary structure?
 > Respectfully,

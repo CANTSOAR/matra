@@ -5,16 +5,25 @@
  */
 import type { ApiClient } from '../api/client';
 import { createZip, safeFileName, type ZipEntry } from './zip';
-import { blobKeyFor, escrowLabel, loadVault, mergeEvidence, openEvidence } from './vault';
+import { DRAFT_PROBLEM_ID, blobKeyFor, loadSpace, mergeEvidence, openEvidence, type VaultProblem } from './vault';
+import { matchingApi } from '../api/matching';
+import { escrowLabel } from './matching';
 
 export interface DataExport {
   zip: Uint8Array;
   fileName: string;
   recordCount: number;
   evidenceCount: number;
+  /** Saved versions of her space that could not be opened, so are missing from records.json (manifest problems too). */
+  unreadableRecords: number;
   /** Evidence files that could not be decrypted or failed their hash check (listed in the manifest too). */
   problems: string[];
 }
+
+/** Only in a build with sealed matching (MATRA_MATCHING=on). */
+const ESCROW_README = `escrow.json             The labels of identifiers you sealed in escrow (the sealed codes
+                        themselves cannot be reversed and are not included).
+`;
 
 const README = (alias: string, at: string) => `Matra — your data export
 =======================
@@ -30,16 +39,17 @@ everything in it. Keep it somewhere safe, and delete it when you no longer need 
 
 What is inside
 --------------
-records.json            Every version of your account and every saved draft, decrypted,
-                        with its vault ID, SHA-256 fingerprint and ledger (timestamp) entry.
-                        Also your preferences (such as the name you asked us to call you).
+records.json            Every sealed version of your account, decrypted, with its vault ID,
+                        SHA-256 fingerprint and ledger (timestamp) entry. Also your preferences
+                        (such as the name you asked us to call you), and any drafts that were
+                        kept as separate versions.
+draft.json              Your current draft (what you are still writing or adding to), decrypted.
+                        It is saved over as you write, so it is the newest copy only.
 evidence/manifest.json  One entry per evidence file: original name, type, size, the SHA-256
                         recorded when you added it, and whether this copy still matches it.
 evidence/...            The evidence files themselves (as stored — with hidden details removed
                         where Matra could do that).
-escrow.json             The labels of identifiers you sealed in escrow (the sealed codes
-                        themselves cannot be reversed and are not included).
-shares.json             Who you shared your file with, the exact consent text, and status.
+${__MATRA_MATCHING__ ? ESCROW_README : ''}shares.json             Who you shared your file with, the exact consent text, and status.
 activity.json           Your activity log (sign-ins, saves, shares, attorney access).
 
 To check a file has not changed, compute its SHA-256 and compare it with the manifest:
@@ -49,10 +59,11 @@ To check a file has not changed, compute its SHA-256 and compare it with the man
 
 export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alias: string, now: Date = new Date()): Promise<DataExport> {
   const at = now.toISOString();
-  const [vault, { blobs }, escrow, shares, audit] = await Promise.all([
-    loadVault(api, masterKey, { includeProfile: true }),
+  // A copy of what she has, so it reads partially (`allowPartial`), and says what is left out and why.
+  const [{ vault, slot, problems: loadProblems }, { blobs }, escrow, shares, audit] = await Promise.all([
+    loadSpace(api, masterKey, { includeProfile: true, allowPartial: true }),
     api.listBlobs(),
-    api.listEscrow().catch(() => ({ entries: [] })),
+    __MATRA_MATCHING__ ? matchingApi(api).listEscrow().catch(() => ({ entries: [] })) : { entries: [] },
     api.listShares().catch(() => ({ shares: [] })),
     api.listAudit().catch(() => ({ events: [] })),
   ]);
@@ -73,7 +84,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     }));
 
   const itemByBlob = new Map(
-    mergeEvidence(...vault.flatMap((r) => [r.payload.evidence, r.payload.record?.evidence]))
+    mergeEvidence(slot.slot?.value.evidence, ...vault.flatMap((r) => [r.payload.evidence, r.payload.record?.evidence]))
       .filter((e) => e.blobId)
       .map((e) => [e.blobId!, e]),
   );
@@ -103,17 +114,36 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     }
   }
 
-  const escrowLabels = await Promise.all(
-    escrow.entries.map(async (e) => ({ label: await escrowLabel(e.labelEnvelope, masterKey), sealedAt: e.createdAt, ledgerEntryId: e.ledgerEntryId })),
-  );
+  const escrowLabels = __MATRA_MATCHING__
+    ? await Promise.all(
+        escrow.entries.map(async (e) => ({ label: await escrowLabel(e.labelEnvelope, masterKey), sealedAt: e.createdAt, ledgerEntryId: e.ledgerEntryId })),
+      )
+    : [];
 
+  // What didn't load (or didn't match what she saved) is not in records.json / draft.json: say so in the manifest's
+  // problems list too, so this copy is never taken as complete.
+  const unreadableProblem = loadProblems.map(describeProblem);
+  const versionProblems = loadProblems.filter((p) => p.id !== DRAFT_PROBLEM_ID);
   const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n';
   const files: ZipEntry[] = [
     { name: 'README.txt', data: README(alias, at), date: now },
-    { name: 'records.json', data: json({ exportedAt: at, alias, records }), date: now },
-    { name: 'evidence/manifest.json', data: json({ exportedAt: at, files: manifest, problems }), date: now },
+    {
+      name: 'records.json',
+      data: json({ exportedAt: at, alias, records, unreadableRecords: versionProblems.length, ...(versionProblems.length > 0 && { notIncluded: versionProblems }) }),
+      date: now,
+    },
+    {
+      name: 'draft.json',
+      data: json({
+        exportedAt: at,
+        draft: slot.slot ? { ...slot.slot.value, savedOnDay: slot.slot.updatedDay } : null,
+        draftUnreadable: slot.unreadable,
+      }),
+      date: now,
+    },
+    { name: 'evidence/manifest.json', data: json({ exportedAt: at, files: manifest, problems: [...unreadableProblem, ...problems] }), date: now },
     ...entries,
-    { name: 'escrow.json', data: json({ exportedAt: at, sealed: escrowLabels }), date: now },
+    ...(__MATRA_MATCHING__ ? [{ name: 'escrow.json', data: json({ exportedAt: at, sealed: escrowLabels }), date: now }] : []),
     { name: 'shares.json', data: json({ exportedAt: at, shares: shares.shares }), date: now },
     { name: 'activity.json', data: json({ exportedAt: at, events: audit.events }), date: now },
   ];
@@ -122,6 +152,7 @@ export async function buildDataExport(api: ApiClient, masterKey: CryptoKey, alia
     fileName: `matra-my-data-${at.slice(0, 10)}.zip`,
     recordCount: records.filter((r) => r.kind !== 'your preferences').length,
     evidenceCount: entries.length,
+    unreadableRecords: loadProblems.length,
     problems,
   };
 }
@@ -140,4 +171,19 @@ export function downloadBytes(bytes: Uint8Array, filename: string, type = 'appli
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** One line for the manifest: what is left out, and whether it couldn't be fetched or didn't match what she saved. */
+function describeProblem(p: VaultProblem): string {
+  const what = p.id === DRAFT_PROBLEM_ID ? 'Your current draft' : `Saved version ${p.id}`;
+  const where = p.id === DRAFT_PROBLEM_ID ? 'draft.json' : 'records.json';
+  if (p.kind === 'unavailable') return `${what} could not be fetched just now and is not in ${where}`;
+  if (p.kind === 'missing') return `${what} is referred to by your space but the server did not provide it, so it is not in ${where}`;
+  const why: Record<NonNullable<VaultProblem['reason']>, string> = {
+    gcm: 'does not decrypt with your key',
+    hash: 'does not match its recorded fingerprint (SHA-256)',
+    ledger: 'does not match its ledger entry',
+    shape: 'is not in a format this app wrote',
+  };
+  return `${what} ${why[p.reason ?? 'shape']}, so it is not in ${where}`;
 }

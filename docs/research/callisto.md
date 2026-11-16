@@ -195,10 +195,10 @@ individual donors, 5% "program support"**.
 | **.edu email verification** | Accounts need an active .edu email. Earlier Expansion was invitation-only | Main defense against fake accounts (C5), but **the main cap on reach**. Alumni could not create accounts | **Adapt.** Verify without collecting identity: e.g., partner-issued invite codes (legal aid, rape crisis centers, attorneys), phone OTP with only a keyed hash stored, or anonymous credentials. Don't gate on a single institution type |
 | **Account-holder list protected from the provider** | Email, username, phone, and security answers stored encrypted. Email-based recovery via a 2-server OPRF with rate-limiting (K-pop), so Callisto cannot list its users (P2, C5) | Deployed in production Oct 2023. Trauma-informed: a familiar "click the link" flow | **Adapt (roadmap).** Matra currently stores usernames and aliases in plaintext (whitepaper). Studying P2 is worth it if Matra adds recovery |
 | **Demographics stored unlinked from account** | Anonymous demographics collected separately for aggregate stats (C5) | Lets them report reach without linkage | **Keep:** this is how to report to funders |
-| **Edit and delete any time** | Entries editable. Deletion is permanent. Account deletion removes everything (C5, C6) | — | **Keep** (Matra crypto-shreds) |
+| **Edit and delete any time** | Entries editable. Deletion is permanent. Account deletion removes everything (C5, C6) | — | **Keep** (Matra deletes the account from the live database; earlier backups are not reached) |
 | **Matching any perpetrator, any time, any place** | Perpetrator need not be on campus. No time limit (C6) | Cross-coast matches. Matches more than a year apart (C9) | **Keep.** Matra is NJ/NY only, but matching should not be limited by perpetrator location |
 | **Survivor-only entry** | No entering on behalf of a friend (C6) | Reduces false entries | **Keep** |
-| **Resources and education** | "Should I Report?", Definitions, Forensic Exams, Find Support, Help a Friend, Allies guide, crisis lines (Crisis Text Line 741741) | Content marketing that drives organic reach | **Adapt** for NJ/NY (Five-Year Hold kit, SART, VCCO; see brief-fields research) |
+| **Resources and education** | "Should I Report?", Definitions, Forensic Exams, Find Support, Help a Friend, Allies guide, crisis lines (Crisis Text Line 741741) | Content marketing that drives organic reach | **Adapt** for NJ/NY (unreported "Hold" kit, kept 20 years under AG Directive 2023-1; SART, VCCO; see brief-fields research) |
 | **Campus ambassadors, toolkits, event sponsorship** | Student ambassador program and downloadable toolkits (C6, C9) | Main reach channel after the B2B model ended. IG followers +108% in FY2025 (C7) | **Adapt:** partner-org ambassadors (law-school clinics, rape crisis centers) |
 | **Language: "matching", not "allegation"** | Callisto and P2 avoid "allegation escrow" because "allegation" can imply disbelief | Trauma-informed language | **Adopt:** say "sealed name" or "match", never "allegation" |
 | **Callisto Campus → Title IX report submission** | The tool sent reports to the school | Schools would not adopt it (N5), and it tied Callisto to institutions with conflicts of interest | **Avoid** institutional delivery as a default |
@@ -224,7 +224,7 @@ individual donors, 5% "program support"**.
    stretched from the **identifier itself**: Argon2 or PBKDF2 with a per-record random salt, then
    NaCl SecretBox, then a server "pepper" SecretBox. To match, the server **trial-decrypted every
    MatchReport** with each newly submitted identifier, so the server saw plaintext identifiers at
-   submission. Matra's current design (client PBKDF2 plus server HMAC pepper) is roughly at this level.
+   submission. Matra's design as of 2026-10-07 (client PBKDF2 plus server HMAC pepper) was roughly at this level; it has since been replaced by a threshold OPRF.
 2. **2018 design (P1): OPRF, key federation, and Shamir sharing.** Described below. It was built by BU
    SAIL. A demo (crypto-demo, TypeScript) replaces the OPRF with `SHA512(PerpID ‖ k_demo)`.
 3. **Vault (2020–2026).** P2 says Callisto's production code is TypeScript and that account recovery

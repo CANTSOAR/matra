@@ -73,6 +73,14 @@ describe('auth', () => {
     expect(Buffer.from(r1.body.kdfSalt, 'base64')).toHaveLength(16);
   });
 
+  it('refuses a passphrase protected with fewer PBKDF2 rounds than the floor (production: DEFAULT_KDF_ITERATIONS)', async () => {
+    const { app } = makeApp({ minKdfIterations: DEFAULT_KDF_ITERATIONS });
+    await expect(registerUser(app, 'weak.kdf')).rejects.toThrow(/register failed 400 .*kdfIterations/);
+    // the default outside production lets tests register at TEST_ITERATIONS
+    const relaxed = makeApp();
+    expect((await registerUser(relaxed.app, 'test.kdf')).user.username).toBe('test.kdf');
+  });
+
   it('rejects duplicate usernames and invalid input', async () => {
     const { app } = makeApp();
     await registerUser(app, 'jane.test');

@@ -79,7 +79,7 @@ On the **app host** (full list: [PRIVACY_DATA_INVENTORY.md](../PRIVACY_DATA_INVE
 - **Keyed or hashed, not reversible without a key:** OPRF tags (need t shares), phone tokens (need
   `MATRA_PHONE_HASH_KEY`), auth and recovery hashes (scrypt), session token hashes.
 - **In clear (metadata):** usernames, roles, creation times, record sizes (not padded yet, W11), share metadata and
-  consent text, aliases she chose for attorneys, audit rows, ledger hashes and times, attorney and counselor directory
+  consent text, the made-up per-share label shown to attorneys (older shares may hold her username), audit rows, ledger hashes and times, attorney and counselor directory
   entries, staged-release requests and answers.
 
 So "the app host stores only ciphertext" is **not** accurate today; "the app host stores no plaintext of her story,

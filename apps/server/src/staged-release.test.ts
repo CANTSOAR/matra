@@ -22,7 +22,7 @@ import {
 } from '@matra/crypto';
 import type { CounselorMatchGroup, ReportReleaseBundle, SurvivorReportRequest } from '@matra/shared';
 import { getDb } from './app.js';
-import { createRecord, makeApp, matchTransport, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
+import { createRecord, releaseConsent, makeMatchingApp, matchTransport, registerUser, sealMatch, uploadBlob, type TestUser } from './test-helpers.js';
 
 const groupsOf = async (app: express.Express, c: TestUser) => {
   const r = await request(app).get('/api/counselor/groups').set(c.auth);
@@ -38,6 +38,11 @@ const requestsOf = async (app: express.Express, s: TestUser) => {
   expect(r.status).toBe(200);
   return r.body.requests as SurvivorReportRequest[];
 };
+/** The counselor's copies of the keys a release still holds: the record's, then each file's (null once deleted). */
+const wrapsOf = (app: express.Express, releaseId: string) => ({
+  record: (getDb(app).prepare('SELECT recipient_wrapped_key AS k FROM report_releases WHERE id = ?').get(releaseId) as { k: string | null }).k,
+  files: (getDb(app).prepare('SELECT recipient_wrapped_key AS k FROM report_release_blobs WHERE release_id = ?').all(releaseId) as Array<{ k: string | null }>).map((r) => r.k),
+});
 const ledgerTypes = (app: express.Express) =>
   (getDb(app).prepare('SELECT type FROM ledger ORDER BY seq').all() as Array<{ type: string }>).map((r) => r.type);
 
@@ -47,7 +52,7 @@ const ledgerTypes = (app: express.Express) =>
  * one the matcher assigned; `spare` is the other.
  */
 async function matched(opts: { twoCounselors?: boolean } = {}) {
-  const { app, db } = makeApp();
+  const { app, db } = makeMatchingApp();
   const c1 = await registerUser(app, 'loc.one', 'counselor');
   const c2 = opts.twoCounselors ? await registerUser(app, 'loc.two', 'counselor') : undefined;
   const a = await registerUser(app, 'survivor.a');
@@ -80,7 +85,7 @@ async function consent(app: express.Express, s: TestUser, req: SurvivorReportReq
       recordId,
       recipientWrappedKey: await wrapKeyForRecipient(recordKey, req.counselor.publicKey),
       blobs: await Promise.all(blobs.map(async (b) => ({ blobId: b.blobId, recipientWrappedKey: await wrapKeyForRecipient(b.key, req.counselor.publicKey) }))),
-      consentStatement: `I share my report with this counselor only (key ${fp}).`,
+      consentStatement: releaseConsent(fp, blobs.length),
       counselorKeyFingerprint: fp,
     });
 }
@@ -224,7 +229,7 @@ describe('stage 2: report requests and her decision', () => {
       recordId: recA.res.body.record.id,
       recipientWrappedKey: await wrapKeyForRecipient(recA.key, req!.counselor.publicKey),
       blobs: [],
-      consentStatement: `I share with key ${fp}.`,
+      consentStatement: releaseConsent(fp, 0),
       counselorKeyFingerprint: fp,
       ...over,
     });
@@ -232,6 +237,14 @@ describe('stage 2: report requests and her decision', () => {
     const wrongFp = fp.replace(/^./, fp[0] === 'A' ? 'B' : 'A');
     expect((await send({ counselorKeyFingerprint: wrongFp, consentStatement: `key ${wrongFp} ok` })).body.code).toBe('counselor_key_mismatch');
     expect((await send({ consentStatement: 'I share my report, without naming any key.' })).body.code).toBe('consent_fingerprint_missing');
+    // her consent must say what the counselor can open: the written account, and exactly the files wrapped (@matra/shared consent.ts)
+    const aBlob = await uploadBlob(app, a);
+    const oneFile = [{ blobId: aBlob.res.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(aBlob.key, req!.counselor.publicKey) }];
+    expect((await send({ consentStatement: `I share with key ${fp}.` })).body.code).toBe('consent_mismatch');
+    expect((await send({ blobs: oneFile })).body.code).toBe('consent_mismatch'); // says no files, wraps one
+    expect((await send({ consentStatement: releaseConsent(fp, 1) })).body.code).toBe('consent_mismatch'); // says one, wraps none
+    expect((await send({ consentStatement: `${releaseConsent(fp, 0)}\nI am NOT sharing my written account.` })).body.code).toBe('consent_mismatch');
+    expect((await send({ consentStatement: `${releaseConsent(fp, 0)}\nMatra shows this share to them as "Client BCDFG".` })).body.code).toBe('consent_mismatch'); // a release has no label
     expect((await send({ recordId: recB.res.body.record.id })).status).toBe(403);
     const bBlob = await uploadBlob(app, b);
     expect((await send({ blobs: [{ blobId: bBlob.res.body.blob.id, recipientWrappedKey: await wrapKeyForRecipient(bBlob.key, req!.counselor.publicKey) }] })).status).toBe(403);
@@ -316,6 +329,8 @@ describe('revocation, withdrawal and deletion', () => {
     expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(loc.auth)).body.code).toBe('release_revoked');
     expect((await request(app).get(`/api/counselor/releases/${release.id}/blobs/${'0'.repeat(32)}`).set(loc.auth)).body.code).toBe('release_revoked');
     expect(db.prepare('SELECT first_opened_at FROM report_releases WHERE id = ?').get(release.id)).toEqual({ first_opened_at: null });
+    // the counselor's copies of the keys were deleted with the revoke (src/recipient-keys.ts); the rows stay
+    expect(wrapsOf(app, release.id)).toEqual({ record: null, files: [null] });
   });
 
   it('revoked after she opened it: future access stops', async () => {
@@ -333,6 +348,19 @@ describe('revocation, withdrawal and deletion', () => {
     expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(loc.auth)).body.code).toBe('release_expired');
   });
 
+  it('30 days after a release expired, the housekeeping sweep deletes the counselor’s copies of its keys', async () => {
+    const { app, db, release } = await released();
+    const day = 86_400_000;
+    db.prepare('UPDATE report_releases SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 29 * day).toISOString(), release.id);
+    app.locals.housekeeping();
+    expect(wrapsOf(app, release.id).record).not.toBeNull();
+    db.prepare('UPDATE report_releases SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 31 * day).toISOString(), release.id);
+    app.locals.housekeeping();
+    expect(wrapsOf(app, release.id)).toEqual({ record: null, files: [null] });
+    // the release itself (status, dates, consent text) stays for her record
+    expect(db.prepare('SELECT status, consent_statement FROM report_releases WHERE id = ?').get(release.id)).toMatchObject({ status: 'active' });
+  });
+
   it('withdrawing her entry deletes its requests and releases; the counselor sees them vanish', async () => {
     const { app, db, loc, a, entryA, release } = await released();
     const before = ledgerTypes(app).length;
@@ -348,17 +376,17 @@ describe('revocation, withdrawal and deletion', () => {
 
   it('deleting her account, or the counselor’s, removes every staged-release row about them', async () => {
     const { app, db, loc, a, release } = await released();
-    expect((await request(app).post('/api/account/delete').set(a.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(a.auth).send({ authKey: a.authKey })).status).toBe(200);
     for (const t of ['report_requests', 'report_releases', 'report_release_blobs']) expect(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get()).toEqual({ n: 0 });
     expect((await request(app).get(`/api/counselor/releases/${release.id}/bundle`).set(loc.auth)).status).toBe(404);
-    expect((await request(app).post('/api/account/delete').set(loc.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(loc.auth).send({ authKey: loc.authKey })).status).toBe(200);
     expect(db.prepare('SELECT COUNT(*) n FROM conflict_checks').get()).toEqual({ n: 0 });
   });
 });
 
 describe('ledger', () => {
   it('nothing is written at match time; every check, request, consent, decline and revoke has its own row', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -454,6 +482,8 @@ describe('a release outlives a re-seal, ends when the counselor can no longer ho
     expect(ledgerTypes(app).slice(before)).toEqual(['counselor.conflict_checked', 'report.revoked']);
     expect((await bundleOf(app, loc, release.id)).body.code).toBe('release_revoked');
     expect((await request(app).get(`/api/counselor/releases/${release.id}/blobs/${'0'.repeat(32)}`).set(loc.auth)).body.code).toBe('release_revoked');
+    // Matra ending it deletes the counselor's copy of the key too, in the same transaction
+    expect(wrapsOf(app, release.id).record).toBeNull();
     const [mine] = await requestsOf(app, a);
     expect(mine!.release).toMatchObject({ status: 'revoked', revokeReason: 'conflict' });
     const trail = (await request(app).get('/api/audit').set(a.auth)).body.events as Array<{ detail: string }>;

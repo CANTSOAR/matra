@@ -80,10 +80,15 @@ export const COPY = {
     editNote: 'Only you can change your words. Nothing is changed for you.',
     edited: (when: string) => `edited ${when}`,
     editedAnnounce: 'Your changes are saved.',
+    // Every draft save is kept as a version (MATRA_DRAFT_MODE=keep-versions):
     removeConfirm:
       'Remove this part from your story? It will be taken off your list. Earlier saved versions of your draft may still include it until you delete your account.',
     removeConfirmSealed:
       'Remove this part from your draft? Your earlier sealed version stays as it was, and earlier saved versions of your draft may still include it until you delete your account.',
+    // Her draft is saved over as she writes (MATRA_DRAFT_MODE=slot, the default):
+    removeConfirmSlot: 'Remove this part from your story? It will be taken off your list, and out of your draft the next time it saves.',
+    removeConfirmSealedSlot:
+      'Remove this part from your draft? It comes out of your draft the next time it saves. Your earlier sealed version stays as it was.',
     removeYes: 'Yes, remove it',
     removeNo: 'Keep it',
     empty: 'Nothing here yet. When you add something, it will show here, just as you wrote it.',
@@ -133,12 +138,14 @@ export const COPY = {
     notSure: "I'm not sure",
     pickDate: 'Pick a date',
     describe: 'Describe it in words',
-    escrowMore: 'What is a sealed match?',
+    escrowMore: __MATRA_MATCHING__ ? 'What is a sealed match?' : '',
     filesAdded: (n: number) => `${n === 1 ? '1 file added' : `${n} files added`}. ${NOTICES.keepOriginals.body[0]}`,
     moreDetails: 'More details, only if you know them',
     online: 'Ways to recognize them online',
-    onlineWhy:
-      'If you add one of these, you can choose a sealed match next. It is sealed on this device before it is sent. Only if someone else names the same person would a Legal Options Counselor (a licensed attorney) see it and reach out to you, privately.',
+    // shown only in a build with sealed matching (space/fields.tsx); empty in any other, so its words aren't shipped
+    onlineWhy: __MATRA_MATCHING__
+      ? 'If you add one of these, you can choose a sealed match next. It is sealed on this device before it is sent. Only if someone else names the same person would a Legal Options Counselor (a licensed attorney) see it and reach out to you, privately.'
+      : '',
     noPeople: 'This is for the people you named in “The person”. Add someone there first, if you want to.',
   },
 

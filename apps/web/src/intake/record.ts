@@ -122,8 +122,9 @@ export function draftToRecord(draft: IntakeDraft, now: Date = new Date()): Intak
         physicalDescription: keep(v.description),
         identifiers,
         // Only unique identifiers (email / phone / handle) that normalize to one person can be matched. A name, free
-        // text ("anything else"), or a link that isn't a profile never opts in.
-        escrowOptIn: escrow[p.id] === 'yes' && identifiers.some(isSealable),
+        // text ("anything else"), or a link that isn't a profile never opts in. A build without sealed matching
+        // (MATRA_MATCHING=off) never opts in at all, whatever an older draft says.
+        escrowOptIn: __MATRA_MATCHING__ && escrow[p.id] === 'yes' && identifiers.some(isSealable),
         address: keep(v.address),
         workplace: keep(v.workplace),
         vehicle: keep(v.vehicle),

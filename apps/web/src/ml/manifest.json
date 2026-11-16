@@ -1,0 +1,80 @@
+{
+  "$comment": "Single source of truth for every file the browser loads to run a model: the model weights and tokenizers, the ONNX Runtime wasm and its JS glue. Each file is pinned by size and SHA-256. scripts/fetch-models.mjs checks them at build time; the app checks them again in the browser (src/ml/verify.ts) before use and refuses a file that does not match. Everything is served from our own origin under /models/. Nothing here may point at another host. Adding a model means adding it here first; a file that is not listed is never loaded.",
+  "schema": 1,
+  "runtime": {
+    "package": "onnxruntime-web",
+    "version": "1.31.0-dev.20260914-8d85527a0",
+    "base": "/models/ort/",
+    "cacheName": "ml-runtime-20260914",
+    "$comment": "cpu-wasm and webgpu-wasm are fetched from /models/ort/ and checked in the browser. The CPU JS glue is code that ONNX Runtime import()s (and starts its pthread workers from) by URL, and the page's CSP has no blob:, so the browser cannot hand it bytes it checked. It is therefore NOT served from /models/: it is built INTO the app (worker.ts imports it with ?url, Vite emits it as a content-hashed file under /assets/ next to the JavaScript), and its pin below is checked at build time (vite.config.ts, scripts/fetch-models.mjs) and in the build audit (scripts/audit-web-build.mjs). Its trust is the app's own JavaScript (W4), not a browser-side check.",
+    "files": [
+      {
+        "role": "cpu-wasm",
+        "path": "ort-wasm-simd-threaded.wasm",
+        "size": 14264838,
+        "sha256": "06ba057753da3847e4c24f02d91ab133455b0817c69a44993a9a53a2146df9e3"
+      },
+      {
+        "role": "webgpu-wasm",
+        "path": "ort-wasm-simd-threaded.asyncify.wasm",
+        "size": 26861777,
+        "sha256": "49871f5a4409519797e127440868a6d1923339d9185907f301a5b2a1d90af082"
+      }
+    ],
+    "bundled": [
+      {
+        "role": "cpu-glue",
+        "path": "ort-wasm-simd-threaded.mjs",
+        "size": 24381,
+        "sha256": "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f"
+      }
+    ]
+  },
+  "models": [
+    {
+      "id": "onnx-community/whisper-base",
+      "task": "speech-to-text",
+      "revision": "1846881b6b3a3024392c1eea3ad983695bc23925",
+      "dtype": "q8",
+      "base": "/models/onnx-community/whisper-base/",
+      "cacheName": "speech-model-1846881b",
+      "files": [
+        {
+          "path": "config.json",
+          "size": 2243,
+          "sha256": "f4d0608f7d918166da7edb3e188de5ef1bfe70d9802e785d271fd88111e9cf4b"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 3832,
+          "sha256": "61070cf8de25b1e9256e8e102ded49d8d24a8369ed36ef84fdf21549e68125a0"
+        },
+        {
+          "path": "preprocessor_config.json",
+          "size": 339,
+          "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 2480466,
+          "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 282682,
+          "sha256": "2e036e4dbacfdeb7242c7d4ec4149f4a16e86026048f94d1637e3a8ee9c6a573"
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "size": 23201314,
+          "sha256": "5862993336bf33acd23736071aae2b32261d3b1b2f37780194460d4ef974dd46"
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "size": 53693315,
+          "sha256": "fa3ef9902734ce5ae6f9ef2bdb2ba9a6c4b5785b09f4f420ce036573dc9d090b"
+        }
+      ]
+    }
+  ]
+}

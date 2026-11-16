@@ -21,6 +21,8 @@ Founder's goal (interview 2026-11-11): "having the server is useless": anyone wh
 
 Interview 2026-11-11: the cloud provider is not chosen; the founder sees it as a logistics question (which provider supports the secure setup). Relevant to this question: a US provider can itself be served for Matra's stored data wherever it is hosted (CLOUD Act, 18 U.S.C. § 2713; see Research §6), possibly without Matra being told.
 
+One technical fact bears on "gets nothing usable": the operator also serves the web app's code, so a changed app served to one survivor could capture her passphrase (threat model W4). Nothing yet lets a survivor check the code she was served. Whether a provider could be ordered to serve such a build is part of this question (see Research §2, technical assistance).
+
 Decided 2026-11-11 for the build: no raw IPs on disk (in-memory keyed-hash rate limits expiring within 24 hours); the
 phone number used for sealed-matching verification is kept only as a keyed hash; the OPRF key is split n-of-m across
 separate institutions; hosting is on a US confidential-computing provider that stores only ciphertext.

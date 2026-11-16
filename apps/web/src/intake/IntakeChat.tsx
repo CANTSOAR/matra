@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { IntakeRecord } from '@matra/shared';
 import './intake.css';
 import { KeyNotice } from '../components/KeyNotice';
-import { NOTICES } from '../lib/disclosures';
+import { savedVersionsNotice } from '../lib/disclosures';
+import { useDraftMode } from '../lib/draftSlot';
 import {
   answerOf,
   currentStep,
@@ -514,8 +515,8 @@ function StepInput({
       return <FormInput step={step} {...common} />;
     case 'group':
       return <GroupInput step={step} {...common} />;
-    case 'escrow':
-      return <EscrowInput step={step} draft={draft} {...common} />;
+    case 'escrow': // only a build with sealed matching has this step (intake/script.ts)
+      return __MATRA_MATCHING__ ? <EscrowInput step={step} draft={draft} {...common} /> : null;
     default:
       return null;
   }
@@ -534,6 +535,7 @@ function Review({
   sealing: boolean;
   sealError?: string;
 }) {
+  const draftMode = useDraftMode();
   return (
     <section className="intake-review" aria-labelledby="intake-review-title">
       <h2 id="intake-review-title" className="intake-review-title" tabIndex={-1} data-intake-focus>
@@ -578,7 +580,7 @@ function Review({
       })}
       <div className="intake-seal">
         <p>{UI.review.sealExplain}</p>
-        <KeyNotice notice={NOTICES.savedVersions} />
+        <KeyNotice notice={savedVersionsNotice(draftMode)} />
         {sealError && (
           <p className="intake-seal-error" role="alert">
             {sealError}

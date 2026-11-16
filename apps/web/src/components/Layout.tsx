@@ -8,6 +8,14 @@ import { useDim } from '../lib/theme';
 import { DEMO_BUILD } from '../matchPins';
 
 /**
+ * Set when she chooses "Lock & sign out". The way out navigates to a neutral page and then wipes the session; if the
+ * wipe renders before that navigation commits (React Router runs it as a transition), the page she was on would see no
+ * session and send her to the "Welcome back" form instead. With this set, it sends her to the neutral page too.
+ * Cleared as soon as anyone is signed in again.
+ */
+let signingOutTo: string | null = null;
+
+/**
  * Demo instances show a permanent banner. The production server adds <meta name="matra-demo-banner" content="1">
  * when MATRA_DEMO_BANNER=1 (a meta tag, because the CSP forbids inline scripts); VITE_MATRA_DEMO_BANNER=1 does the
  * same for a dev build, and a demo build (MATRA_DEMO_MODE=1) always shows it.
@@ -128,7 +136,8 @@ export function Layout() {
                 // finish a quick save of her draft first (bounded), then lock
                 await runBeforeLock();
                 // land on a neutral page, not a "Welcome back" sign-in form that shows this device has an account
-                navigate(role === 'attorney' ? '/attorney' : '/', { replace: true });
+                signingOutTo = role === 'attorney' ? '/attorney' : '/';
+                navigate(signingOutTo, { replace: true });
                 void logout();
               }}
             >
@@ -160,7 +169,8 @@ export function Layout() {
 
 export function RequireSession({ role, children }: { role?: Role; children: ReactNode }) {
   const { session } = useSession();
-  if (!session) return <Navigate to={role === 'attorney' ? '/attorney/signin' : '/signin'} replace />;
+  if (!session) return <Navigate to={signingOutTo ?? (role === 'attorney' ? '/attorney/signin' : '/signin')} replace />;
+  signingOutTo = null;
   if (role && session.user.role !== role) {
     return <Navigate to={session.user.role === 'attorney' ? '/attorney/cases' : '/vault'} replace />;
   }

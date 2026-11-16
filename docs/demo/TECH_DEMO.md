@@ -625,7 +625,7 @@ Say all of it; don't wait to be asked.
 | Server view | Unauthenticated; exists only in dev and demo builds and with `MATRA_INSPECTOR=1`. Holder "evaluations" are kept in memory only because it is on. | Not present in production builds at all (checked by building both). |
 | Error copy | Refused seals show a generic message (see 7b). | Show `MatchingError` messages. |
 | Metadata (W11) | No IPs or user agents stored; route-only logs. Size padding for records and blobs, an encrypted alias and the host's edge logs are not done. The app server sees aliases, times, and which accounts share a tag. | |
-| Passphrase (W5) | PBKDF2-SHA256 600k; no strength floor. The recovery code (W20) doesn't change that. | Argon2id via WASM + a floor. |
+| Passphrase (W5) | PBKDF2-SHA256 600k; 6 generated words (about 60.1 bits) or a phrase of her own that passes a harsh score (no bit claim), checked in the app only; the app gives attorneys and counselors 7 generated words. The recovery code (W20) doesn't change that. | Argon2id via WASM. |
 | Review | No independent security audit, no outside cryptographer review. Matching stays **off** for any pilot. | Audit + crypto review are gates before real data. |
 
 Close: *"Every one of these is written down in the threat model with its ID. What I want from you is the review that

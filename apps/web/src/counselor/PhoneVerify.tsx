@@ -13,14 +13,14 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ErrorNote, Loading, PageTitle, useAsync } from '../components/common';
-import { friendlyError, useRequiredSession } from '../lib/session';
-import { retrySealedMatches } from '../space/adapters';
+import { friendlyError } from '../lib/session';
 import { mirror } from '../dev/mirror';
+import { retrySealedMatches, useMatchingSession } from '../lib/matching';
 
 const RESEND_AFTER_MS = 30_000;
 
 export function PhoneVerify() {
-  const { api, session } = useRequiredSession();
+  const { api, session } = useMatchingSession();
   const navigate = useNavigate();
   const status = useAsync(() => api.phoneVerificationStatus(), [api]);
   const [phone, setPhone] = useState('');

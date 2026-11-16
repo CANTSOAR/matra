@@ -82,14 +82,33 @@ describe('transcriber client', () => {
   it('isTranscriberSetUp is false without the Cache API, true when model + runtime are cached', async () => {
     expect(await isTranscriberSetUp()).toBe(false);
     const store = new Set<string>();
+    const opened: string[] = [];
     vi.stubGlobal('caches', {
-      open: async () => ({ match: async (k: string) => (store.has(k) ? new Response('x') : undefined) }),
+      has: async () => true,
+      open: async (name: string) => {
+        opened.push(name);
+        return { match: async (k: string) => (store.has(k) ? new Response('x') : undefined) };
+      },
     });
     expect(await isTranscriberSetUp()).toBe(false);
     for (const p of MODEL_WEIGHT_PATHS) store.add(p);
     expect(await isTranscriberSetUp()).toBe(false);
     store.add(runtimeCacheKey(RUNTIME_FILES.wasm));
     expect(await isTranscriberSetUp()).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('isTranscriberSetUp never creates a cache: it only looks (P5 review, minor 5)', async () => {
+    const opened: string[] = [];
+    vi.stubGlobal('caches', {
+      has: async () => false,
+      open: async (name: string) => {
+        opened.push(name);
+        return { match: async () => undefined };
+      },
+    });
+    expect(await isTranscriberSetUp()).toBe(false);
+    expect(opened).toEqual([]);
     vi.unstubAllGlobals();
   });
 });

@@ -57,7 +57,7 @@ function bodySummary(body: unknown): { body?: InspectorRequest['body'] } {
 /** App-server tables shown, in the order a viewer meets them in the demo, each with what it is (and is not). */
 const APP_TABLES: Array<[table: string, caption: string]> = [
   ['users', 'Accounts: an alias, a role, a salted hash of a key derived from her passphrase on her device, her public key, and her private key wrapped by a key only her passphrase can open.'],
-  ['records', 'Her story: one encrypted envelope per saved version, her content key wrapped by her own key, and a hash. Nothing readable.'],
+  ['records', 'Her story: one encrypted envelope per sealed version (and per draft save with MATRA_DRAFT_MODE=keep-versions), her content key wrapped by her own key, and a hash. Nothing readable.'],
   ['blobs', 'Evidence files: ciphertext bytes (first bytes shown), size and hash. Metadata was stripped and the file encrypted on her device.'],
   ['shares', 'Shares with an attorney: the consent text she agreed to, the record id, and her content key wrapped to the attorney’s public key.'],
   ['phone_tokens', 'Phone verification: a keyed hash of the number and how many accounts it turned on. Never the number.'],
@@ -101,12 +101,24 @@ export function limiterTable(caption: string, limiters: Array<[name: string, lim
 /** What this app server holds (its own column in the inspector). */
 export function appProcess(o: {
   db: DB;
+  /** the draft-slot file (src/slots.ts) */
+  slotsDb?: DB;
   recorder: RequestRecorder;
   limiters: Array<[name: string, limiter: RateLimiter]>;
   pendingPhoneChallenges: number;
   holdersInProcess: boolean;
 }): InspectorProcess {
   const tables = APP_TABLES.map(([t, c]) => tableSnapshot(o.db, t, c));
+  if (o.slotsDb)
+    tables.splice(
+      2,
+      0,
+      tableSnapshot(
+        o.slotsDb,
+        'slots',
+        'Her draft, in its own file: one encrypted envelope per opaque name, saved over as she writes. Padded to 16 KiB steps, with only the day of the last save. No ledger entry.',
+      ),
+    );
   tables.push(
     limiterTable(
       'Rate limits held in memory only: a daily-salted HMAC of the client address (never the IP), or an account id; each expires within 24 hours.',

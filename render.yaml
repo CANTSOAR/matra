@@ -11,6 +11,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # This demo instance shows sealed matching, so it is "on" (Render also passes it to the Docker build as a build
+      # arg). The pilot runs "off": then every matching variable below must be removed, or the server refuses to start.
+      - key: MATRA_MATCHING
+        value: "on"
       # HMAC key for escrow hashes / fake prelogin salts. Generated once by Render; never change it after
       # accounts exist (it would break escrow matching). Keep it out of git.
       - key: MATRA_PEPPER

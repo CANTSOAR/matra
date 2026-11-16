@@ -1091,7 +1091,9 @@ Code shape:
 - Retry after verifying (`space/adapters.ts retrySealedMatches`): seals what her latest sealed record chose but couldn't
   seal, then saves that record again as a **new sealed version** with the updated `escrowedHashes` (same story, one more
   ledger entry). Not saving would let a later re-seal resubmit an identifier she had withdrawn. Home therefore lists the
-  first seal as an earlier version; e2e scenario 1 asserts both versions verify.
+  first seal as an earlier version; e2e scenario 1 asserts both versions verify. *(Superseded on `p1/vault-foundation`:
+  the fingerprints go into her draft slot and no new sealed version is made, because a sealed version now holds only
+  `{kind, record, savedAt}`; SECURITY_WHITEPAPER §4b.)*
 - `friendlyError` mapped every 409 to "Someone already uses that alias"; it now does that only for `username_taken` (or a
   bare 409), so `phone_limit_reached` shows its own message.
 - e2e: scenario 1 verifies after sealing (sealed-screen card), scenario 5's survivor B verifies first from the

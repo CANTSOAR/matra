@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { PHONE_VERIFICATION_NEEDED } from '../lib/vault';
+import { PHONE_VERIFICATION_NEEDED } from '../lib/matching';
 
 /**
  * Shown on the sealed screen and on Home when her sealed match waits for a phone confirmation (W13;

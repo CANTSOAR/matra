@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { IntakeRecord } from '@matra/shared';
 import { draftToRecord, emptyDraft, STEPS, type IntakeDraft } from './index';
+
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
 
 const NARRATIVE =
   '  It started at the party.\n\n\tHe said "don\'t tell anyone" 😶‍🌫️ — I left at ~2am…  \r\nI remember {braces} [brackets] & <tags>.   ';
@@ -250,6 +256,21 @@ describe('script', () => {
     const all = JSON.stringify(STEPS).toLowerCase();
     expect(all).not.toMatch(/alleged/);
     expect(all).not.toMatch(/\bwhy\b/);
+  });
+
+  it('never lets the browser autofill or save her name, phone or email (shared devices)', () => {
+    for (const s of STEPS) {
+      if (s.kind === 'text') expect(s.autoComplete ?? 'off', s.id).toBe('off');
+      for (const f of 'fields' in s && Array.isArray(s.fields) ? s.fields : []) expect(f.autoComplete ?? 'off', `${s.id}.${f.key}`).toBe('off');
+    }
+  });
+
+  it('states the current NJ exam window and kit name (AG Directives 2024-02 and 2023-1)', () => {
+    const info = STEPS.find((s) => s.id === 'medical.examInfo')!.say.join(' ');
+    expect(info).toMatch(/usually possible up to 7 days after, sometimes longer/);
+    expect(info).not.toMatch(/5 days/);
+    expect(info).toMatch(/1-800-656-4673/);
+    expect(JSON.stringify(STEPS)).not.toMatch(/five-year/i);
   });
 });
 

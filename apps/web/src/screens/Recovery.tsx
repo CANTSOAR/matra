@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { RecoveryCodeError, parseRecoveryCode } from '@matra/crypto';
-import { ProgressNote, STRENGTH_WIDTH } from '../components/AuthForms';
+import { ProgressNote } from '../components/AuthForms';
+import { NewPassphraseFields } from '../components/NewPassphraseFields';
 import { ErrorNote, PageTitle } from '../components/common';
 import { RecoveryCodeCard, RecoveryCodeExplainer } from '../components/RecoveryCode';
-import { generatePassphrase, passphraseStrength } from '../lib/passphrase';
 import {
   friendlyError,
   RecoveryMaybeFinishedError,
@@ -178,10 +178,8 @@ export function RecoverScreen() {
   const [step, setStep] = useState<'code' | 'passphrase' | 'newCode'>('code');
   const [alias, setAlias] = useState('');
   const [code, setCode] = useState('');
-  const [pass, setPass] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [show, setShow] = useState(false);
-  const [suggestion, setSuggestion] = useState(() => generatePassphrase());
+  // her new passphrase once it can be used (strong enough, typed twice), else null
+  const [pass, setPass] = useState<string | null>(null);
   const [newCode, setNewCode] = useState<PendingRecoveryCode | null>(null);
   const [saving, setSaving] = useState(false);
   const [maybeDone, setMaybeDone] = useState(false);
@@ -193,9 +191,6 @@ export function RecoverScreen() {
   useEffect(() => () => reset.current?.cancel(), []);
 
   const problem = recoverFormProblem(alias, code);
-  const strength = useMemo(() => passphraseStrength(pass), [pass]);
-  const mismatch = confirm.length > 0 && confirm !== pass;
-  const passOk = strength.level !== 'too-short' && strength.level !== 'weak' && pass === confirm;
 
   async function onCode(e: FormEvent) {
     e.preventDefault();
@@ -215,13 +210,12 @@ export function RecoverScreen() {
 
   async function onPassphrase(e: FormEvent) {
     e.preventDefault();
-    if (!passOk || progress || !reset.current) return;
+    if (!pass || progress || !reset.current) return;
     setError(null);
     try {
       const out = await reset.current.finish(pass, setProgress);
       reset.current = null;
-      setPass('');
-      setConfirm('');
+      setPass(null);
       setNewCode(out.newCode);
       setStep('newCode');
     } catch (err) {
@@ -328,67 +322,18 @@ export function RecoverScreen() {
             Your code was accepted. Choose a new passphrase. Your old one will stop working, and anyone signed in with it
             will be signed out.
           </p>
-          <div className="stack">
-            <span className="small muted">Here’s a strong one, made on your device just now:</span>
-            <div className="passphrase-suggestion">{suggestion}</div>
-            <div className="row">
-              <button
-                type="button"
-                className="btn btn-small"
-                onClick={() => {
-                  setPass(suggestion);
-                  setConfirm('');
-                  setShow(true);
-                }}
-              >
-                Use this passphrase
-              </button>
-              <button type="button" className="btn btn-quiet btn-small" onClick={() => setSuggestion(generatePassphrase())}>
-                Suggest another
-              </button>
-            </div>
-          </div>
-          <label className="field">
-            <span>New passphrase</span>
-            <input
-              type={show ? 'text' : 'password'}
-              autoComplete="new-password"
-              value={pass}
-              onChange={(e) => setPass(e.target.value)}
-              aria-describedby="new-strength"
-              spellCheck={false}
-              autoCapitalize="none"
-              data-testid="recover-new-passphrase"
-            />
-          </label>
-          <div className="meter" aria-hidden="true">
-            <span style={{ width: pass ? STRENGTH_WIDTH[strength.level] : '0%' }} />
-          </div>
-          <p id="new-strength" className="small muted" aria-live="polite">
-            {pass ? strength.message : 'Five random words are easier to remember — and harder to guess — than a short password.'}
-          </p>
-          <label className="field">
-            <span>Type it again</span>
-            <input
-              type={show ? 'text' : 'password'}
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              aria-invalid={mismatch}
-              spellCheck={false}
-              autoCapitalize="none"
-              data-testid="recover-new-passphrase-again"
-            />
-          </label>
-          {mismatch && <p className="error">These don’t match yet.</p>}
-          <label className="check">
-            <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} />
-            <span>Show passphrase</span>
-          </label>
+          <NewPassphraseFields
+            role="survivor"
+            label="New passphrase"
+            context={[alias]}
+            inputTestId="recover-new-passphrase"
+            againTestId="recover-new-passphrase-again"
+            onChange={setPass}
+          />
           <ProgressNote p={progress} />
           {error && <p className="error" role="alert">{error}</p>}
           <div className="row">
-            <button className="btn btn-primary" type="submit" disabled={!passOk || !!progress} data-testid="recover-set-passphrase">
+            <button className="btn btn-primary" type="submit" disabled={!pass || !!progress} data-testid="recover-set-passphrase">
               {progress ? 'Working…' : 'Set my new passphrase'}
             </button>
           </div>

@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { StoryEntry } from '../understand/types';
 import { VoiceCapture, adapterStatus } from './adapters';
 import { COPY } from './copy';
+import { useDraftMode } from '../lib/draftSlot';
 import { FilePicker } from './FilePicker';
 
 function when(iso: string): string {
@@ -221,6 +222,7 @@ export function Journal({
   hasSealed?: boolean;
 }) {
   const [confirm, setConfirm] = useState<string | null>(null);
+  const draftMode = useDraftMode();
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const noteId = useId();
@@ -301,7 +303,15 @@ export function Journal({
           )}
           {editing?.id === e.id ? null : confirm === e.id ? (
             <div className="space-confirm" role="group" aria-label={COPY.journal.remove}>
-              <p>{hasSealed ? COPY.journal.removeConfirmSealed : COPY.journal.removeConfirm}</p>
+              <p>
+                {draftMode === 'keep-versions'
+                  ? hasSealed
+                    ? COPY.journal.removeConfirmSealed
+                    : COPY.journal.removeConfirm
+                  : hasSealed
+                    ? COPY.journal.removeConfirmSealedSlot
+                    : COPY.journal.removeConfirmSlot}
+              </p>
               <div className="space-actions">
                 <button type="button" className="space-btn space-btn-secondary" onClick={() => setConfirm(null)}>
                   {COPY.journal.removeNo}

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { KeyNotice } from '../components/KeyNotice';
-import { NOTICES } from '../lib/disclosures';
+import { savedVersionsNotice } from '../lib/disclosures';
+import { useDraftMode } from '../lib/draftSlot';
 import { formatAnswer, isBlank, stepById, type IntakeDraft } from '../intake/draft';
 import { COPY } from './copy';
 import { StatusIcon } from './StoryMap';
@@ -28,6 +29,7 @@ export function SpaceReview({
 }) {
   const h = useRef<HTMLHeadingElement>(null);
   useEffect(() => h.current?.focus({ preventScroll: true }), []);
+  const draftMode = useDraftMode();
   const entries = draft.entries ?? [];
   const interviewWords = draft.answers['story.freeRecall'];
   const safety = stepById('safety.now')!;
@@ -126,7 +128,7 @@ export function SpaceReview({
 
       <div className="space-seal">
         <p>{COPY.review.sealExplain}</p>
-        <KeyNotice notice={NOTICES.savedVersions} />
+        <KeyNotice notice={savedVersionsNotice(draftMode)} />
         {sealError && (
           <p className="space-seal-error" role="alert">
             {sealError}

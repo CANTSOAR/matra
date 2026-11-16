@@ -52,7 +52,8 @@ describe('space ops', () => {
     const steps = t.steps.map((id) => STEPS.find((s) => s.id === id)!);
     const pages = pagesOf(steps);
     for (const p of pages) expect(p.length).toBeGreaterThanOrEqual(1), expect(p.length).toBeLessThanOrEqual(3);
-    expect(pagesOf([STEPS.find((s) => s.id === 'person.list')!, STEPS.find((s) => s.id === 'person.escrow')!])).toHaveLength(2);
+    // two big (group) questions never share a page (person.escrow was the example; it exists only with sealed matching)
+    expect(pagesOf([STEPS.find((s) => s.id === 'person.list')!, STEPS.find((s) => s.id === 'people.witnesses')!])).toHaveLength(2);
   });
 
   it('status: not yet → partly → filled; skip-all → skipped', () => {

@@ -1,0 +1,39 @@
+Matra
+Copyright the Matra contributors. Licensed under the GNU Affero General Public License v3.0 (see LICENSE).
+
+This product includes material from third parties under the terms below.
+
+-------------------------------------------------------------------------------
+EFF Short Wordlist #1
+-------------------------------------------------------------------------------
+Used in: apps/web/src/lib/wordlist.ts (the words generated passphrases are made of)
+
+Source: "EFF's New Wordlists for Random Passphrases", Joseph Bonneau, Electronic Frontier Foundation, 2016.
+        https://www.eff.org/deeplinks/2016/07/new-wordlists-random-passphrases
+        https://www.eff.org/files/2016/09/08/eff_short_wordlist_1.txt
+Copyright Electronic Frontier Foundation.
+Licence: Creative Commons Attribution 4.0 International (CC BY 4.0),
+         https://creativecommons.org/licenses/by/4.0/
+         (as stated on EFF's copyright page, https://www.eff.org/copyright, checked 2026-11-15)
+
+Changes made: the dice numbers were dropped and 261 of the 1,296 words were removed (screens for violent, sexual,
+bodily, alcohol, drug and other distressing words, words easily confused with another, words phones autocorrect, and
+"yo-yo" for its hyphen). 1,035 words remain, unchanged and
+in the original order. EFF does not endorse Matra.
+
+-------------------------------------------------------------------------------
+On-device model software and the speech model (voice transcription)
+-------------------------------------------------------------------------------
+Used in: apps/web/src/voice/ (loaded from our own origin; see apps/web/src/ml/manifest.json for the pinned files)
+All unmodified. The licence texts ship with the app at /licenses/ (Apache-2.0.txt, MIT-onnxruntime-web.txt, NOTICE.txt).
+
+ONNX Runtime Web (onnxruntime-web), including its WebAssembly runtime and JavaScript glue
+        Copyright (c) Microsoft Corporation. Licence: MIT (/licenses/MIT-onnxruntime-web.txt)
+        https://github.com/microsoft/onnxruntime
+Transformers.js (@huggingface/transformers)
+        Copyright Hugging Face. Licence: Apache License 2.0 (/licenses/Apache-2.0.txt)
+        https://github.com/huggingface/transformers.js
+Whisper base, ONNX conversion (onnx-community/whisper-base, 8-bit quantised weights, tokenizer and configuration files)
+        Whisper is by OpenAI; the conversion is by the onnx-community. Licence: Apache License 2.0 as stated on the model
+        card (checked 2026-11-16), https://huggingface.co/onnx-community/whisper-base ; original https://github.com/openai/whisper
+        The files are used as published; they are not modified, only quantised by the publisher.

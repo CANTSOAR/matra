@@ -1,7 +1,7 @@
 # Deploy governance: n-of-m approval for code that reaches survivors
 
-*Proposed process, 2026-11-11. Not yet adopted: today Matra has one maintainer, no CI and no branch protection on
-`main`. This document describes what has to be true before real data (GOVERNANCE.md §5) and how to get there. Legal
+*Proposed process, 2026-11-11. Not yet adopted: today Matra has one maintainer and no branch protection on
+`main`; a CI workflow (`.github/workflows/ci.yml`) exists but is not a required check. This document describes what has to be true before real data (GOVERNANCE.md §5) and how to get there. Legal
 questions it raises are in the research bank and are not answered here: **Q-044** (do outside approvers become jointly
 liable, and may a nonprofit board give outsiders a veto), **Q-040** (are co-administering organizations custodians that
 can be served with process), **Q-041** (public universities as participants).*
@@ -21,7 +21,7 @@ What this process can and cannot bind, stated honestly:
 | Source on `main` | GitHub branch protection + CODEOWNERS (§3) | Not configured yet |
 | Matcher code | Survivors' clients and the app server pin `MATRA_MATCHER_MEASUREMENT`; a changed matcher is refused until a new pinned web build ships | Attestation is **simulated** (W18): a modified process can report the published measurement. Real enclave attestation is HOSTING.md work |
 | Matcher secrets | In a real enclave, the key service releases the matcher's key only to the published measurement (HOSTING.md §3) | Not built; today `MATRA_MATCHER_KEY` is an environment variable |
-| Web app served to survivors | Published build hash (§4) that anyone can compare against the served files | The operator serves the bundle, so a hash only lets people *detect* a swap, it does not prevent one (W4). Reproducibility of the web build has not been tested |
+| Web app served to survivors | Published build hash (§4) that anyone can compare against the served files | The operator serves the bundle, so a hash can only show whether the copy a checker was served matches; it does not prevent a swap, and it does not detect a swap served to one survivor while everyone else gets the published copy, unless each client verifies its own code (as WEBCAT-style approaches try to) (W4). Reproducibility of the web build has not been tested |
 | App server | Release tags (§4) and the deploy credential held by a deploy role (§5) | The host's deploy credential can push any image; only process, not cryptography, stops it |
 | Key holders | Each institution runs its own holder and decides when to upgrade | No signed-release check in the holder yet |
 
@@ -47,8 +47,8 @@ On `main` (Settings → Branches → branch protection rule, or a ruleset):
   pushed; require approval of the most recent push by someone other than its author.
 - Require review from **Code Owners**.
 - Require signed commits; require linear history; block force pushes and deletion.
-- Require status checks: typecheck, unit tests, e2e, `scripts/audit-web-build.mjs` (needs CI, which the repository does
-  not have yet).
+- Require status checks: typecheck, unit tests, e2e, `scripts/audit-web-build.mjs` (the CI workflow runs these; marking
+  them required is a repository setting, not done).
 - **Do not allow bypassing the above**, including for administrators. The repository owner keeps the technical power
   to change these settings; every change to them is listed in the transparency report (§6).
 
@@ -132,7 +132,7 @@ When a vulnerability is being exploited or is public, waiting for n organization
 
 - [ ] Approver organizations named and agreements signed (counsel reviews; Q-040, Q-044)
 - [ ] Branch protection and CODEOWNERS configured; distinct-organization check in CI
-- [ ] CI running typecheck, unit tests, e2e and the web-build audit
+- [ ] CI running typecheck, unit tests, e2e and the web-build audit as required checks (the workflow exists; branch protection does not)
 - [ ] Release signing keys listed here; first release with published measurements and approver statements
 - [ ] Web build shown reproducible by a second builder (W4)
 - [ ] Real enclave attestation for the matcher (HOSTING.md) so the measurement pin means something (W18)

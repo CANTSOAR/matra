@@ -28,8 +28,9 @@ import {
 import type { CounselorMatchGroup, CounselorNote, MatchContactDetails, MatchSummaryBundle, ReportRelease } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
 import { CONFLICT_CHECK_STATEMENT } from '../lib/disclosures';
-import { friendlyError, useRequiredSession } from '../lib/session';
+import { friendlyError } from '../lib/session';
 import { US_STATES } from '../intake/script';
+import { useMatchingSession } from '../lib/matching';
 export { CounselorGate, CounselorSignIn, RequireCounselor } from './guards';
 
 const stateName = (code: string) => US_STATES.find((s) => s.value === code)?.label ?? code;
@@ -98,7 +99,7 @@ interface NotePlain {
 }
 
 export function CounselorPortal() {
-  const { api, session } = useRequiredSession();
+  const { api, session } = useMatchingSession();
   const me = useAsync(() => api.me(), [api]);
   const fp = useAsync(() => publicKeyFingerprint(session.user.publicKey), [session.user.publicKey]);
   const groups = useAsync(() => api.counselorGroups().then((r) => r.groups), [api]);
@@ -197,7 +198,7 @@ function SharedReports({ releases, error }: { releases?: ReportRelease[]; error?
 }
 
 function MatchGroup({ group, index, onChanged, onDeclined }: { group: CounselorMatchGroup; index: number; onChanged(): void; onDeclined(): void }) {
-  const { session } = useRequiredSession();
+  const { session } = useMatchingSession();
   const [wantOpen, setWantOpen] = useState(false);
   const [state, setState] = useState<{ busy?: boolean; result?: ReconstructResult; error?: string }>({});
   // (Re)open on this device whenever the server's view of the group changes: after the conflict check the same group
@@ -318,7 +319,7 @@ function MatchGroup({ group, index, onChanged, onDeclined }: { group: CounselorM
  * the result. Contact details come only after "no conflict" (the server withholds them until then: W21).
  */
 function ConflictCheck(props: { groupId: string; canonicals: string[]; states: string[]; onClear(): void; onDeclined(): void }) {
-  const { api } = useRequiredSession();
+  const { api } = useMatchingSession();
   const [st, setSt] = useState<{ busy?: boolean; error?: string; confirmConflict?: boolean }>({});
   async function record(result: 'clear' | 'conflict') {
     setSt((s) => ({ ...s, busy: true, error: undefined }));
@@ -376,7 +377,7 @@ function ConflictCheck(props: { groupId: string; canonicals: string[]; states: s
 
 /** A conflict found after the check (before or after contacting anyone): the group is passed on, as with "I have a conflict". */
 function DeclineGroup({ groupId, onDeclined }: { groupId: string; onDeclined(): void }) {
-  const { api } = useRequiredSession();
+  const { api } = useMatchingSession();
   const [decline, setDecline] = useState<{ asking?: boolean; busy?: boolean; error?: string }>({});
   async function confirmDecline() {
     setDecline({ asking: true, busy: true });
@@ -446,7 +447,7 @@ function SurvivorCard(props: {
   notes: CounselorNote[];
   onChanged(): void;
 }) {
-  const { api, session } = useRequiredSession();
+  const { api, session } = useMatchingSession();
   const { summary: b, entryId } = props.opened;
   // A legacy (v1) bundle carries her details inside; they are hidden until the check like v2 ones (UI-only for legacy).
   const contact = props.clear ? props.opened.contact : undefined;
@@ -591,7 +592,7 @@ function SurvivorCard(props: {
  * is never their first sign of a match: W1). They decide alone; you learn only the decision. A no is final in Matra.
  */
 function ReportRequestBlock({ group, entryId, onChanged }: { group: CounselorMatchGroup; entryId: string; onChanged(): void }) {
-  const { api } = useRequiredSession();
+  const { api } = useMatchingSession();
   const [expected, setExpected] = useState(false);
   const [st, setSt] = useState<{ busy?: boolean; error?: string }>({});
   const mine = group.reportRequests.filter((r) => r.entryId === entryId);

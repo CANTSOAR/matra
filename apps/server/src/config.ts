@@ -17,6 +17,8 @@ import { holderTokenPublicKeyFromSeed, type RemoteHolderConfig } from './holders
 import { DEFAULT_HOLDER_DAILY_BUDGET } from './holder.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, TwilioVerifySmsVerifier, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 import { HttpMatcher, InProcessMatcher, type MatcherClient, type MatcherPins } from './matcher-client.js';
+import { draftsDbPathFor } from './slots.js';
+import { parseDraftMode, type DraftMode } from '@matra/shared';
 
 /** apps/server/data */
 export const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -26,6 +28,23 @@ export const WEB_DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.
 
 export function resolveDbPath(): string {
   return process.env.MATRA_DB_PATH || path.join(DATA_DIR, 'matra.db');
+}
+
+/**
+ * Draft slots (src/slots.ts): their own SQLite file. MATRA_DRAFTS_DB_PATH, else `<main db name>-drafts.db` beside the
+ * main database (data/matra-drafts.db by default).
+ */
+export function resolveDraftsDbPath(dbPath: string, env: Env = process.env): string {
+  return env.MATRA_DRAFTS_DB_PATH || draftsDbPathFor(dbPath);
+}
+
+/**
+ * MATRA_DRAFT_MODE=slot|keep-versions (packages/shared/src/slots.ts). Default "slot": a draft save replaces the one
+ * before. "keep-versions" also files every draft save as a WORM record with a ledger entry. Which one launches waits on
+ * counsel (Q-004); anything else is refused.
+ */
+export function loadDraftMode(env: Env = process.env): DraftMode {
+  return parseDraftMode(env.MATRA_DRAFT_MODE);
 }
 
 /**

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { IntakeRecord } from '@matra/shared';
 import { emptyDraft, type IntakeDraft } from '../intake/draft';
 import type { StoryEntry, Suggestion } from '../understand/types';
+import { setDraftMode } from '../lib/draftSlot';
+
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
 
 // A tiny stand-in engine: finds "March 14" and "his apartment" in her words.
 const understandSpy = vi.fn((entries: StoryEntry[], opts?: { dismissed?: string[] }): Suggestion[] => {
@@ -124,13 +131,14 @@ describe('StorySpace', () => {
     expect(screen.queryByTestId('notice-before-writing')).not.toBeInTheDocument();
   });
 
-  it('removing a piece says honestly that earlier saved versions may still include it', async () => {
+  it('removing a piece says honestly what happens to it: out of the draft on its next save (draft slot)', async () => {
     const { user, last } = setup();
     await addWords(user, 'Something I want to take out.');
     await user.click(screen.getByRole('button', { name: /^Remove/ }));
     const confirm = screen.getByRole('group', { name: 'Remove' });
     expect(confirm).not.toHaveTextContent(/cannot be undone/i);
-    expect(confirm).toHaveTextContent(/Earlier saved versions of your draft may still include it until you delete your account/);
+    expect(confirm).toHaveTextContent(/out of your draft the next time it saves/);
+    expect(confirm).not.toHaveTextContent(/Earlier saved versions/);
     await user.click(within(confirm).getByRole('button', { name: 'Yes, remove it' }));
     expect(last().entries ?? []).toHaveLength(0);
   });
@@ -267,7 +275,9 @@ describe('StorySpace', () => {
     const review = screen.getByRole('region', { name: 'Here is everything you shared' });
     const first = review.querySelector('.space-review-entry .space-verbatim')!;
     expect(first.textContent).toBe(NARRATIVE);
-    expect(within(review).getByTestId('notice-saved-versions')).toHaveTextContent('the earlier versions are kept too');
+    // her draft is saved over as she writes (MATRA_DRAFT_MODE=slot): only sealed versions are kept, and it says so
+    expect(within(review).getByTestId('notice-saved-versions')).toHaveTextContent('Sealed versions are kept');
+    expect(within(review).getByTestId('notice-saved-versions')).toHaveTextContent('your draft is saved over as you go');
 
     await user.click(within(review).getByRole('button', { name: 'Seal my account' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn't seal your account just now.*network down/);
@@ -363,5 +373,20 @@ describe('StorySpace', () => {
     expect(within(online).queryByText(/sealed match/)).not.toBeInTheDocument();
     await user.type(within(online).getByLabelText('Their phone number'), '555');
     expect(within(online).getByText(/sealed match/)).toBeInTheDocument();
+  });
+
+  it('removing a piece says earlier saved versions may still include it when every draft save is kept', async () => {
+    setDraftMode('keep-versions');
+    try {
+      const { user } = setup();
+      await addWords(user, 'A different piece to take out.');
+      await user.click(screen.getByRole('button', { name: /^Remove/ }));
+      expect(screen.getByRole('group', { name: 'Remove' })).toHaveTextContent(
+        /Earlier saved versions of your draft may still include it until you delete your account/,
+      );
+    } finally {
+      cleanup(); // unmount first, so switching back doesn't re-render a screen the next test never sees
+      setDraftMode('slot');
+    }
   });
 });

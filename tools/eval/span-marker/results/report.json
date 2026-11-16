@@ -1,0 +1,461 @@
+{
+  "engine": "understand-rules",
+  "enabledFromDev": [
+    "evidence.upload",
+    "people.told",
+    "people.witnesses",
+    "when.date",
+    "when.time",
+    "where.address",
+    "where.place"
+  ],
+  "enabledInCode": [
+    "evidence.upload",
+    "people.told",
+    "people.witnesses",
+    "when.date",
+    "when.time",
+    "where.address",
+    "where.place"
+  ],
+  "gate": {
+    "overallPrecision": 0.9,
+    "perQuestionPrecision": 0.8,
+    "negationFalseMark": 0.02,
+    "recallFloor": 0.5
+  },
+  "testGate": {
+    "pass": false,
+    "checks": [
+      {
+        "name": "invented spans (not an exact substring)",
+        "value": "0",
+        "threshold": "0",
+        "ok": true
+      },
+      {
+        "name": "marks on a sensitive or excluded question",
+        "value": "0",
+        "threshold": "0",
+        "ok": true
+      },
+      {
+        "name": "overall precision (enabled questions)",
+        "value": "78.7%",
+        "threshold": ">= 90.0%",
+        "ok": false
+      },
+      {
+        "name": "precision of every enabled question",
+        "value": "evidence.upload 83.3%, people.told 100.0%, people.witnesses 100.0%, when.date 61.5%, when.time 100.0%, where.address 100.0%, where.place 50.0%",
+        "threshold": ">= 80.0% each",
+        "ok": false
+      },
+      {
+        "name": "negation false-mark rate",
+        "value": "0.0% (0/15, 95% upper bound 20.4%)",
+        "threshold": "<= 2.0%",
+        "ok": true,
+        "note": "only 15 negated statements: a pass here cannot rule out a rate near 20.4%"
+      },
+      {
+        "name": "recall (enabled questions), reported",
+        "value": "58.1%",
+        "threshold": ">= 50.0% to be worth shipping",
+        "ok": true
+      }
+    ]
+  },
+  "dev": {
+    "split": "dev",
+    "items": 85,
+    "overall": {
+      "marks": 69,
+      "correct": 64,
+      "gold": 80,
+      "found": 63
+    },
+    "byQuestion": {
+      "when.date": {
+        "marks": 12,
+        "correct": 12,
+        "gold": 14,
+        "found": 12
+      },
+      "when.time": {
+        "marks": 5,
+        "correct": 5,
+        "gold": 8,
+        "found": 5
+      },
+      "where.address": {
+        "marks": 8,
+        "correct": 7,
+        "gold": 4,
+        "found": 4
+      },
+      "people.told": {
+        "marks": 11,
+        "correct": 11,
+        "gold": 15,
+        "found": 11
+      },
+      "people.witnesses": {
+        "marks": 5,
+        "correct": 4,
+        "gold": 6,
+        "found": 4
+      },
+      "prior.any": {
+        "marks": 4,
+        "correct": 4,
+        "gold": 6,
+        "found": 4
+      },
+      "evidence.upload": {
+        "marks": 8,
+        "correct": 8,
+        "gold": 9,
+        "found": 8
+      },
+      "where.place": {
+        "marks": 15,
+        "correct": 12,
+        "gold": 17,
+        "found": 14
+      },
+      "where.area": {
+        "marks": 1,
+        "correct": 1,
+        "gold": 1,
+        "found": 1
+      }
+    },
+    "byCategory": {
+      "plain": {
+        "marks": 33,
+        "correct": 32,
+        "gold": 36,
+        "found": 32,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 1,
+        "items": 18
+      },
+      "fragmented": {
+        "marks": 18,
+        "correct": 18,
+        "gold": 20,
+        "found": 17,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 8
+      },
+      "spelling": {
+        "marks": 7,
+        "correct": 5,
+        "gold": 13,
+        "found": 5,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 2,
+        "items": 8
+      },
+      "negation": {
+        "marks": 3,
+        "correct": 3,
+        "gold": 3,
+        "found": 3,
+        "forbid": 16,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 16
+      },
+      "hypothetical": {
+        "marks": 0,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 11,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 10
+      },
+      "reported": {
+        "marks": 0,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 8,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 7
+      },
+      "other-actor": {
+        "marks": 0,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 8,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 7
+      },
+      "sensitive-trap": {
+        "marks": 8,
+        "correct": 6,
+        "gold": 8,
+        "found": 6,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 2,
+        "items": 5
+      },
+      "no-marks": {
+        "marks": 0,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 6
+      }
+    },
+    "falseMarkRate": {
+      "negation": {
+        "forbid": 16,
+        "hits": 0,
+        "rate": 0,
+        "upper95": 0.19361341827271994
+      },
+      "hypothetical": {
+        "forbid": 11,
+        "hits": 0,
+        "rate": 0,
+        "upper95": 0.2588400172488141
+      },
+      "reported": {
+        "forbid": 8,
+        "hits": 0,
+        "rate": 0,
+        "upper95": 0.3244156195108769
+      },
+      "other-actor": {
+        "forbid": 8,
+        "hits": 0,
+        "rate": 0,
+        "upper95": 0.3244156195108769
+      }
+    },
+    "droppedByReason": {
+      "ambiguous-clause": 3,
+      "over-limit": 1,
+      "negated": 6,
+      "hypothetical": 4,
+      "sensitive-group": 13,
+      "reported-speech": 3,
+      "quoted": 1,
+      "other-actor": 6,
+      "sensitive-context": 3
+    },
+    "sensitiveMarks": 0,
+    "inventedSpans": 0
+  },
+  "test": {
+    "split": "test",
+    "items": 79,
+    "overall": {
+      "marks": 50,
+      "correct": 40,
+      "gold": 71,
+      "found": 39
+    },
+    "byQuestion": {
+      "when.date": {
+        "marks": 13,
+        "correct": 8,
+        "gold": 11,
+        "found": 7
+      },
+      "where.place": {
+        "marks": 8,
+        "correct": 4,
+        "gold": 12,
+        "found": 4
+      },
+      "when.time": {
+        "marks": 3,
+        "correct": 3,
+        "gold": 6,
+        "found": 3
+      },
+      "people.told": {
+        "marks": 11,
+        "correct": 11,
+        "gold": 14,
+        "found": 11
+      },
+      "people.witnesses": {
+        "marks": 1,
+        "correct": 1,
+        "gold": 7,
+        "found": 1
+      },
+      "prior.any": {
+        "marks": 2,
+        "correct": 2,
+        "gold": 6,
+        "found": 2
+      },
+      "evidence.upload": {
+        "marks": 6,
+        "correct": 5,
+        "gold": 7,
+        "found": 5
+      },
+      "where.address": {
+        "marks": 5,
+        "correct": 5,
+        "gold": 5,
+        "found": 5
+      },
+      "where.area": {
+        "marks": 1,
+        "correct": 1,
+        "gold": 3,
+        "found": 1
+      }
+    },
+    "byCategory": {
+      "plain": {
+        "marks": 22,
+        "correct": 20,
+        "gold": 30,
+        "found": 19,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 2,
+        "items": 17
+      },
+      "fragmented": {
+        "marks": 13,
+        "correct": 12,
+        "gold": 18,
+        "found": 12,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 1,
+        "items": 8
+      },
+      "spelling": {
+        "marks": 3,
+        "correct": 2,
+        "gold": 13,
+        "found": 2,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 1,
+        "items": 8
+      },
+      "negation": {
+        "marks": 3,
+        "correct": 3,
+        "gold": 3,
+        "found": 3,
+        "forbid": 15,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 15
+      },
+      "hypothetical": {
+        "marks": 0,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 9,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 8
+      },
+      "reported": {
+        "marks": 1,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 9,
+        "forbidHits": 1,
+        "itemsWithFalseMarks": 1,
+        "items": 6
+      },
+      "other-actor": {
+        "marks": 3,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 6,
+        "forbidHits": 1,
+        "itemsWithFalseMarks": 2,
+        "items": 6
+      },
+      "sensitive-trap": {
+        "marks": 5,
+        "correct": 3,
+        "gold": 7,
+        "found": 3,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 1,
+        "items": 5
+      },
+      "no-marks": {
+        "marks": 0,
+        "correct": 0,
+        "gold": 0,
+        "found": 0,
+        "forbid": 0,
+        "forbidHits": 0,
+        "itemsWithFalseMarks": 0,
+        "items": 6
+      }
+    },
+    "falseMarkRate": {
+      "negation": {
+        "forbid": 15,
+        "hits": 0,
+        "rate": 0,
+        "upper95": 0.20388926630434784
+      },
+      "hypothetical": {
+        "forbid": 9,
+        "hits": 0,
+        "rate": 0,
+        "upper95": 0.2991527535509594
+      },
+      "reported": {
+        "forbid": 9,
+        "hits": 1,
+        "rate": 0.1111111111111111,
+        "upper95": 0.4350062147680602
+      },
+      "other-actor": {
+        "forbid": 6,
+        "hits": 1,
+        "rate": 0.16666666666666666,
+        "upper95": 0.563509436563646
+      }
+    },
+    "droppedByReason": {
+      "sensitive-group": 12,
+      "ambiguous-clause": 12,
+      "negated": 6,
+      "hypothetical": 4,
+      "quoted": 1,
+      "other-actor": 2,
+      "sensitive-context": 4
+    },
+    "sensitiveMarks": 0,
+    "inventedSpans": 0
+  }
+}

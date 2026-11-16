@@ -7,15 +7,15 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { EscrowEntry } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, formatDate, useAsync } from '../components/common';
-import { friendlyError, useRequiredSession } from '../lib/session';
+import { friendlyError } from '../lib/session';
 import { MATCHING_CONSENT_LINES } from '../lib/disclosures';
-import { escrowLabel, withdrawEscrow } from '../lib/vault';
+import { escrowLabel, useMatchingSession, withdrawEscrow } from '../lib/matching';
 
 /** What she agreed to when she opted in, word for word (the same lines as MATCHING_CONSENT_STATEMENT). */
 export const MATCHING_EXPLANATION = MATCHING_CONSENT_LINES;
 
 export function SurvivorMatching() {
-  const { api, session } = useRequiredSession();
+  const { api, session } = useMatchingSession();
   const entries = useAsync(async () => {
     const { entries } = await api.listEscrow();
     return Promise.all(entries.map(async (e) => ({ entry: e, label: await escrowLabel(e.labelEnvelope, session.masterKey) })));
@@ -79,7 +79,7 @@ export function SurvivorMatching() {
 }
 
 function MatchRow({ entry, label, onChanged }: { entry: EscrowEntry; label: string; onChanged(): void }) {
-  const { api } = useRequiredSession();
+  const { api } = useMatchingSession();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

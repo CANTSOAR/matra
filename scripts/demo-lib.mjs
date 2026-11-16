@@ -51,8 +51,17 @@ export function loadPublic() {
 
 // Every service runs as PRODUCTION with MATRA_DEMO_MODE=1, the one switch that lets production use the mock SMS provider
 // and the simulated attestation (docs/design/WEEKEND_MVP.md §1.2), and MATRA_INSPECTOR=1 for the "Server view" page.
-// Loopback only (HOST=127.0.0.1).
-const base = () => ({ ...process.env, NODE_ENV: 'production', MATRA_DEMO_MODE: '1', MATRA_INSPECTOR: '1', HOST: '127.0.0.1', MATRA_MATCH_RELEASE_DELAY_HOURS: '0' });
+// Loopback only (HOST=127.0.0.1). The demo shows sealed matching end to end, so it runs with MATRA_MATCHING=on (the
+// pilot runs it off; @matra/shared matching-mode.ts).
+const base = () => ({
+  ...process.env,
+  NODE_ENV: 'production',
+  MATRA_DEMO_MODE: '1',
+  MATRA_INSPECTOR: '1',
+  MATRA_MATCHING: 'on',
+  HOST: '127.0.0.1',
+  MATRA_MATCH_RELEASE_DELAY_HOURS: '0',
+});
 
 export function holderEnv(pub, i) {
   return {
@@ -115,6 +124,7 @@ export function webEnv(pub) {
     ...env,
     ...pinEnv(pub),
     MATRA_DEMO_MODE: '1', // a demo build: accepts the SIMULATED attestation (and still checks the pinned measurement)
+    MATRA_MATCHING: 'on', // the demo build includes sealed matching
     VITE_MATRA_DEMO_BANNER: '1',
     MATRA_WEB_PORT: String(PORTS.web),
     MATRA_API_URL: `http://127.0.0.1:${PORTS.api}`,

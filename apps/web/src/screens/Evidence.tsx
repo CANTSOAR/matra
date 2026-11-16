@@ -4,21 +4,23 @@ import type { BlobMeta, EvidenceItem } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { IconFile, IconImage } from '../components/icons';
 import { KeyNotice } from '../components/KeyNotice';
+import { VaultStopped } from '../components/UnreadableNote';
 import { emptyDraft } from '../integration/intakeAdapter';
 import { NOTICES } from '../lib/disclosures';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import {
   blobKeyFor,
   formatBytes,
-  latestOf,
-  loadVault,
+  legacyDraftEvidence,
+  loadSpace,
   mergeEvidence,
   openEvidence,
   resumeFrom,
-  sealPayload,
   shortHash,
   uploadEvidence,
+  vaultError,
 } from '../lib/vault';
+import { SlotConflictError, saveDraftSlot } from '../lib/draftSlot';
 
 interface Uploaded {
   item: EvidenceItem;
@@ -63,19 +65,28 @@ export function Evidence() {
   const [persistMsg, setPersistMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Fails closed for writing (lib/vault.ts loadSpace): adding a file saves its details to her draft, and a draft built
+  // from a space that didn't load cleanly could be older than her newest. Then nothing is uploaded; she sees why, and
+  // Try again. Her files stay listed (read-only), with the details of what did load.
   const loadExisting = useCallback(async () => {
-    const [vault, { blobs }, mem] = await Promise.all([loadVault(api, session.masterKey), api.listBlobs(), getWorkingData()]);
-    const draft = latestOf(vault, 'draft');
-    const final = latestOf(vault, 'final');
-    const meta = mergeEvidence(draft?.payload.evidence, final?.payload.record?.evidence, mem?.evidence);
-    const resume = resumeFrom(vault);
+    const [{ vault, slot, problems }, { blobs }, mem] = await Promise.all([
+      loadSpace(api, session.masterKey, { allowPartial: true }),
+      api.listBlobs(),
+      getWorkingData(),
+    ]);
+    const resume = resumeFrom(slot.slot, vault);
+    const final = resume.final;
+    const meta = mergeEvidence(legacyDraftEvidence(vault), resume.evidence, final?.payload.record?.evidence, mem?.evidence);
     return {
       blobs,
       meta,
-      vaultDraft: draft,
       resumeDraft: resume.draft,
-      resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.draftRecord?.payload.evidence),
+      resumeEvidence: mergeEvidence(final?.payload.record?.evidence, resume.evidence),
+      escrowedHashes: resume.escrowedHashes,
+      slotVersion: slot.version,
       inFinal: new Set((final?.payload.record?.evidence ?? []).map((e) => e.blobId)),
+      /** what didn't load cleanly: when set, nothing is uploaded or saved from this page */
+      stop: problems.length ? vaultError(problems).message : null,
     };
   }, [api, session.masterKey, getWorkingData]);
   const existing = useAsync(loadExisting, [loadExisting]);
@@ -87,6 +98,19 @@ export function Evidence() {
     const list = Array.from(files);
     if (!list.length) return;
     setPersistMsg(null);
+    // Her space must have opened cleanly first (she may have chosen a file before it finished): if it can't, nothing is
+    // uploaded, so no file is left without its details in her draft.
+    let opened = existingRef.current;
+    try {
+      if (!opened) opened = await loadExisting();
+    } catch (e) {
+      setPersistMsg(`Nothing was uploaded. ${friendlyError(e)}`);
+      return;
+    }
+    if (opened.stop) {
+      setPersistMsg(`Nothing was uploaded. ${opened.stop}`);
+      return;
+    }
     const added: EvidenceItem[] = [];
     for (const file of list) {
       setPending((p) => [...p, { name: file.name, status: 'Removing hidden details and encrypting on your device…' }]);
@@ -101,23 +125,29 @@ export function Evidence() {
       }
     }
     if (!added.length) return;
-    // Attach to the in-progress account (in memory) and persist the metadata in a vault draft,
-    // so file names/hashes survive sign-out.
+    // Attach to the in-progress account (in memory) and save the details in her draft slot, so file names and hashes
+    // survive sign-out.
     try {
       const mem = await getWorkingData();
-      // If she chose a file before her space finished opening, open it now: otherwise her story would be saved over
-      // with an empty draft (and the next screen would start from the beginning).
-      const ex = existingRef.current ?? (await loadExisting());
-      const vaultDraft = ex.vaultDraft;
+      // the latest clean load (opened above, or reloaded since): never an empty draft over her story
+      const ex = existingRef.current ?? opened;
       const draft = mem?.draft ?? ex.resumeDraft ?? emptyDraft();
       const evidence = mergeEvidence(ex.resumeEvidence, mem?.evidence, added);
-      const res = await sealPayload(
-        api,
-        session.masterKey,
-        { kind: 'draft', draft, evidence, savedAt: new Date().toISOString() },
-        mem?.savedDraftRecordId ?? vaultDraft?.meta.id,
-      );
-      await setWorkingData({ draft, evidence, savedDraftRecordId: res.record.id });
+      try {
+        const res = await saveDraftSlot(
+          api,
+          session.masterKey,
+          { draft, evidence, ...(ex.escrowedHashes.length > 0 && { escrowedHashes: ex.escrowedHashes }) },
+          mem?.draft && mem.slotVersion !== undefined ? mem.slotVersion : ex.slotVersion,
+        );
+        await setWorkingData({ draft, evidence, slotVersion: res.version });
+      } catch (e) {
+        // Her draft was saved from another device or tab since: keep the files' details in memory (My story folds them
+        // in and asks her which draft to keep) rather than saving this draft over that one.
+        if (e instanceof SlotConflictError)
+          await setWorkingData({ draft: mem?.draft ?? null, evidence: mergeEvidence(mem?.evidence, added), ...(mem?.slotVersion !== undefined && { slotVersion: mem.slotVersion }) });
+        throw e;
+      }
       setPersistMsg('Saved to your space and added to your draft story.');
       void existing.reload();
     } catch (e) {
@@ -149,7 +179,10 @@ export function Evidence() {
       >
         Evidence
       </PageTitle>
+      {existing.error && !existing.loading && <VaultStopped error={existing.error} onRetry={() => void existing.reload()} />}
+      {existing.data?.stop && !existing.loading && <VaultStopped error={existing.data.stop} onRetry={() => void existing.reload()} />}
 
+      {!existing.error && !existing.data?.stop && (
       <section className="card stack" aria-labelledby="add">
         <h2 id="add">Add something</h2>
         <div
@@ -202,6 +235,7 @@ export function Evidence() {
         ))}
         {persistMsg && <p role="status">{persistMsg}</p>}
       </section>
+      )}
 
       {uploaded.length > 0 && (
         <section className="card stack" aria-labelledby="just-added" data-testid="evidence-just-added">
@@ -231,10 +265,10 @@ export function Evidence() {
         </section>
       )}
 
+      {!existing.error && (
       <section className="card stack" aria-labelledby="in-vault" data-testid="evidence-in-space">
         <h2 id="in-vault">In your space</h2>
         {existing.loading && <Loading />}
-        {existing.error && <ErrorNote>{existing.error}</ErrorNote>}
         {existing.data && existing.data.blobs.length === 0 && (
           <p className="muted">No files yet. There’s no rush — add things whenever you’re ready.</p>
         )}
@@ -256,6 +290,7 @@ export function Evidence() {
           </>
         )}
       </section>
+      )}
     </div>
   );
 }

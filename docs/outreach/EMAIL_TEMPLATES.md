@@ -21,7 +21,7 @@
 
 Dear [Mr./Ms./Mx. Last name],
 
-I came across your work on [specific: e.g., protective-order representation for survivors in Essex County / your article on victims' rights in NJ courts]. I'm building Matra, a nonprofit, open-source tool that lets adult sexual-assault survivors in NJ and NY document what happened in their own words, encrypted so that we, the operator, can't read it. If and only if she chooses, she can share it with a verified pro-bono attorney.
+I came across your work on [specific: e.g., protective-order representation for survivors in Essex County / your article on victims' rights in NJ courts]. I'm building Matra, a nonprofit, open-source tool that lets adult sexual-assault survivors in NJ and NY document what happened in their own words, encrypted on her device so our server stores only ciphertext. If and only if she chooses, she can share it with a verified pro-bono attorney.
 
 It's a prototype that runs on invented data only. It hasn't been audited, and nobody has reviewed our legal analysis yet. That's why I'm writing. Would you be willing to spend about an hour reviewing three short items: the consent text a survivor reads before sharing, our warnings about subpoenas and version history, and a sample Incident Summary? A 20-minute call to walk through them would also work.
 
@@ -72,7 +72,7 @@ With gratitude,
 
 Dear Professor [Last name],
 
-I'm writing about a possible scoped project for the [Clinic name]. I'm the founder of Matra, a nonprofit, open-source prototype. It helps adult sexual-assault survivors in NJ and NY document their experiences in their own words, encrypted so the operator can't read them, and lets them choose to share with a verified pro-bono attorney.
+I'm writing about a possible scoped project for the [Clinic name]. I'm the founder of Matra, a nonprofit, open-source prototype. It helps adult sexual-assault survivors in NJ and NY document their experiences in their own words, encrypted on their devices so the server stores only ciphertext, and lets them choose to share with a verified pro-bono attorney.
 
 A non-lawyer research memo (attached) identifies open questions that need supervised legal analysis before any real use. Examples: whether a survivor-chooses attorney directory run by a nonprofit is a referral service or a legal service plan under RPC 7.3(e); how to document attorney-directed preparation for privilege; deletion warnings and spoliation; and VAWA/VOCA confidentiality. Any one of these could be a semester project. We also need help with entity formation and survivor-facing terms of use.
 
@@ -89,7 +89,7 @@ Respectfully,
 
 Dear [Program / Intake team],
 
-I'd like to ask about fiscal sponsorship for Matra. Matra is an open-source (AGPL-3.0) software project for adult sexual-assault survivors in NJ and NY. It provides trauma-informed documentation in her own words, encrypted on her device so the operator can't read it, and optional consent-based sharing with a verified pro-bono attorney.
+I'd like to ask about fiscal sponsorship for Matra. Matra is an open-source (AGPL-3.0) software project for adult sexual-assault survivors in NJ and NY. It provides trauma-informed documentation in her own words, encrypted on her device so the server stores only ciphertext, and optional consent-based sharing with a verified pro-bono attorney.
 
 A few facts relevant to your review:
 - It's a prototype. It holds no real survivor data and will hold none until an independent security audit and counsel review are complete.
@@ -110,7 +110,7 @@ Thank you,
 
 Hello [Name / team],
 
-Matra is an open-source (AGPL-3.0) web app for adult sexual-assault survivors. Survivors encrypt their records client-side with WebCrypto: PBKDF2-600k into HKDF, AES-256-GCM per object, and RSA-OAEP-3072 for sharing with an attorney. A Node/SQLite server stores only ciphertext, and an append-only hash-chain ledger records each sealed item. There is also a demo-only identifier-matching "escrow" (PBKDF2 plus a server HMAC pepper). We are now moving it to an RFC 9497 OPRF with a split key and a counselor threshold layer, following Callisto's published design.
+Matra is an open-source (AGPL-3.0) web app for adult sexual-assault survivors. Survivors encrypt their records client-side with WebCrypto: PBKDF2-600k into HKDF, AES-256-GCM per object, and RSA-OAEP-3072 for sharing with an attorney. A Node/SQLite server stores only ciphertext, and an append-only hash-chain ledger records each sealed item. There is also a demo-only identifier-matching feature (an RFC 9497 threshold OPRF with a counselor layer, following Callisto's published design), off by default and off for any pilot.
 
 We have not been audited. We will not accept real survivor data until an independent audit is done and its findings are fixed or disclosed. We will publish the results. Our whitepaper lists the known weaknesses: web E2EE malicious-update and key-substitution risk, the pepper holder's ability to test identifiers, ciphertext not being key-committed, an unanchored ledger, and metadata exposure.
 
