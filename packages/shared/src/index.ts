@@ -176,7 +176,7 @@ export interface IntakeRecord {
     forensicExamCompleted?: boolean; // SANE / rape kit
     /** Forensic kit details (asked only if an exam was completed). */
     toxicologyTest?: TriAnswer;
-    /** Kit kept anonymously / without a police report (NJ "Five-Year Hold" kit). */
+    /** Kit kept anonymously / without a police report (NJ "Hold" kit, kept 20 years since AG Directive 2023-1; the field name predates it). */
     fiveYearHoldKit?: TriAnswer;
     kitReportedToPolice?: TriAnswer;
     injuries?: string;
@@ -353,17 +353,33 @@ export type ShareStatus = 'active' | 'revoked';
 export interface Share {
   id: string;
   recordId: string;
-  survivorId: string;
+  /** Her own list only: an attorney never gets her account id. */
+  survivorId?: string;
   attorneyId: string;
   status: ShareStatus;
   /** Exact consent text the survivor agreed to */
   consentStatement: string;
+  /** 'brief' only on shares made before the incident summary stopped being a separate (and unenforced) choice. */
   scope: Array<'record' | 'evidence' | 'brief'>;
+  /** The label the attorney sees for this share (ShareBundle.survivorAlias); both sides' lists carry it. */
+  survivorAlias?: string;
   createdAt: string;
   /** Access stops at this time (default 90 days); the survivor can renew. Stops future access only. */
   expiresAt: string;
   revokedAt?: string;
   ledgerEntryId: string;
+  /**
+   * Her own list only: whether the attorney is verified by Matra right now. While false, the server refuses the
+   * attorney's access to this share (paused, not revoked); she decides whether to revoke or keep it.
+   */
+  attorneyVerified?: boolean;
+  /**
+   * The attorney's copies of the keys were deleted: at once when she revoked, or 30 days after access expired. Renewing
+   * then sends fresh ones from her device (RenewShareRequest).
+   */
+  keyDeleted?: boolean;
+  /** Her own list only: the files this share covers (a renewal after keyDeleted wraps exactly these again). */
+  blobIds?: string[];
 }
 
 export interface ShareBundle {
@@ -372,6 +388,7 @@ export interface ShareBundle {
   /** record key wrapped to the attorney's RSA public key */
   recipientWrappedKey: WrappedKey;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey; contentHash: string; sizeBytes: number }>;
+  /** The share's label, made up for it on her device ("Client XXXXX"); a share made before that may hold her username. */
   survivorAlias: string;
   // NOTE: attorneys no longer receive sealed-match counts. Matches go only to a Legal Options Counselor
   // (role 'counselor'), who contacts each matched survivor separately — see CounselorMatchGroup.
@@ -486,7 +503,8 @@ export type ReportReleaseStatus = 'active' | 'revoked';
  * behalf: 'conflict' (the counselor later found a conflict), 'resealed' (her entry moved to a new matching key and so
  * to a new group), 'withdrawn' (she withdrew the entry; the rows are then deleted, only the ledger row remains).
  */
-export type ReportRevokeReason = 'survivor' | 'conflict' | 'resealed' | 'withdrawn';
+/** 'matching_off': the server runs with MATRA_MATCHING=off, so Matra ended a release she could no longer see or end. */
+export type ReportRevokeReason = 'survivor' | 'conflict' | 'resealed' | 'withdrawn' | 'matching_off';
 
 /**
  * Stage 2: the counselor asks ONE matched survivor for her full report. The survivor decides alone; the counselor
@@ -520,6 +538,7 @@ export interface ReportConsentRequest {
   recordId: string;
   recipientWrappedKey: WrappedKey;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+  /** Names the key fingerprint, and says what is shared in the words of consent.ts (else 400 consent_mismatch). */
   consentStatement: string;
   /** fingerprint of the counselor key she confirmed (or that the signed roster vouched for); the server rejects a mismatch */
   counselorKeyFingerprint: string;
@@ -820,7 +839,39 @@ export interface SetUpRecoveryRequest {
 }
 /** DELETE /api/account/recovery */
 export interface TurnOffRecoveryRequest { authKey: string }
+/** POST /api/account/delete: her passphrase auth key again, not only a session. */
+export interface DeleteAccountRequest { authKey: string }
 export interface RecoverStartRequest { username: string; recoveryAuthKey: string }
+
+// ── changing the passphrase, and other signed-in sessions ──
+
+/**
+ * POST /api/account/passphrase (signed in, any role). Her account secret stays the same: her client unwraps it with
+ * the old passphrase (key version 1: derives it), wraps it under the new one, and sends only that and the new auth
+ * material. A key-version-1 account becomes version 2. Her recovery code (if any) keeps working, because it wraps the
+ * same secret. Every other session of hers ends.
+ */
+export interface ChangePassphraseRequest {
+  /** her current passphrase auth key (re-authentication) */
+  authKey: string;
+  /** the new passphrase's auth key, salt and PBKDF2 rounds (at least the server's floor) */
+  newAuthKey: string;
+  kdfSalt: string;
+  kdfIterations: number;
+  /** AES-GCM(KEK_pass of the new passphrase, account secret) */
+  wrappedAccountKey: Envelope;
+}
+export interface ChangePassphraseResponse { user: PublicUser; endedSessions: number }
+
+/** One of her signed-in sessions (GET /api/auth/sessions). Matra keeps no device, browser or place for a session. */
+export interface SessionInfo {
+  signedInAt: string;
+  expiresAt: string;
+  /** the session that asked */
+  current: boolean;
+}
+/** POST /api/auth/sessions/revoke-others: her passphrase auth key again, not only a session. */
+export interface RevokeOtherSessionsRequest { authKey: string }
 export interface RecoverStartResponse {
   /** single use, 10 minutes, held in server memory only */
   resetToken: string;
@@ -842,8 +893,11 @@ export interface CreateRecordRequest { envelope: Envelope; ownerWrappedKey: Wrap
 export interface CreateRecordResponse { record: VaultRecordMeta; ledgerEntry: LedgerEntry }
 
 /** POST /api/vault/blobs — body is raw application/octet-stream ciphertext (iv||ct);
- *  header `X-Owner-Wrapped-Key` = base64(JSON(WrappedKey)). */
-export interface CreateBlobResponse { blob: BlobMeta; ledgerEntry: LedgerEntry }
+ *  header `X-Owner-Wrapped-Key` = base64(JSON(WrappedKey)).
+ *  Optional header `X-Evidence-Commitment` = 64 lowercase hex: the SALTED commitment SHA-256(salt || SHA-256(original file))
+ *  (apps/web/src/evidence/commitment.ts). The server cannot check it and learns nothing from it (the salt stays on her
+ *  device); it is ledgered as an 'evidence.committed' entry for this blob. The plain hash of any file is never sent. */
+export interface CreateBlobResponse { blob: BlobMeta; ledgerEntry: LedgerEntry; commitmentEntry?: LedgerEntry }
 
 export interface CreateShareRequest {
   recordId: string;
@@ -852,17 +906,33 @@ export interface CreateShareRequest {
   /** Fingerprint of the attorney key the survivor confirmed on screen; server rejects on mismatch. */
   attorneyKeyFingerprint: string;
   blobs: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+  /**
+   * Must name the key fingerprint and say what is shared, in the words of consent.ts: the written account sentence,
+   * the sentence for exactly `blobs.length` files, and the label sentence for `survivorAlias` (else 400 consent_mismatch).
+   */
   consentStatement: string;
+  /** 'record', plus 'evidence' exactly when `blobs` is not empty. 'brief' is refused (old shares may still list it). */
   scope: Share['scope'];
+  /** "Client XXXXX" (SHARE_ALIAS_RE), made up on her device for this share only */
   survivorAlias: string;
   /** 1-365, default 90 */
   expiresInDays?: number;
 }
 
+/**
+ * POST /api/shares/:id/renew. `recipientWrappedKey` and `blobs` only when the share's keys were deleted (`keyDeleted`):
+ * the same record and exactly the files it covered, wrapped again to the key named in her consent statement.
+ */
+export interface RenewShareRequest {
+  expiresInDays?: number;
+  recipientWrappedKey?: WrappedKey;
+  blobs?: Array<{ blobId: string; recipientWrappedKey: WrappedKey }>;
+}
+
 export interface LedgerVerifyResponse { ok: boolean; length: number; headHash: string; brokenAtSeq?: number }
 
 /**
- * POST /api/ledger/proof (public): look up sealed-content ledger entries ('record.sealed', 'blob.sealed') by the exact
+ * POST /api/ledger/proof (public): look up sealed-content ledger entries ('record.sealed', 'blob.sealed', and the salted 'evidence.committed') by the exact
  * SHA-256 content hashes the requester already holds, for the in-browser checker (/verify) and the attorney portal.
  * Only exact 64-hex hashes; no prefixes, ids or ranges, so it cannot be used to list the ledger.
  */
@@ -898,6 +968,12 @@ export interface ApiError { error: string; code?: string }
  POST   /api/account/recovery    SetUpRecoveryRequest -> { user: PublicUser } (401 invalid_credentials on a wrong passphrase;
                                                          403 forbidden_role for a non-survivor account)
  DELETE /api/account/recovery    TurnOffRecoveryRequest -> { user: PublicUser }
+ POST   /api/account/passphrase  ChangePassphraseRequest -> ChangePassphraseResponse (401 invalid_credentials on a wrong
+                                                         passphrase; 409 passphrase_changed if it changed meanwhile;
+                                                         429 rate_limited; every other session of hers ends)
+ GET    /api/auth/sessions                            -> { sessions: SessionInfo[] }  (her unexpired sessions, newest first)
+ POST   /api/auth/sessions/revoke-others RevokeOtherSessionsRequest -> { endedSessions: number } (401 invalid_credentials
+                                                         on a wrong passphrase; 429 rate_limited)
 
  POST   /api/vault/records      CreateRecordRequest   -> CreateRecordResponse
  GET    /api/vault/records                            -> { records: VaultRecordMeta[] }
@@ -905,6 +981,12 @@ export interface ApiError { error: string; code?: string }
  POST   /api/vault/blobs        (octet-stream)        -> CreateBlobResponse
  GET    /api/vault/blobs                              -> { blobs: BlobMeta[] }
  GET    /api/vault/blobs/:id                          -> octet-stream (owner, or attorney with active share covering it)
+ GET    /api/vault/slots/:name                        -> GetSlotResponse (survivor; slot null when none; name = 64 hex)
+ PUT    /api/vault/slots/:name  PutSlotRequest        -> PutSlotResponse (survivor; 409 slot_conflict when expectedVersion is
+                                                         stale; 400 when the ciphertext isn't whole 16 KiB buckets;
+                                                         never a ledger entry or audit row, except that
+                                                         MATRA_DRAFT_MODE=keep-versions also files it as a record)
+ DELETE /api/vault/slots/:name  { expectedVersion? }  -> { ok: true } (survivor; 409 slot_conflict when stale)
 
  GET    /api/ledger/entries/:id                       -> { entry: LedgerEntry }
  GET    /api/ledger/verify                            -> LedgerVerifyResponse
@@ -917,9 +999,15 @@ export interface ApiError { error: string; code?: string }
  POST   /api/shares             CreateShareRequest    -> { share: Share, ledgerEntry: LedgerEntry }
  GET    /api/shares                                   -> { shares: Share[] }  (survivor: outgoing, attorney: incoming)
  GET    /api/shares/:id/bundle                        -> ShareBundle  (attorney only, active shares)
- POST   /api/shares/:id/renew  { expiresInDays? } -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; not revoked)
- POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only)
+ POST   /api/shares/:id/renew  RenewShareRequest     -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; not revoked;
+                                                         a fresh wrap only when share.keyDeleted: 409 rewrap_required
+                                                         without one, 409 rewrap_not_needed with one otherwise,
+                                                         409 attorney_key_mismatch, 400 rewrap_mismatch)
+ POST   /api/shares/:id/revoke                        -> { share: Share, ledgerEntry: LedgerEntry } (survivor only; deletes
+                                                         the attorney's copies of the keys in the same transaction)
 
+ Sealed matching (only with MATRA_MATCHING=on; with it off, every route from here to /api/report-releases answers
+ 404 { code: 'matching_disabled' }, and POST /api/auth/register with role 'counselor' does too):
  GET    /api/escrow                                   -> { entries: EscrowEntry[] } (own sealed-match entries; status always 'sealed')
 
  GET    /api/matching/config                          -> MatchingConfig   (survivor)
@@ -954,10 +1042,14 @@ export interface ApiError { error: string; code?: string }
  GET    /api/report-requests                                 -> { requests: SurvivorReportRequest[] } (survivor: her own)
  POST   /api/report-requests/:id/consent ReportConsentRequest -> { release: ReportRelease, ledgerEntry: LedgerEntry }
  POST   /api/report-requests/:id/decline                     -> { request: SurvivorReportRequest }
- POST   /api/report-releases/:id/revoke                      -> { release: ReportRelease, ledgerEntry: LedgerEntry }
+ POST   /api/report-releases/:id/revoke                      -> { release: ReportRelease, ledgerEntry: LedgerEntry } (deletes the
+                                                               counselor's copies of the keys in the same transaction)
 
  GET    /api/audit                                    -> { events: AuditEvent[] }   (own events)
- POST   /api/account/delete                           -> { ok: true }  (crypto-shred: deletes keys + ciphertext; ledger hashes remain)
+ POST   /api/account/delete  DeleteAccountRequest     -> { ok: true }  (401 invalid_credentials on a wrong passphrase. Deletes her
+                                                         ciphertext and wrapped keys from the live database, then empties
+                                                         the WAL; ledger hashes remain. Not a crypto-shred: earlier
+                                                         backups stay decryptable with her passphrase)
 
  GET    /api/dev/inspector                            -> InspectorSnapshot (dev / demo only: MATRA_INSPECTOR=1, and never in
                                                          production unless MATRA_DEMO_MODE=1; unauthenticated; inspector.ts)
@@ -965,3 +1057,6 @@ export interface ApiError { error: string; code?: string }
 
 export * from './request-log.js';
 export * from './inspector.js';
+export * from './matching-mode.js';
+export * from './slots.js';
+export * from './consent.js';

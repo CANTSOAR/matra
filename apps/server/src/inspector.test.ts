@@ -11,7 +11,7 @@ import { generateOprfKey, splitOprfKey, toBase64 } from '@matra/crypto';
 import { inspectValue, inspectorEnabled, type InspectorSnapshot } from '@matra/shared';
 import { createHolderApp } from './holder.js';
 import { holderTokenPublicKeyFromSeed } from './holders.js';
-import { createRecord, makeApp, registerUser, sealMatch, verifyPhone } from './test-helpers.js';
+import { createRecord, makeApp, makeMatchingApp, registerUser, sealMatch, verifyPhone } from './test-helpers.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -37,7 +37,7 @@ describe('inspector: when it is on', () => {
 
 describe('inspector: what it shows', () => {
   it('redacts what the server never stores, never shows an IP, and holds only ciphertext of her story', async () => {
-    const { app } = makeApp({ inspector: true });
+    const { app } = makeMatchingApp({ inspector: true });
     const u = await registerUser(app, 'insp.survivor');
     await registerUser(app, 'insp.counselor', 'counselor');
     expect((await verifyPhone(app, u, '(201) 555-0177')).status).toBe(200);

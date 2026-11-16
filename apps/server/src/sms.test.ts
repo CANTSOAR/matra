@@ -13,13 +13,13 @@ import { createApp, flushPhoneTokens, getDb } from './app.js';
 import { loadPhoneVerification, loadSmsVerifier, assertMockAllowed } from './config.js';
 import { openDb } from './db.js';
 import { MockSmsVerifier, TwilioVerifySmsVerifier, phoneToken, type SmsVerifier } from './sms.js';
-import { TEST_PEPPER, makeApp, registerUser, sealMatch, verifyPhone } from './test-helpers.js';
+import { TEST_PEPPER, makeMatchingApp, registerUser, sealMatch, verifyPhone } from './test-helpers.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'matra-sms-'));
 const blinded = () => ({ blinded: toBase64(blindMatchIdentifier('email:x@example.com').blinded) });
-const start = (app: ReturnType<typeof makeApp>['app'], auth: { Authorization: string }, phone = '(201) 555-0100') =>
+const start = (app: ReturnType<typeof makeMatchingApp>['app'], auth: { Authorization: string }, phone = '(201) 555-0100') =>
   request(app).post('/api/matching/verification/start').set(auth).send({ phone });
-const check = (app: ReturnType<typeof makeApp>['app'], auth: { Authorization: string }, challengeId: string, code: string) =>
+const check = (app: ReturnType<typeof makeMatchingApp>['app'], auth: { Authorization: string }, challengeId: string, code: string) =>
   request(app).post('/api/matching/verification/check').set(auth).send({ challengeId, code });
 
 afterEach(() => {
@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe('phone verification gate (W13)', () => {
   it('sealed entries need a confirmed phone; status, config and listing stay readable so the UI can explain', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     await registerUser(app, 'loc.one', 'counselor');
     const s = await registerUser(app, 'survivor.unverified', 'survivor', { phoneVerified: false });
     expect((await request(app).get('/api/matching/verification').set(s.auth)).body).toEqual({ required: true, verified: false });
@@ -60,7 +60,7 @@ describe('phone verification gate (W13)', () => {
   });
 
   it('counselors, attorneys and accounts without an 18+ confirmation cannot start a verification', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const loc = await registerUser(app, 'loc.two', 'counselor');
     const atty = await registerUser(app, 'atty.two', 'attorney');
     const minor = await registerUser(app, 'survivor.noage', 'survivor', { phoneVerified: false });
@@ -72,7 +72,7 @@ describe('phone verification gate (W13)', () => {
   });
 
   it('can be turned off (development only): then entries need only the 18+ confirmation', async () => {
-    const { app } = makeApp({ matching: { requirePhoneVerification: false } });
+    const { app } = makeMatchingApp({ matching: { requirePhoneVerification: false } });
     const s = await registerUser(app, 'survivor.devmode', 'survivor', { phoneVerified: false });
     expect((await request(app).get('/api/matching/verification').set(s.auth)).body).toEqual({ required: false, verified: false });
     expect((await request(app).post('/api/matching/oprf/1').set(s.auth).send(blinded())).status).toBe(200);
@@ -81,14 +81,14 @@ describe('phone verification gate (W13)', () => {
 
 describe('verify-then-forget flow', () => {
   it('rejects anything that is not one plain phone number, gently', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const s = await registerUser(app, 'survivor.badphone', 'survivor', { phoneVerified: false });
     for (const phone of ['hello', '555-0100', '+1 (201) 000-0000', 'a@b.com'])
       expect((await start(app, s.auth, phone)).body.code).toBe('phone_invalid');
   });
 
   it('a wrong code is refused; five wrong codes end the challenge, even the right code afterwards', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const s = await registerUser(app, 'survivor.wrong', 'survivor', { phoneVerified: false });
     const st = await start(app, s.auth);
     expect(st.status).toBe(200);
@@ -102,7 +102,7 @@ describe('verify-then-forget flow', () => {
 
   it('a code expires after 10 minutes; a challenge is usable only by the account that started it', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const s = await registerUser(app, 'survivor.slow', 'survivor', { phoneVerified: false });
     const other = await registerUser(app, 'survivor.thief', 'survivor', { phoneVerified: false });
     const st = await start(app, s.auth);
@@ -113,7 +113,7 @@ describe('verify-then-forget flow', () => {
   });
 
   it('one phone, in any format, enables at most 2 accounts; the third is refused and stays unverified', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const [a, b, c] = await Promise.all(['one', 'two', 'three'].map((n) => registerUser(app, `survivor.p${n}`, 'survivor', { phoneVerified: false })));
     expect((await verifyPhone(app, a!, '(201) 555-0100')).status).toBe(200);
     expect((await verifyPhone(app, b!, '+1 201-555-0100')).status).toBe(200);
@@ -137,7 +137,7 @@ describe('verify-then-forget flow', () => {
   });
 
   it('the limit is configurable', async () => {
-    const { app } = makeApp({ matching: { phone: { maxAccountsPerPhone: 1 } } });
+    const { app } = makeMatchingApp({ matching: { phone: { maxAccountsPerPhone: 1 } } });
     const a = await registerUser(app, 'survivor.one1', 'survivor', { phoneVerified: false });
     const b = await registerUser(app, 'survivor.one2', 'survivor', { phoneVerified: false });
     expect((await verifyPhone(app, a)).status).toBe(200);
@@ -145,7 +145,7 @@ describe('verify-then-forget flow', () => {
   });
 
   it('rate-limits code requests: 3 per (account, phone) per hour, 5 per account per day', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const s = await registerUser(app, 'survivor.spam', 'survivor', { phoneVerified: false });
     for (let i = 0; i < 3; i++) expect((await start(app, s.auth, '(201) 555-0100')).status).toBe(200);
     expect((await start(app, s.auth, '(201) 555-0100')).body.code).toBe('rate_limited');
@@ -154,7 +154,7 @@ describe('verify-then-forget flow', () => {
   });
 
   it('the per-phone limit is per account: other accounts can neither see nor exhaust it for her number', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const attackers = await Promise.all([1, 2].map((i) => registerUser(app, `survivor.att${i}`, 'survivor', { phoneVerified: false })));
     for (const a of attackers) for (let i = 0; i < 3; i++) expect((await start(app, a.auth, '(201) 555-0199')).status).toBe(200);
     // six requests for her number from other accounts in the last hour: she still gets her codes, and verifies
@@ -169,7 +169,7 @@ describe('verify-then-forget flow', () => {
       start: async (e164) => (calls.push(e164), { providerRef: `r${calls.length}` }),
       check: async () => 'wrong_code',
     };
-    const perIp = makeApp({ matching: { phone: { verifier: counting, sendLimits: { perIpPerHour: 3 } } } });
+    const perIp = makeMatchingApp({ matching: { phone: { verifier: counting, sendLimits: { perIpPerHour: 3 } } } });
     const users = await Promise.all([1, 2].map((i) => registerUser(perIp.app, `survivor.ip${i}`, 'survivor', { phoneVerified: false })));
     for (const p of ['(201) 555-0101', '(201) 555-0102']) expect((await start(perIp.app, users[0]!.auth, p)).status).toBe(200);
     expect((await start(perIp.app, users[1]!.auth, '(201) 555-0103')).status).toBe(200);
@@ -179,7 +179,7 @@ describe('verify-then-forget flow', () => {
     expect(r.body.code).toBe('rate_limited');
     expect(calls).toHaveLength(3);
     // a different client IP (behind a trusted proxy) has its own allowance
-    const proxied = makeApp({ matching: { phone: { verifier: counting, sendLimits: { perIpPerHour: 1 } } } });
+    const proxied = makeMatchingApp({ matching: { phone: { verifier: counting, sendLimits: { perIpPerHour: 1 } } } });
     proxied.app.set('trust proxy', 1);
     const p1 = await registerUser(proxied.app, 'survivor.px', 'survivor', { phoneVerified: false });
     const viaIp = (ip: string, phone: string) =>
@@ -189,7 +189,7 @@ describe('verify-then-forget flow', () => {
     expect((await viaIp('198.51.100.8', '(201) 555-0112')).status).toBe(200);
 
     calls.length = 0;
-    const global = makeApp({ matching: { phone: { verifier: counting, sendLimits: { globalPerHour: 2 } } } });
+    const global = makeMatchingApp({ matching: { phone: { verifier: counting, sendLimits: { globalPerHour: 2 } } } });
     const g = await Promise.all([1, 2, 3].map((i) => registerUser(global.app, `survivor.g${i}`, 'survivor', { phoneVerified: false })));
     expect((await start(global.app, g[0]!.auth, '(201) 555-0121')).status).toBe(200);
     expect((await start(global.app, g[1]!.auth, '(201) 555-0122')).status).toBe(200);
@@ -206,7 +206,7 @@ describe('verify-then-forget flow', () => {
     }
     expect(calls).toHaveLength(0);
     // allowed when configured
-    const uk = makeApp({ matching: { phone: { verifier: counting, allowedCountryCodes: ['1', '44'] } } });
+    const uk = makeMatchingApp({ matching: { phone: { verifier: counting, allowedCountryCodes: ['1', '44'] } } });
     const u = await registerUser(uk.app, 'survivor.uk', 'survivor', { phoneVerified: false });
     expect((await start(uk.app, u.auth, '+44 20 7946 0958')).status).toBe(200);
   });
@@ -222,7 +222,7 @@ describe('verify-then-forget flow', () => {
         return 'wrong_code';
       },
     };
-    const { app } = makeApp({ matching: { phone: { verifier: slow } } });
+    const { app } = makeMatchingApp({ matching: { phone: { verifier: slow } } });
     const s = await registerUser(app, 'survivor.burst', 'survivor', { phoneVerified: false });
     const st = await start(app, s.auth);
     const results = await Promise.all(Array.from({ length: 12 }, () => check(app, s.auth, st.body.challengeId, '123456')));
@@ -249,7 +249,7 @@ describe('verify-then-forget flow', () => {
         return new Response(JSON.stringify(body), { status });
       }) as unknown as typeof fetch,
     });
-    const { app } = makeApp({ matching: { phone: { verifier: v } } });
+    const { app } = makeMatchingApp({ matching: { phone: { verifier: v } } });
     const s = await registerUser(app, 'survivor.tw429', 'survivor', { phoneVerified: false });
     const r1 = await start(app, s.auth);
     expect(r1.status).toBe(429);
@@ -262,7 +262,7 @@ describe('verify-then-forget flow', () => {
   });
 
   it('the demo code is never returned when the app is told not to expose it, nor by a real provider', async () => {
-    const { app } = makeApp({ matching: { phone: { exposeDemoCode: false } } });
+    const { app } = makeMatchingApp({ matching: { phone: { exposeDemoCode: false } } });
     const s = await registerUser(app, 'survivor.nodemo', 'survivor', { phoneVerified: false });
     const st = await start(app, s.auth);
     expect(st.status).toBe(200);
@@ -272,12 +272,12 @@ describe('verify-then-forget flow', () => {
   it('provider errors map to calm codes (VoIP refused → phone_not_supported, outage → sms_unavailable)', async () => {
     const twilio = (status: number, body: unknown) =>
       new TwilioVerifySmsVerifier({ accountSid: 'AC1', authToken: 't', verifyServiceSid: 'VA1', fetchImpl: (async () => new Response(JSON.stringify(body), { status })) as typeof fetch });
-    const voip = makeApp({ matching: { phone: { verifier: twilio(200, { line_type_intelligence: { type: 'nonFixedVoip' } }) } } });
+    const voip = makeMatchingApp({ matching: { phone: { verifier: twilio(200, { line_type_intelligence: { type: 'nonFixedVoip' } }) } } });
     const s = await registerUser(voip.app, 'survivor.voip', 'survivor', { phoneVerified: false });
     const r = await start(voip.app, s.auth);
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('phone_not_supported');
-    const down = makeApp({ matching: { phone: { verifier: twilio(500, {}) } } });
+    const down = makeMatchingApp({ matching: { phone: { verifier: twilio(500, {}) } } });
     const d = await registerUser(down.app, 'survivor.down', 'survivor', { phoneVerified: false });
     expect((await start(down.app, d.auth)).body.code).toBe('sms_unavailable');
   });
@@ -344,7 +344,7 @@ describe('what is kept (W19)', () => {
 
   it('migration v7 grandfathers accounts that already have sealed entries', async () => {
     const file = path.join(tmp(), 'old.db');
-    const { app } = makeApp({ dbPath: file });
+    const { app } = makeMatchingApp({ dbPath: file });
     await registerUser(app, 'loc.mig', 'counselor');
     const sealed = await registerUser(app, 'survivor.sealed');
     const fresh = await registerUser(app, 'survivor.fresh', 'survivor', { phoneVerified: false });
@@ -357,12 +357,13 @@ describe('what is kept (W19)', () => {
       'ALTER TABLE match_entries DROP COLUMN routing_envelope; ALTER TABLE match_entries DROP COLUMN matcher_synced; DROP TABLE match_assignments; DROP TABLE matcher_pending_deletes;' +
         ' ALTER TABLE match_entries DROP COLUMN contact_bundle; DROP TABLE conflict_checks; DROP TABLE report_requests; DROP TABLE report_releases; DROP TABLE report_release_blobs;' +
         ' ALTER TABLE users DROP COLUMN key_version; ALTER TABLE users DROP COLUMN wrapped_account_key; ALTER TABLE users DROP COLUMN recovery_auth_hash;' +
-        ' ALTER TABLE users DROP COLUMN recovery_auth_salt; ALTER TABLE users DROP COLUMN recovery_wrapped_key;',
+        ' ALTER TABLE users DROP COLUMN recovery_auth_salt; ALTER TABLE users DROP COLUMN recovery_wrapped_key;' +
+        ' DROP TABLE deployment_meta;',
     );
     db.pragma('user_version = 6');
     db.close();
     const db2 = openDb(file);
-    expect(db2.pragma('user_version', { simple: true })).toBe(11);
+    expect(db2.pragma('user_version', { simple: true })).toBe(13);
     const row = (id: string) => db2.prepare('SELECT matching_verified FROM users WHERE id = ?').get(id);
     expect(row(sealed.user.id)).toEqual({ matching_verified: 1 });
     expect(row(fresh.user.id)).toEqual({ matching_verified: 0 });

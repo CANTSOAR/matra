@@ -18,7 +18,7 @@ Sign every commit with `git commit -s`, which certifies the [Developer Certifica
 ## Workflow
 
 1. Open an issue first for anything beyond a small fix.
-2. Branch, make the change, run `npm test` and `npm run typecheck`.
+2. Branch, make the change, run `npm test` and `npm run typecheck` (and `npm run e2e` for anything the browser sees). CI (`.github/workflows/ci.yml`) runs typecheck and the unit tests with sealed matching off and with `MATRA_MATCHING=on`, a production web build with its audit, and the legal bank check on every pull request; the pilot browser suite runs on pull requests, and all three browser suites run nightly and on demand.
 3. Open a PR describing what changed and why. Security-relevant changes get a second maintainer review.
 
 ## Vulnerabilities

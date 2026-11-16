@@ -18,7 +18,8 @@ right-hand column.
 
 | What leaks | Readable to the attacker without further keys | What it enables |
 |---|---|---|
-| App database (or a backup, or the WAL) | Usernames (may be real names), roles, account and record creation times, record sizes, share metadata (which survivor account shared with which attorney, her chosen alias, the consent statement text, times), attorney and counselor directory entries, audit rows, ledger hashes, OPRF tags, phone-token hashes, staged-release requests and answers (who asked whom, yes/no, times) | Offline guessing of weak passphrases against the stored scrypt / PBKDF2 parameters (W5); linking accounts to attorneys; tags are useless without t OPRF shares (W2) |
+| App database (or a backup, or the WAL) | Usernames (may be real names), roles, account and record creation times, record sizes, share metadata (which survivor account shared with which attorney, the share's made-up label (older shares: her username), the consent statement text, times), attorney and counselor directory entries, audit rows, ledger hashes, OPRF tags, phone-token hashes, staged-release requests and answers (who asked whom, yes/no, times) | Offline guessing of weak passphrases against the stored scrypt / PBKDF2 parameters (W5); linking accounts to attorneys; tags are useless without t OPRF shares (W2) |
+| Draft-slots database (`<name>-drafts.db`, or a backup, or its WAL) | Account ids, how many slots each account has, ciphertext size to the nearest 16 KiB, the UTC day of each account's last draft write, the main database's id | Which accounts are active and roughly when; no content |
 | App database **and** `MATRA_PHONE_HASH_KEY` | As above | Testing whether a guessed phone number verified *some* account (not which; W19) |
 | t or more OPRF key shares (or `MATRA_HOLDER_TOKEN_KEY` while holders are online) | Nothing directly | Recomputing tags for guessed identifiers, so the tags in a leaked DB become testable (W2, W14) |
 | Matcher database | Tags, entry times, account-creation hours, **incident and survivor states in clear** (W18) | Where reported incidents happened and where survivors live, per tag |
@@ -103,7 +104,7 @@ authorities, Q-039). The plan below prepares so that whatever counsel decides ca
 ## 8. Talking to survivors
 
 - Plain words, short, no blame, no jargon. Say what was exposed and what was not, in her terms ("someone copied our
-  database; your story stayed encrypted, and we can't read it either").
+  database; your story stayed encrypted, and the copy we hold can't be read from it"). Don't say "we can't read it" about a leak of the server's code: a modified app could capture a passphrase (threat model W4).
 - Say what she can do and whether she needs to do anything (for example change a weak passphrase).
 - Never send anything to a channel that could be seen by someone else on her device or account without her choosing it;
   remember her abuser may share the device (W8).

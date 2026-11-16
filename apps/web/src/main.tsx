@@ -16,10 +16,18 @@ applyTheme(); // bright by default; "Dim" only if she chose it in this tab (lib/
 declare const __MATRA_DEMO__: boolean;
 const Inspector = import.meta.env.DEV || __MATRA_DEMO__ === true ? lazy(() => import('./dev/Inspector').then((m) => ({ default: m.Inspector }))) : null;
 const inspector = Inspector && window.location.pathname === '/inspector';
+// /marker-preview: a developer page for the span-marker. Only in a development server started with MATRA_MARKER=on; a
+// build-time false in every build, so the page and the marker code are left out (scripts/audit-web-build.mjs checks).
+const MarkerPreview = import.meta.env.DEV && __MATRA_MARKER__ === true ? lazy(() => import('./dev/MarkerPreview').then((m) => ({ default: m.MarkerPreview }))) : null;
+const markerPreview = MarkerPreview && window.location.pathname === '/marker-preview';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {inspector && Inspector ? (
+    {markerPreview && MarkerPreview ? (
+      <Suspense fallback={null}>
+        <MarkerPreview />
+      </Suspense>
+    ) : inspector && Inspector ? (
       <Suspense fallback={null}>
         <Inspector />
       </Suspense>

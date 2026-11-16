@@ -4,6 +4,12 @@ import userEvent from '@testing-library/user-event';
 import type { IntakeRecord } from '@matra/shared';
 import { IntakeChat, type IntakeDraft } from './index';
 
+// This file tests sealed matching: it runs with it on (MATRA_MATCHING=on), whatever the build default is. Set before
+// any import is evaluated, because the matching screens and questions are chosen when their modules load.
+vi.hoisted(() => {
+  (globalThis as { __MATRA_MATCHING__?: boolean }).__MATRA_MATCHING__ = true;
+});
+
 afterEach(cleanup);
 
 const NARRATIVE = 'He said "stay quiet".\n\n  Then the music stopped… 😶\t[2am] {I think}  ';

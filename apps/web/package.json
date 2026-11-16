@@ -17,12 +17,15 @@
     "@huggingface/transformers": "^4.3.1",
     "@matra/crypto": "*",
     "@matra/shared": "*",
+    "@tesseract.js-data/eng": "1.0.0",
     "chrono-node": "^2.10.2",
     "compromise": "^14.18.0",
     "pdf-lib": "^1.17.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-router-dom": "^7.18.4"
+    "react-router-dom": "^7.18.4",
+    "tesseract.js": "7.0.0",
+    "tesseract.js-core": "7.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",

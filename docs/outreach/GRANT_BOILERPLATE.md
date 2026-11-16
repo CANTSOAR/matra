@@ -8,7 +8,7 @@
 
 ## 1. Organization summary (≈100 words)
 
-Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlled documentation and a confidential path to a lawyer for adult survivors of sexual assault in New Jersey and New York. A trauma-informed intake records her account in her own words: she can start anywhere and type or speak, or answer one skippable question at a time. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Her account is encrypted on her device so the operator cannot read it. From that record she can produce an Incident Summary in the Survivor's Own Words, an evidence inventory, and a New Jersey crime-victim-compensation draft. She shares them with a verified pro-bono attorney only with her explicit, revocable consent. Matra is fiscally sponsored by [Sponsor / pending], takes no fees from attorneys or cases, and will not accept real survivor data until an independent security audit and licensed-counsel review are complete.
+Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlled documentation and a confidential path to a lawyer for adult survivors of sexual assault in New Jersey and New York. A trauma-informed intake records her account in her own words: she can start anywhere and type or speak, or answer one skippable question at a time. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Her account is encrypted on her device, so the server stores only ciphertext and the operator cannot read it from what it stores. From that record she can produce an Incident Summary in the Survivor's Own Words, an evidence inventory, and a New Jersey crime-victim-compensation draft. She shares them with a verified pro-bono attorney only with her explicit, revocable consent. Matra is fiscally sponsored by [Sponsor / pending], takes no fees from attorneys or cases, and will not accept real survivor data until an independent security audit and licensed-counsel review are complete.
 
 ---
 
@@ -39,7 +39,7 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 
 **What exists today (working MVP, invented data only)**
 - Trauma-informed, dump-first intake: she starts anywhere and types or speaks; Matra shows what it picked up (dates, places, people) for her to confirm, then offers optional topics and a story map before she seals. A one-question-at-a-time mode is a fixed script. Every question skippable, non-leading sensory prompts, words stored verbatim, Quick Exit. Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. (The speech model, about 94 MB, downloads once from Matra's own server and then runs offline in her browser.)
-- Zero-knowledge vault: client-side encryption (AES-256-GCM, keys derived from her passphrase). The server stores only ciphertext.
+- Zero-knowledge vault: client-side encryption (AES-256-GCM, keys derived from a passphrase of six random words made on her device). The server stores only ciphertext.
 - Evidence handling: on-device removal of photo location data, plus SHA-256 integrity hashes.
 - A tamper-evident, append-only ledger. It is self-hosted today; external timestamp anchoring is planned.
 - On-device generation of the **Incident Summary in the Survivor's Own Words** and an **NJ VCCO application draft** that states eligibility rules accurately.
@@ -107,7 +107,7 @@ Matra is a nonprofit, open-source (AGPL-3.0) project building survivor-controlle
 - **Her words, verbatim:** Nothing rewrites her words. Voice is transcribed and suggestions are made on her device, and she confirms every one; no AI runs on any server or third-party service. Software adds labels and structure only.
 - **Trauma-informed design:** every question can be skipped; prompts are non-leading; there are no timers or progress pressure; content warnings; "take a break"; grounding resources; Quick Exit everywhere.
 - **Honest warnings** before writing, sealing, sharing, and deleting. These cover court-ordered production from her, discoverability of anything given to police, version history, unrecoverable passphrases, and the fact that revocation can't recall copies already downloaded.
-- **Zero knowledge:** the operator can't decrypt content. Metadata is minimized: logs are kept at most 30 days with truncated IPs.
+- **Zero knowledge:** the operator's server holds only ciphertext and can't decrypt content from what it stores. The operator also serves the app's code, so a modified app could capture a passphrase (threat model W4); we say so rather than claim more. Metadata is minimized: logs are kept at most 30 days with truncated IPs.
 - **No telemetry, no advertising, no data sales** (binding governance commitment).
 - **Adults only:** an 18+ gate and screening for incidents involving minors, with a referral path. Partners follow their own mandatory-reporting duties.
 - **Campus independence:** any campus channel stays independent of the institution's Title IX and Clery reporting structures.

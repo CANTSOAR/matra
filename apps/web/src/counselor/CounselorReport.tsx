@@ -11,8 +11,9 @@ import { envelopeHash } from '../api/client';
 import { SharedBlob } from '../attorney/Attorney';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { BriefPreview } from '../integration/briefAdapter';
-import { useRequiredSession } from '../lib/session';
 import type { VaultPayload } from '../lib/vault';
+import { useMatchingSession } from '../lib/matching';
+import type { MatchingApiClient } from '../api/matching';
 
 interface OpenedReport {
   bundle: ReportReleaseBundle;
@@ -23,7 +24,7 @@ interface OpenedReport {
 
 /** Each bundle fetch is shown to her as "opened your report"; StrictMode's double mount must not log one visit twice. */
 const inflight = new Map<string, Promise<ReportReleaseBundle>>();
-function fetchOnce(api: ReturnType<typeof useRequiredSession>['api'], id: string) {
+function fetchOnce(api: MatchingApiClient, id: string) {
   let p = inflight.get(id);
   if (!p) {
     p = api.counselorReleaseBundle(id).finally(() => inflight.delete(id));
@@ -34,7 +35,7 @@ function fetchOnce(api: ReturnType<typeof useRequiredSession>['api'], id: string
 
 export function CounselorReport() {
   const { id = '' } = useParams();
-  const { api, session } = useRequiredSession();
+  const { api, session } = useMatchingSession();
   const opened = useAsync(async (): Promise<OpenedReport> => {
     const bundle = await fetchOnce(api, id);
     const key = await unwrapKeyWithPrivate(bundle.recipientWrappedKey, session.privateKey);

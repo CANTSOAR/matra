@@ -949,3 +949,26 @@ dl.proof dd { margin: 0; }
 .check-line.ok .check-mark { background: var(--matra-success); }
 .check-line.bad .check-mark { background: var(--matra-danger); }
 .check-details { margin: 8px 0 0; padding-left: 1.1em; overflow-wrap: anywhere; display: grid; gap: 4px; }
+
+/* Evidence reader: pictures stay blurred until she taps, the redaction canvas, the exhibit table, text read from images */
+.blur-wrap { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; flex-shrink: 0; }
+.blur-wrap .thumb.blurred { filter: blur(14px); transform: scale(1.02); }
+.blur-wrap .blur-toggle { min-height: 32px; padding: 3px 10px; font-size: 0.82rem; }
+.ocr-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--matra-surface-2);
+  border-radius: var(--matra-radius);
+  padding: 12px 14px;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  font-family: inherit;
+}
+.redact-canvas { position: relative; display: inline-block; max-width: 100%; touch-action: none; cursor: crosshair; user-select: none; line-height: 0; }
+.redact-canvas img { max-width: 100%; max-height: 60vh; display: block; border-radius: 8px; }
+.redact-box { position: absolute; background: #000; outline: 2px solid var(--matra-accent); pointer-events: none; }
+.table-scroll { overflow-x: auto; }
+.exhibit-table { width: 100%; border-collapse: collapse; font-size: 0.93rem; }
+.exhibit-table th, .exhibit-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--matra-border); vertical-align: top; }
+.exhibit-table th { font-weight: 700; color: var(--matra-muted); }

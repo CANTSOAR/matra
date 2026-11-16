@@ -3,7 +3,7 @@
  * terminated on Quick Exit / lock (wipe) so no audio or model state lingers in memory.
  */
 import { onWipe } from '../lib/wipe';
-import { CACHE_NAME, MODEL_WEIGHT_PATHS, RUNTIME_FILES, runtimeCacheKey } from './config';
+import { CACHE_NAME, MODEL_WEIGHT_PATHS, RUNTIME_CACHE_NAME, RUNTIME_FILES, runtimeCacheKey } from './config';
 import type { Device, FromWorker, ToWorker } from './protocol';
 import type { TranscriptResult } from './types';
 
@@ -177,9 +177,14 @@ export function transcriberDevice(): Device | null {
 export async function isTranscriberSetUp(): Promise<boolean> {
   try {
     if (typeof caches === 'undefined') return false;
+    // caches.open() would CREATE an empty cache on every device that merely shows the voice screen (a trace on a shared
+    // device, W24), so look with caches.has() first: nothing is created until she chooses to set up.
+    if (!(await caches.has(CACHE_NAME)) || !(await caches.has(RUNTIME_CACHE_NAME))) return false;
     const cache = await caches.open(CACHE_NAME);
     for (const p of MODEL_WEIGHT_PATHS) if (!(await cache.match(p))) return false;
-    return !!(await cache.match(runtimeCacheKey(RUNTIME_FILES.wasm))) || !!(await cache.match(runtimeCacheKey(RUNTIME_FILES.webgpu)));
+    // Presence only: the bytes are checked against their pinned hash when the worker loads them (src/ml/cache.ts).
+    const runtime = await caches.open(RUNTIME_CACHE_NAME);
+    return !!(await runtime.match(runtimeCacheKey(RUNTIME_FILES.wasm))) || !!(await runtime.match(runtimeCacheKey(RUNTIME_FILES.webgpu)));
   } catch {
     return false;
   }

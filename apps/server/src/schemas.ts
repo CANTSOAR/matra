@@ -1,5 +1,6 @@
 /** zod validators for every request the API accepts. Unknown keys are stripped. */
 import { z } from 'zod';
+import { SHARE_ALIAS_RE, SLOT_BUCKET_BYTES, SLOT_MAX_BYTES, SLOT_NAME_RE } from '@matra/shared';
 
 const B64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
@@ -117,6 +118,21 @@ export const setUpRecoveryRequest = z.object({
 
 export const turnOffRecoveryRequest = z.object({ authKey: base64(128) });
 
+/** Changing the passphrase: re-authentication, then the new auth material and her account secret wrapped under it. */
+export const changePassphraseRequest = z.object({
+  authKey: base64(128),
+  newAuthKey: authKey32,
+  kdfSalt: base64(128).refine((s) => b64Len(s) >= 16, 'kdfSalt must be at least 16 bytes'),
+  kdfIterations: z.number().int().min(1_000).max(10_000_000),
+  wrappedAccountKey: accountKeyEnvelope,
+});
+
+/** Signing out her other sessions needs her passphrase again, not only a session. */
+export const revokeOtherSessionsRequest = z.object({ authKey: base64(128) });
+
+/** Deleting her account needs her passphrase again (its auth key), not only a session. */
+export const deleteAccountRequest = z.object({ authKey: base64(128) });
+
 export const recoverStartRequest = z.object({ username, recoveryAuthKey: base64(128) });
 
 export const recoverFinishRequest = z.object({
@@ -133,6 +149,29 @@ export const createRecordRequest = z.object({
   supersedes: id.optional(),
 });
 
+/** A draft slot's opaque name: hex HMAC under her slot-name key (packages/crypto/src/slots.ts). */
+export const slotName = z.string().regex(SLOT_NAME_RE, 'invalid slot name');
+
+/** Slot ciphertext must fill whole 16 KiB buckets (padded on her device), up to SLOT_MAX_BYTES. */
+export const slotEnvelope = envelope.extend({
+  ct: base64(Math.ceil(SLOT_MAX_BYTES / 3) * 4).refine((s) => {
+    const n = b64Len(s);
+    return n > 0 && n % SLOT_BUCKET_BYTES === 0 && n <= SLOT_MAX_BYTES;
+  }, 'slot ciphertext must be whole 16 KiB buckets'),
+});
+
+/** A slot's version tag: 32 hex, random, new on every write. */
+export const slotVersion = z.string().regex(/^[0-9a-f]{32}$/, 'invalid slot version');
+
+export const putSlotRequest = z.object({
+  envelope: slotEnvelope,
+  wrappedKey: ownerWrappedKey,
+  /** the version she read; null when she has no slot by that name yet */
+  expectedVersion: slotVersion.nullable(),
+});
+
+export const deleteSlotRequest = z.object({ expectedVersion: slotVersion.nullable().optional() });
+
 export const createShareRequest = z.object({
   recordId: id,
   attorneyId: id,
@@ -143,16 +182,27 @@ export const createShareRequest = z.object({
     .max(500)
     .refine((b) => new Set(b.map((x) => x.blobId)).size === b.length, 'duplicate blobId'),
   consentStatement: z.string().trim().min(10).max(10_000),
+  // 'brief' is still parsed so the route can say why it is refused (old shares stored it; see app.ts)
   scope: z
     .array(z.enum(['record', 'evidence', 'brief']))
     .min(1)
     .max(3)
     .refine((s) => new Set(s).size === s.length, 'duplicate scope'),
-  survivorAlias: z.string().trim().min(1).max(100),
+  /** A label made up on her device for this share only, never her username (@matra/shared consent.ts). */
+  survivorAlias: z.string().regex(SHARE_ALIAS_RE, 'invalid share label'),
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
-export const renewShareRequest = z.object({ expiresInDays: z.number().int().min(1).max(365).optional() });
+/** A fresh wrap (record + each covered file) is sent only when the stored one was deleted (src/recipient-keys.ts). */
+export const renewShareRequest = z.object({
+  expiresInDays: z.number().int().min(1).max(365).optional(),
+  recipientWrappedKey: recipientWrappedKey.optional(),
+  blobs: z
+    .array(z.object({ blobId: id, recipientWrappedKey }))
+    .max(500)
+    .refine((b) => new Set(b.map((x) => x.blobId)).size === b.length, 'duplicate blobId')
+    .optional(),
+});
 
 /** Small envelopes (labels, contact bundles, seals, notes): ≤ 64 KB of ciphertext. */
 export const smallEnvelope = envelope.extend({ ct: base64(90_000).refine((s) => b64Len(s) >= 16, 'ct too short') });

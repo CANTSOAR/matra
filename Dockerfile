@@ -1,16 +1,26 @@
-# Matra demo / production image.
-#   docker build --build-arg MATRA_DEMO_MODE=1 -t matra .      (a fictional-data demo; a non-demo build must pin the
-#                                                              matcher: MATRA_ATTESTATION_PLATFORM_PUBKEY + _MEASUREMENT)
-#   docker run -p 8080:8080 -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 \
+# Matra demo / production image. MATRA_MATCHING (off|on) is required at build time AND at run time in production:
+# "off" (the pilot) leaves sealed matching out of the web build and the server; "on" builds and runs all of it.
+#
+# The pilot (sealed matching off): only the org key is pinned, and no matching secret may be set (the server refuses):
+#   docker build --build-arg MATRA_MATCHING=off --build-arg MATRA_COUNSELOR_ROSTER_PUBKEY=… -t matra .
+#   docker run -p 8080:8080 -e MATRA_MATCHING=off -e MATRA_PEPPER=$(openssl rand -hex 32) \
+#     -v matra-data:/app/apps/server/data matra
+#
+# A fictional-data demo with sealed matching on (a non-demo "on" build must pin the matcher:
+# MATRA_ATTESTATION_PLATFORM_PUBKEY + _MEASUREMENT, the org key and the OPRF key set, below):
+#   docker build --build-arg MATRA_MATCHING=on --build-arg MATRA_DEMO_MODE=1 -t matra .
+#   docker run -p 8080:8080 -e MATRA_MATCHING=on -e MATRA_PEPPER=$(openssl rand -hex 32) -e MATRA_DEMO_BANNER=1 \
 #     -e MATRA_OPRF_SHARE_1=… -e MATRA_OPRF_SHARE_2=… -e MATRA_OPRF_SHARE_3=… \
 #     -e MATRA_PHONE_HASH_KEY=$(openssl rand -hex 32) -e MATRA_DEMO_MODE=1 -e MATRA_SMS_PROVIDER=mock \
 #     -e MATRA_MATCHER_KEY=$(openssl rand -hex 32) -e MATRA_ATTESTATION_PLATFORM_KEY=$(openssl rand -hex 32) \
 #     -v matra-data:/app/apps/server/data matra
 # MATRA_DEMO_MODE=1 + the mock SMS provider are for fictional-data demos only; a real deployment sets
 # MATRA_SMS_PROVIDER=twilio and TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_VERIFY_SERVICE_SID (docs/DEPLOY.md).
-# The shares come from `npm run -w @matra/server oprf-ceremony` (threshold OPRF, default 2-of-3). The server refuses to
-# start in production without every share (env, or *_FILE paths OUTSIDE the data volume) or the remote-holder config.
-# Build-time pins for the web client (recommended for any non-demo build; values printed by the ceremony):
+# With MATRA_MATCHING=on, the shares come from `npm run -w @matra/server oprf-ceremony` (threshold OPRF, default 2-of-3).
+# The server then refuses to start in production without every share (env, or *_FILE paths OUTSIDE the data volume) or
+# the remote-holder config.
+# Build-time pins for the web client with sealed matching on (required for any non-demo "on" build; values printed by
+# the ceremony):
 #   docker build --build-arg MATRA_OPRF_THRESHOLD=2 --build-arg MATRA_OPRF_GROUP_PUBKEY=… \
 #     --build-arg MATRA_OPRF_SHARE_PUBKEYS=pk1,pk2,pk3 --build-arg MATRA_COUNSELOR_ROSTER_PUBKEY=… -t matra .
 # See docs/DEPLOY.md. Never put real survivor data on an instance before the pre-launch checklist is done.
@@ -33,7 +43,9 @@ COPY packages packages
 COPY apps apps
 # `npm run build` first fetches + verifies the on-device speech model into apps/web/public/models (pinned, sha256-checked).
 COPY scripts scripts
-# Sealed-matching pins baked into the web build (empty = unpinned, development behaviour). See docs/DEPLOY.md.
+# off | on: whether the web build includes sealed matching (required; see the top of this file and docs/DEPLOY.md).
+ARG MATRA_MATCHING=""
+# Sealed-matching pins baked into the web build (empty = unpinned, development behaviour; must be empty when off).
 ARG MATRA_OPRF_THRESHOLD=""
 ARG MATRA_OPRF_GROUP_PUBKEY=""
 ARG MATRA_OPRF_SHARE_PUBKEYS=""
@@ -43,7 +55,8 @@ ARG MATRA_COUNSELOR_ROSTER_PUBKEY=""
 ARG MATRA_ATTESTATION_PLATFORM_PUBKEY=""
 ARG MATRA_MATCHER_MEASUREMENT=""
 ARG MATRA_DEMO_MODE=""
-ENV MATRA_OPRF_THRESHOLD=$MATRA_OPRF_THRESHOLD \
+ENV MATRA_MATCHING=$MATRA_MATCHING \
+    MATRA_OPRF_THRESHOLD=$MATRA_OPRF_THRESHOLD \
     MATRA_OPRF_GROUP_PUBKEY=$MATRA_OPRF_GROUP_PUBKEY \
     MATRA_OPRF_SHARE_PUBKEYS=$MATRA_OPRF_SHARE_PUBKEYS \
     MATRA_COUNSELOR_ROSTER_PUBKEY=$MATRA_COUNSELOR_ROSTER_PUBKEY \
@@ -56,6 +69,10 @@ RUN npm run build && npm prune --omit=dev --no-audit --no-fund \
 
 # ── runtime: non-root, only what the server needs ──
 FROM node:22-slim
+# The runtime defaults to the mode the web app was built with; the server refuses a build made for the other mode
+# (apps/web/dist/matra-build.json), so `-e MATRA_MATCHING=…` can't silently disagree with the build.
+ARG MATRA_MATCHING=""
+ENV MATRA_MATCHING=$MATRA_MATCHING
 ENV NODE_ENV=production \
     PORT=8080 \
     MATRA_DB_PATH=/app/apps/server/data/matra.db

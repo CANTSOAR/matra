@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { KeyNotice } from '../components/KeyNotice';
+import { VaultStopped } from '../components/UnreadableNote';
 import {
   BriefPreview,
   downloadPdf,
@@ -12,11 +13,16 @@ import {
 } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
 import { NOTICES } from '../lib/disclosures';
-import { finals, loadVault } from '../lib/vault';
+import { finals, loadSpace, spaceEvidence } from '../lib/vault';
+import { commitmentsById, emptyPrivate, loadPrivate } from '../evidence/privateStore';
+import { MissingFilesError, exhibitNumbersByBlob, numberExhibits } from '../evidence/exhibits';
 
 export function Brief() {
-  const { api, session } = useRequiredSession();
-  const vault = useAsync(() => loadVault(api, session.masterKey), [api, session.masterKey]);
+  const { api, session, getWorkingData } = useRequiredSession();
+  // Fails closed (lib/vault.ts loadSpace): a summary she may hand to someone is only made from a space that loaded
+  // cleanly, so it is never silently of an older version.
+  const space = useAsync(() => loadSpace(api, session.masterKey).then((s) => ({ vault: s.vault, slot: s.slot.slot })), [api, session.masterKey]);
+  const vault = { ...space, data: space.data?.vault };
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [redact, setRedact] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -26,15 +32,39 @@ export function Brief() {
   const chosen = sealed.find((r) => r.meta.id === selectedId) ?? sealed.find((r) => !r.supersededBy) ?? sealed[0];
   const record = chosen?.payload.record;
 
+  /**
+   * The number printed beside each file, and the private fingerprints. The numbers are the ones on her Evidence screen and in
+   * her exhibit list: the same numbering function (evidence/exhibits.ts) over the same set of file details (her whole space,
+   * lib/vault.ts spaceEvidence, not only this sealed version). If the stored files cannot be listed, or one this summary names
+   * is missing from the list, this throws and nothing is shown or made: a summary with no numbers, or with moved ones, would
+   * read as complete.
+   */
+  async function loadNumbering() {
+    const priv = await loadPrivate(api, session.masterKey).then((p) => (p.unreadable ? emptyPrivate() : p.value)).catch(() => emptyPrivate());
+    const exhibitFingerprints = commitmentsById(priv.items);
+    if (!record || record.evidence.length === 0) return { exhibitFingerprints, exhibitNumbers: {} as Record<string, number> };
+    const { blobs } = await api.listBlobs();
+    const mem = await getWorkingData();
+    const { exhibits, missing } = numberExhibits(blobs, spaceEvidence(space.data?.vault ?? [], space.data?.slot ?? null, mem?.evidence), priv.items);
+    const named = new Set(record.evidence.flatMap((e) => (e.blobId ? [e.blobId] : [])));
+    const lost = missing.filter((m) => named.has(m.blobId!));
+    if (lost.length) throw new MissingFilesError(lost.map((m) => m.fileName));
+    return { exhibitFingerprints, exhibitNumbers: exhibitNumbersByBlob(exhibits) };
+  }
+  const numbering = useAsync(() => (chosen && record ? loadNumbering() : Promise.resolve(null)), [chosen?.meta.id, space.data]);
+
   async function opts(): Promise<BriefOptions> {
     let ledgerEntry = chosen!.ledgerEntry;
     if (!ledgerEntry) ledgerEntry = (await api.getLedgerEntry(chosen!.meta.ledgerEntryId)).entry;
+    const { exhibitFingerprints, exhibitNumbers } = await loadNumbering(); // fresh at the moment she downloads
     return {
       recordId: chosen!.meta.id,
       recordContentHash: chosen!.meta.contentHash,
       ledgerEntry,
       generatedAt: new Date(),
       redactContactInfo: redact,
+      ...(Object.keys(exhibitFingerprints).length > 0 && { exhibitFingerprints }),
+      exhibitNumbers,
     };
   }
 
@@ -66,7 +96,7 @@ export function Brief() {
         Incident summary
       </PageTitle>
       {vault.loading && <Loading label="Opening your space…" />}
-      {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
+      {vault.error && <VaultStopped error={vault.error} onRetry={() => void vault.reload()} />}
       {!vault.loading && !vault.error && sealed.length === 0 && (
         <div className="card stack">
           <p>Once your story is sealed, you can prepare a summary here. There’s no rush.</p>
@@ -118,15 +148,20 @@ export function Brief() {
             </p>
             {error && <ErrorNote>{error}</ErrorNote>}
           </div>
-          <BriefPreview
-            record={record}
-            opts={{
-              recordId: chosen.meta.id,
-              recordContentHash: chosen.meta.contentHash,
-              ledgerEntry: chosen.ledgerEntry,
-              redactContactInfo: redact,
-            }}
-          />
+          {numbering.loading && <Loading label="Numbering your files…" />}
+          {numbering.error && <ErrorNote>{numbering.error}</ErrorNote>}
+          {!numbering.loading && numbering.data && (
+            <BriefPreview
+              record={record}
+              opts={{
+                recordId: chosen.meta.id,
+                recordContentHash: chosen.meta.contentHash,
+                ledgerEntry: chosen.ledgerEntry,
+                redactContactInfo: redact,
+                exhibitNumbers: numbering.data.exhibitNumbers,
+              }}
+            />
+          )}
         </>
       )}
     </div>

@@ -19,6 +19,7 @@ import {
   legacyAccountSecret,
   newKdfSalt,
   parseRecoveryCode,
+  passphraseMaterialFor,
   unlockAccount,
   unwrapAccountSecret,
   unwrapKeyWithMaster,
@@ -29,9 +30,11 @@ import {
 import type { AttorneyProfile, AuthResponse, Envelope, EvidenceItem, PublicUser, RegisterRequest, Role, WrappedKey } from '@matra/shared';
 import { ApiClient, ApiError } from '../api/client';
 import type { IntakeDraft } from '../integration/intakeAdapter';
-import { getProfile as loadProfileRecord, refreshSealedMatches, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
+import { MatchingApiClient } from '../api/matching';
+import { UnreadableVaultError, getProfile as loadProfileRecord, saveProfile as saveProfileRecord, type VaultProfile } from './vault';
 import { onWipe, wipeAll } from './wipe';
 import { mirror } from '../dev/mirror';
+import { canChoosePassphrase, isGeneratedPassphrase, passphraseAccepted, passphraseWords } from './passphrase';
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
 
@@ -47,8 +50,11 @@ export interface Session {
 export interface WorkingData {
   draft: IntakeDraft | null;
   evidence: EvidenceItem[];
-  /** id of the vault draft record this was loaded from / last saved as (for `supersedes`) */
-  savedDraftRecordId?: string;
+  /**
+   * version of her draft slot this was loaded from / last saved as (a save must name it: lib/draftSlot.ts); null when
+   * she had no slot, undefined when not known
+   */
+  slotVersion?: string | null;
 }
 
 export type Progress = 'deriving' | 'generating' | 'contacting' | 'unlocking';
@@ -96,6 +102,25 @@ export class SessionError extends Error {
   }
 }
 
+const PASSPHRASE_CHANGED_TEXT =
+  'Your passphrase was changed somewhere else just now, so nothing was changed here. Sign out and back in with the newest one.';
+
+/**
+ * A passphrase change got no clear answer (no connection, or a server error) and the server, asked again, couldn't
+ * confirm it either way. The change may have been saved, so the new passphrase may already be the one that works.
+ */
+export class PassphraseMaybeChangedError extends SessionError {
+  constructor() {
+    super(
+      'We couldn’t confirm the change. Your new passphrase may already be active. Try signing in with it; if it doesn’t ' +
+        'work, your old passphrase still does. Keep both written down until you know which one works.',
+    );
+    this.name = 'PassphraseMaybeChangedError';
+  }
+}
+
+const sameEnvelope = (a: Envelope | undefined, b: Envelope) => !!a && a.iv === b.iv && a.ct === b.ct;
+
 /**
  * A reset whose earlier attempt failed in transit was then refused as spent: the server may have set her new
  * passphrase after all (her old code is burned either way), so she should try signing in with it.
@@ -113,11 +138,12 @@ export class RecoveryMaybeFinishedError extends SessionError {
 interface SessionCtx {
   session: Session | null;
   api: ApiClient;
-  lockReason: 'idle' | null;
+  /** why she was signed out: 15 quiet minutes, or her session was ended elsewhere (or ran out) */
+  lockReason: 'idle' | 'ended' | null;
   register(input: RegisterInput, onProgress?: (p: Progress) => void): Promise<Session>;
   login(username: string, passphrase: string, onProgress?: (p: Progress) => void): Promise<Session>;
   logout(): Promise<void>;
-  lock(reason?: 'idle'): void;
+  lock(reason?: 'idle' | 'ended'): void;
   refreshProfile(): Promise<void>;
   getWorkingData(): Promise<WorkingData | null>;
   setWorkingData(d: WorkingData | null): Promise<void>;
@@ -135,6 +161,48 @@ interface SessionCtx {
   turnOffRecovery(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
   /** Signed out: alias + recovery code → a reset she finishes by choosing a new passphrase. */
   beginRecovery(username: string, code: string, onProgress?: (p: Progress) => void): Promise<RecoveryReset>;
+  /**
+   * Signed in: check her passphrase on this device, then ask the server to delete her account (it checks the
+   * passphrase again). Does not sign her out here: the caller leaves the signed-in screens first, then locks.
+   */
+  deleteAccount(passphrase: string, onProgress?: (p: Progress) => void): Promise<void>;
+  /**
+   * Signed in: a new passphrase for the same account (its secret is re-wrapped on this device; nothing is
+   * re-encrypted). Her recovery code keeps working, and every other session of hers is signed out.
+   */
+  changePassphrase(current: string, next: string, onProgress?: (p: Progress) => void): Promise<{ endedSessions: number | null }>;
+  /** Signed in: sign out every other session of hers (her passphrase again, not only this session). */
+  signOutOtherSessions(passphrase: string, onProgress?: (p: Progress) => void): Promise<{ endedSessions: number }>;
+}
+
+/** The most PBKDF2 rounds she will run (the server's own limit); more would only freeze her browser. */
+const MAX_KDF_ITERATIONS = 10_000_000;
+
+/**
+ * The server tells her client how many PBKDF2 rounds to run on her passphrase (prelogin). A lower count would make the
+ * auth key her client then sends, and the keys it unlocks, cheaper to guess offline, so a malicious or broken server
+ * could weaken her passphrase. Refuse anything below DEFAULT_KDF_ITERATIONS before deriving or sending anything.
+ */
+export function checkKdfIterations(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < DEFAULT_KDF_ITERATIONS || n > MAX_KDF_ITERATIONS)
+    throw new SessionError(
+      'This app stopped before using your passphrase: the server asked for weaker protection than it should. Nothing was sent. Please try again later.',
+    );
+  return n;
+}
+
+/**
+ * A new passphrase must look like one this device generated (attorneys and counselors: 7 words; the app gives them no box
+ * for their own) or, for a survivor who chose her own, pass the meter. The forms enforce the same; this is the app's last
+ * check before any key is derived from it (the server never sees a passphrase). `context`: her alias.
+ */
+export function checkNewPassphrase(role: Role, passphrase: string, context: readonly string[] = []): void {
+  if (!canChoosePassphrase(role)) {
+    if (!isGeneratedPassphrase(passphrase, passphraseWords(role)))
+      throw new SessionError(`Attorney and counselor accounts use the ${passphraseWords(role)} words made on this device. Please use those.`);
+  } else if (!passphraseAccepted(passphrase, context)) {
+    throw new SessionError('That passphrase would be too easy to guess. Try six random words, like the one we made for you.');
+  }
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -149,7 +217,11 @@ export function SessionProvider({
   idleMs?: number;
 }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [lockReason, setLockReason] = useState<'idle' | null>(null);
+  const [lockReason, setLockReason] = useState<'idle' | 'ended' | null>(null);
+  // set below, once `lock` exists: the API client calls it when the server says this session is gone
+  const sessionEndedRef = useRef<(token: string) => void>(() => undefined);
+  // true while she is signing out or deleting her account on purpose: a request that fails because of it is not news
+  const leavingRef = useRef(false);
   const tokenRef = useRef<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
   // working draft: encrypted under a per-draft key, which is itself wrapped under masterKey
@@ -158,7 +230,15 @@ export function SessionProvider({
   const [profile, setProfile] = useState<VaultProfile | null>(null);
   const profileRecordRef = useRef<string | undefined>(undefined);
 
-  const api = useMemo(() => new ApiClient({ getToken: () => tokenRef.current, fetchImpl }), [fetchImpl]);
+  // A build with sealed matching (MATRA_MATCHING=on) gets the client that can reach the matching routes; any other
+  // build has no code for them at all (api/matching.ts is left out of its bundle).
+  const api = useMemo(
+    () =>
+      __MATRA_MATCHING__
+        ? new MatchingApiClient({ getToken: () => tokenRef.current, fetchImpl, onSessionEnded: (t) => sessionEndedRef.current(t) })
+        : new ApiClient({ getToken: () => tokenRef.current, fetchImpl, onSessionEnded: (t) => sessionEndedRef.current(t) }),
+    [fetchImpl],
+  );
 
   const clear = useCallback(() => {
     tokenRef.current = null;
@@ -180,6 +260,7 @@ export function SessionProvider({
     tokenRef.current = s.token;
     sessionRef.current = s;
     workingRef.current = null;
+    leavingRef.current = false;
     setLockReason(null);
     setSession(s);
   }, []);
@@ -211,6 +292,7 @@ export function SessionProvider({
   const register = useCallback<SessionCtx['register']>(
     async ({ username, passphrase, role, attorneyProfile, ageConfirmed18, preferredName }, onProgress) => {
       if (role === 'survivor' && !ageConfirmed18) throw new SessionError('Please confirm you are 18 or older.');
+      checkNewPassphrase(role, passphrase, [username]);
       const kdfSalt = newKdfSalt();
       onProgress?.('deriving');
       const { authKey, masterKey } = await deriveKeys(passphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);
@@ -283,7 +365,11 @@ export function SessionProvider({
         }
         // Keep her sealed-match entries current (re-seal after a key rotation, seal to new counselors). In the
         // background and silent: it never reveals anything about matches, and a failure just retries next sign-in.
-        void refreshSealedMatches(new ApiClient({ getToken: () => res.token, fetchImpl }), masterKey).catch(() => undefined);
+        // Only in a build with sealed matching: otherwise this code (and lib/matching.ts) is not in the bundle.
+        if (__MATRA_MATCHING__)
+          void import('./matching')
+            .then((m) => m.refreshSealedMatches(new MatchingApiClient({ getToken: () => res.token, fetchImpl }), masterKey))
+            .catch(() => undefined);
       }
       return s;
     },
@@ -296,7 +382,7 @@ export function SessionProvider({
       onProgress?.('contacting');
       const pre = await api.prelogin(name);
       onProgress?.('deriving');
-      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, checkKdfIterations(pre.kdfIterations));
       onProgress?.('contacting');
       let res;
       try {
@@ -324,14 +410,22 @@ export function SessionProvider({
 
   /** Her account secret from her passphrase, checked on this device. The caller wipes it. */
   const accountSecretFromPassphrase = useCallback(
-    async (s: Session, passphrase: string) => {
-      const pre = await api.prelogin(s.user.username);
-      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, pre.kdfIterations);
-      const wrong = () => new SessionError('That passphrase isn’t right. Check for typos and try again.');
+    async (s: Session, passphrase: string, wrongText = 'That passphrase isn’t right. Check for typos and try again.') => {
+      // Her account as the server holds it now, never the copy cached at sign-in: after a passphrase change whose
+      // answer got lost, the cached wrap belongs to the old passphrase while prelogin already gives the new salt.
+      const { user } = await api.me();
+      if (sessionRef.current?.user.id === user.id && sessionRef.current.token === s.token) {
+        const updated = { ...sessionRef.current, user };
+        sessionRef.current = updated;
+        setSession(updated);
+      }
+      const pre = await api.prelogin(user.username);
+      const keys = await derivePassphraseKeys(passphrase, pre.kdfSalt, checkKdfIterations(pre.kdfIterations));
+      const wrong = () => new SessionError(wrongText);
       let as: Uint8Array;
       try {
-        as = s.user.keyVersion === 2 && s.user.wrappedAccountKey
-          ? await unwrapAccountSecret(s.user.wrappedAccountKey, keys.kek)
+        as = user.keyVersion === 2 && user.wrappedAccountKey
+          ? await unwrapAccountSecret(user.wrappedAccountKey, keys.kek)
           : await legacyAccountSecret(keys.ikm);
       } catch {
         throw wrong();
@@ -339,12 +433,12 @@ export function SessionProvider({
       try {
         // version 1 derives "something" from any passphrase: prove it is hers by opening her private key with it
         const { masterKey } = await importAccountSecret(as);
-        await unwrapPrivateKey(s.user.wrappedPrivateKey, masterKey);
+        await unwrapPrivateKey(user.wrappedPrivateKey, masterKey);
       } catch {
         as.fill(0);
         throw wrong();
       }
-      return { as, keys };
+      return { as, keys, user };
     },
     [api],
   );
@@ -354,14 +448,14 @@ export function SessionProvider({
       const s = sessionRef.current;
       if (!s) throw new SessionError('Your space is locked. Please sign in again.');
       onProgress?.('deriving');
-      const { as, keys } = await accountSecretFromPassphrase(s, passphrase);
+      const { as, keys, user } = await accountSecretFromPassphrase(s, passphrase);
       let body;
       const { bytes, code } = generateRecoveryCode();
       try {
         const rk = await deriveRecoveryKeys(bytes);
         body = {
           authKey: keys.authKey,
-          ...(s.user.keyVersion !== 2 && { wrappedAccountKey: await wrapAccountSecret(as, keys.kek) }),
+          ...(user.keyVersion !== 2 && { wrappedAccountKey: await wrapAccountSecret(as, keys.kek) }),
           recoveryAuthKey: rk.authKey,
           recoveryWrappedKey: await wrapAccountSecret(as, rk.kek),
         };
@@ -375,13 +469,16 @@ export function SessionProvider({
         commit: async () => {
           try {
             const { user } = await api.setUpRecovery(body);
-            if (sessionRef.current === s) {
-              const next = { ...s, user };
+            // the same session (its user copy may have been refreshed meanwhile), not a later sign-in
+            const cur = sessionRef.current;
+            if (cur && cur.token === s.token) {
+              const next = { ...cur, user };
               sessionRef.current = next;
               setSession(next);
             }
           } catch (e) {
             if (e instanceof ApiError && e.status === 401) throw new SessionError('That passphrase isn’t right. Nothing was changed.');
+            if (e instanceof ApiError && e.code === 'passphrase_changed') throw new SessionError(PASSPHRASE_CHANGED_TEXT);
             throw e;
           }
         },
@@ -398,11 +495,105 @@ export function SessionProvider({
       const { as, keys } = await accountSecretFromPassphrase(s, passphrase);
       as.fill(0);
       onProgress?.('contacting');
-      const { user } = await api.turnOffRecovery({ authKey: keys.authKey });
-      if (sessionRef.current === s) {
-        const next = { ...s, user };
+      let user;
+      try {
+        ({ user } = await api.turnOffRecovery({ authKey: keys.authKey }));
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'passphrase_changed') throw new SessionError(PASSPHRASE_CHANGED_TEXT);
+        throw e;
+      }
+      const cur = sessionRef.current;
+      if (cur && cur.token === s.token) {
+        const next = { ...cur, user };
         sessionRef.current = next;
         setSession(next);
+      }
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const deleteAccount = useCallback<SessionCtx['deleteAccount']>(
+    async (passphrase, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      onProgress?.('deriving');
+      // same words whether her device or the server finds the passphrase wrong
+      const { as, keys } = await accountSecretFromPassphrase(s, passphrase, 'That passphrase isn’t right. Nothing was deleted.');
+      as.fill(0);
+      onProgress?.('contacting');
+      leavingRef.current = true;
+      try {
+        await api.deleteAccount({ authKey: keys.authKey });
+      } catch (e) {
+        leavingRef.current = false;
+        if (e instanceof ApiError && e.status === 401) throw new SessionError('That passphrase isn’t right. Nothing was deleted.');
+        throw e;
+      }
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const changePassphrase = useCallback<SessionCtx['changePassphrase']>(
+    async (current, next, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      checkNewPassphrase(s.user.role, next, [s.user.username]);
+      if (next.normalize('NFKC') === current.normalize('NFKC')) throw new SessionError('That’s the passphrase you have now. Please choose a new one.');
+      onProgress?.('deriving');
+      const { as, keys, user } = await accountSecretFromPassphrase(s, current, 'That passphrase isn’t right. Nothing was changed.');
+      let body;
+      try {
+        const m = await passphraseMaterialFor(as, next, DEFAULT_KDF_ITERATIONS);
+        // Before anything is sent: the new wrap must open, with the new passphrase, to keys that open her private key.
+        const check = await unlockAccount(m.keys, m.wrappedAccountKey);
+        await unwrapPrivateKey(user.wrappedPrivateKey, check.masterKey);
+        body = { authKey: keys.authKey, newAuthKey: m.authKey, kdfSalt: m.kdfSalt, kdfIterations: m.kdfIterations, wrappedAccountKey: m.wrappedAccountKey };
+      } finally {
+        as.fill(0);
+      }
+      onProgress?.('contacting');
+      let res;
+      try {
+        res = await api.changePassphrase(body);
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'invalid_credentials') throw new SessionError('That passphrase isn’t right. Nothing was changed.');
+        if (e instanceof ApiError && e.code === 'passphrase_changed') throw new SessionError(PASSPHRASE_CHANGED_TEXT);
+        // A 4xx is a definite refusal. No answer, or a server error, may have come after the change was saved: ask
+        // the server what it holds now, and only call it done if it holds exactly what this device sent.
+        if (e instanceof ApiError && e.status >= 400 && e.status < 500) throw e;
+        let now: PublicUser | undefined;
+        try {
+          now = (await api.me()).user;
+        } catch {
+          /* can't tell */
+        }
+        if (!now || !sameEnvelope(now.wrappedAccountKey, body.wrappedAccountKey)) throw new PassphraseMaybeChangedError();
+        res = { user: now, endedSessions: null };
+      }
+      const cur = sessionRef.current;
+      if (cur && cur.token === s.token) {
+        const updated = { ...cur, user: res.user };
+        sessionRef.current = updated;
+        setSession(updated);
+      }
+      return { endedSessions: res.endedSessions };
+    },
+    [api, accountSecretFromPassphrase],
+  );
+
+  const signOutOtherSessions = useCallback<SessionCtx['signOutOtherSessions']>(
+    async (passphrase, onProgress) => {
+      const s = sessionRef.current;
+      if (!s) throw new SessionError('Your space is locked. Please sign in again.');
+      onProgress?.('deriving');
+      const { as, keys } = await accountSecretFromPassphrase(s, passphrase, 'That passphrase isn’t right. No one was signed out.');
+      as.fill(0);
+      onProgress?.('contacting');
+      try {
+        return await api.revokeOtherSessions({ authKey: keys.authKey });
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'invalid_credentials') throw new SessionError('That passphrase isn’t right. No one was signed out.');
+        throw e;
       }
     },
     [api, accountSecretFromPassphrase],
@@ -444,6 +635,7 @@ export function SessionProvider({
         finish: async (newPassphrase, progress) => {
           const secret = as;
           if (!secret) throw new SessionError('This reset has ended. Please enter your recovery code again.');
+          checkNewPassphrase('survivor', newPassphrase, [username]);
           progress?.('deriving');
           const kdfSalt = newKdfSalt();
           const keys = await derivePassphraseKeys(newPassphrase, kdfSalt, DEFAULT_KDF_ITERATIONS);
@@ -502,6 +694,7 @@ export function SessionProvider({
   );
 
   const logout = useCallback(async () => {
+    leavingRef.current = true;
     try {
       if (tokenRef.current) await api.logout();
     } catch {
@@ -510,10 +703,15 @@ export function SessionProvider({
     wipeAll();
   }, [api]);
 
-  const lock = useCallback((reason?: 'idle') => {
+  const lock = useCallback((reason?: 'idle' | 'ended') => {
     setLockReason(reason ?? null);
     wipeAll();
   }, []);
+  // Signed out elsewhere (her passphrase changed, "sign out everywhere else") or expired: forget everything here too,
+  // rather than leave a page whose every request fails. Only for the session she still holds (not an old request's).
+  sessionEndedRef.current = (token) => {
+    if (token === tokenRef.current && !leavingRef.current) lock('ended');
+  };
 
   const refreshProfile = useCallback(async () => {
     const s = sessionRef.current;
@@ -581,6 +779,9 @@ export function SessionProvider({
       prepareRecoveryCode,
       turnOffRecovery,
       beginRecovery,
+      deleteAccount,
+      changePassphrase,
+      signOutOtherSessions,
     }),
     [
       session,
@@ -600,6 +801,9 @@ export function SessionProvider({
       prepareRecoveryCode,
       turnOffRecovery,
       beginRecovery,
+      deleteAccount,
+      changePassphrase,
+      signOutOtherSessions,
     ],
   );
 
@@ -620,7 +824,9 @@ export function useRequiredSession(): SessionCtx & { session: Session } {
 }
 
 export function friendlyError(e: unknown): string {
-  if (e instanceof SessionError) return e.message;
+  if (e instanceof SessionError || e instanceof UnreadableVaultError) return e.message;
+  // errors written for her to read (lib/draftSlot.ts, lib/sealStory.ts)
+  if (e instanceof Error && (e as { friendly?: boolean }).friendly) return e.message;
   if (e instanceof ApiError) {
     // 409 from register is the alias; other conflicts (e.g. phone_limit_reached) carry their own message
     if (e.status === 409 && (!e.code || e.code === 'username_taken')) return 'Someone already uses that alias. Please try another one.';

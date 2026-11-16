@@ -1,0 +1,227 @@
+# CI for Matra.
+#
+# Every push to main and every pull request: typecheck, the unit tests of every workspace with sealed matching at its
+# default (off) and with MATRA_MATCHING=on, the slow web build tests in their own job, a production web build audited
+# in both modes, and the legal research bank check, plus the pilot browser suite. All three browser suites (default,
+# pilot and demo stacks) run nightly and on demand (workflow_dispatch), because each needs a full stack and a browser.
+# The model fetch check runs on pushes to main, nightly and on demand, not on pull requests (it downloads about 94 MB
+# from huggingface.co; no secrets).
+#
+# Nothing here needs a secret. No job deploys, publishes or pushes anything.
+#
+# Environment the tests assume, pinned here:
+#   - MATRA_COUNSELOR_ROSTER_PUBKEY is unset. Share.test.tsx expects an unpinned build (a "Development version"
+#     attorney badge, no signed directory); a pinned key would change what the share screen does.
+#   - MATRA_DEMO_MODE, the OPRF, matcher and attestation pins, MATRA_VOICE_HARNESS, NODE_ENV and any database path are
+#     unset. Tests that need them set them in their own setup.
+#   - MATRA_MATCHING is unset (off) or "on", and only through the matrix below.
+# The "Check the test environment" step fails the job if a runner or a repository variable sets any of these.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 6 * * *' # nightly, 06:23 UTC: the browser suites and the model check, on the default branch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+  # Pinned empty on purpose; see the header.
+  MATRA_COUNSELOR_ROSTER_PUBKEY: ''
+  # The timing tests (lib/quickExit.test.tsx uses a 50 ms idle timer) and date-formatting tests run in UTC here.
+  TZ: UTC
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  unit:
+    name: Unit tests (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # MATRA_MATCHING unset: the pilot default outside production (sealed matching off).
+          - name: matching off (default)
+            matching: ''
+          # The whole suite again with sealed matching on (server and web tests that don't set it themselves).
+          - name: MATRA_MATCHING=on
+            matching: 'on'
+    env:
+      MATRA_MATCHING: ${{ matrix.matching }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check the test environment
+        run: |
+          set -u
+          bad=$(env | grep -E '^(MATRA_(COUNSELOR_ROSTER_PUBKEY|DEMO_MODE|OPRF_[A-Z_]+|ATTESTATION_[A-Z_]+|MATCHER_[A-Z_]+|VOICE_HARNESS|MARKER|DATES_FOUND|DB_PATH|DRAFTS_DB_PATH|DRAFT_MODE|PEPPER)|NODE_ENV)=.+' | sed 's/=.*//' || true)
+          if [ -n "$bad" ]; then
+            echo "These variables must be unset for the unit tests:"; echo "$bad"; exit 1
+          fi
+          echo "MATRA_MATCHING='${MATRA_MATCHING}' (empty means unset: off)"
+      # The web build tests (src/build/matcherPins.test.ts, auditMatchingOff.test.ts) each run several `vite build`s, so
+      # they have their own job below. Everything else, in every workspace, runs here.
+      - name: Test crypto, shared, matcher and server
+        run: npm test -w @matra/crypto -w @matra/shared -w @matra/matcher -w @matra/server
+      - name: Test web (without the slow build tests)
+        run: npm test -w @matra/web -- --exclude 'src/build/matcherPins.test.ts' --exclude 'src/build/auditMatchingOff.test.ts'
+
+  web-build-tests:
+    name: Web build tests (slow)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # They build the web app with and without pins, and the tests clear the MATRA_* pin variables for each build
+      # themselves, so MATRA_MATCHING doesn't matter here.
+      - run: npm test -w @matra/web -- src/build/matcherPins.test.ts src/build/auditMatchingOff.test.ts
+
+  build-audit:
+    name: Production build and audit (${{ matrix.matching }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        matching: ['off', 'on']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Off is the pilot shape: a production build that is not a demo, with the organization key pinned (a throwaway
+      # 32-byte key here; the build only checks its shape). On is the demo shape.
+      - name: Build the web app (production mode)
+        env:
+          MATRA_MATCHING: ${{ matrix.matching }}
+          MATRA_SKIP_MODELS: '1'
+          MATRA_COUNSELOR_ROSTER_PUBKEY: ${{ matrix.matching == 'off' && 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=' || '' }}
+          MATRA_DEMO_MODE: ${{ matrix.matching == 'on' && '1' || '' }}
+        run: npm run build -w @matra/web
+      - name: Audit the build for third-party requests and, when off, for any sealed matching
+        run: node scripts/audit-web-build.mjs
+
+  legal-bank:
+    name: Legal research bank
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - run: npm run legal -- check
+      - name: The index is up to date
+        run: |
+          npm run legal -- index
+          git diff --exit-code -- docs/legal-research/INDEX.md
+
+  marker-eval:
+    name: Span-marker eval (not blocking)
+    # Runs the synthetic eval set and prints the plan's gate (section 8.7: precision, recall, negation false-mark rate). It
+    # does not block a merge: the gate decides whether the marker may ever be turned on, and the marker is off. The hard
+    # invariants (no invented span, no mark on a sensitive question) ARE blocking, in the web unit tests (ml/marker/eval.test.ts).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run eval:marker
+
+  models:
+    name: On-device model files
+    # Downloads from huggingface.co (public, no secrets). Not on pull requests.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      # The script also copies the ONNX Runtime wasm files out of node_modules, so it needs the install.
+      - run: npm ci
+      - name: Cache the model files
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: apps/web/public/models
+          key: models-${{ hashFiles('apps/web/src/ml/manifest.json', 'scripts/fetch-models.mjs') }}
+      - run: node scripts/fetch-models.mjs
+      - run: node scripts/fetch-models.mjs --check
+
+  e2e:
+    name: Browser tests (${{ matrix.name }})
+    # Pull requests run the pilot suite (about a minute and a half): it holds the browser-level seal order, the stop
+    # screens and the ended-session checks. Nightly and on demand run all three. Pushes to main run none.
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"pilot stack (matching off)","config":"playwright.pilot.config.ts"}]' || '[{"name":"default stack (matching on)","config":"playwright.config.ts"},{"name":"pilot stack (matching off)","config":"playwright.pilot.config.ts"},{"name":"demo stack","config":"playwright.demo.config.ts"}]') }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Cache the Playwright browser
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run ${{ matrix.name }}
+        run: npx playwright test -c ${{ matrix.config }}
+      - name: Keep the traces of a failed run
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-failure-${{ strategy.job-index }}
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore

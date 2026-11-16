@@ -86,7 +86,8 @@ in the browser before it is saved.
 
 **Share.** Still as Jane, choose **`attorney.nj1`** from the verified list.
 
-- Show the scope choices (the sealed account, evidence files, the summary), the expiry (90 days by default; she can
+- Show what she shares: her written account always, whole (the screen lists what it holds: her name, contacts, the list
+  of every evidence file), the summary laid out from it, and only the evidence files she ticks; then the expiry (90 days by default; she can
   choose 30 days to a year and renew), and *"Verified by Matra: this key belongs to Demo — Alex Rivera, Esq."* *"Her app
   checked the attorney's key against a list Matra signs offline when it verifies an attorney. She doesn't have to call
   you to compare codes, which also means she doesn't have to tell an attorney she hasn't chosen yet that she's involved
@@ -128,7 +129,7 @@ in the browser before it is saved.
 **The access log, then revoke.** Back in Profile A, open Jane's activity log: *"Demo — Alex Rivera, Esq. opened your
 shared case file at …"*. Then **revoke** the share and refresh Profile B to show access denied.
 
-- *"She sees every time you open or download it. Revoking stops future access. It can't take back what you already
+- *"She sees every time you open or download it. Revoking stops future access, and we delete your copy of the key from our database. It can't take back what you already
   downloaded, which is why the partner MOU has deletion duties."*
 - Sign out of `attorney.nj1`.
 
@@ -167,7 +168,7 @@ demo-only."*
 - For Jane and Morgan, tick *"I've spoken with this person and they expect this request"*, then **Ask for their full
   report**. *"The request never comes out of the blue. The counselor talks to her first."*
 - Profile A as `jane.demo`: Home shows *"A legal options counselor has asked to see your report"*. Show who is asking
-  (name, organization, key fingerprint checked against the signed counselor roster), what would be shared (evidence unticked by default), and the plain-language
+  (name, organization, key fingerprint checked against the signed counselor roster), what would be shared (the whole written account; no file until she ticks it), and the plain-language
   lines. Tap **Yes, share my report**.
 - Sign in as `morgan.demo` and tap **No, don't share**. *"A no is final in Matra for this sealed match. She never has to
   give a reason."*
@@ -190,8 +191,8 @@ demo-only."*
 | Her contact details for the counselor (sealed to the counselor) | Routing states, which only the separate matcher can read |
 | Her passphrase or recovery code | Rate-limit keys that are hashed and expire daily. No IP addresses are stored. |
 
-- *"So 'subpoena-proof' is wrong, and we never say it. Matra, as the operator, can't produce her content because it
-  can't decrypt it. She can be ordered to produce it, and so can anyone she shares with. Anything she gives police is
+- *"So 'subpoena-proof' is wrong, and we never say it. Matra, as the operator, holds no plaintext of her content, because it
+  can't decrypt what it stores. She can be ordered to produce it, and so can anyone she shares with. Anything she gives police is
   discoverable. We tell her that in plain words before she starts, before she seals, and before she shares."*
 - *"Two honest limits. First, this assumes the web code we serve hasn't been tampered with. Second, in this test
   version the people who run Matra could check whether a particular identifier was sealed. Before real use, the key
@@ -259,13 +260,13 @@ and New York, and a pilot partner with trained advocates."*
 
 | Stage | What happens | Her consent | What she's told |
 |---|---|---|---|
-| Writing | Encrypted on her device and saved | None needed: nothing readable leaves the device | Matra can't read it, but a court can order **her** to hand it over |
+| Writing | Encrypted on her device and saved | None needed: nothing readable leaves the device | Matra's server can't read it (if the code we serve is untampered), but a court can order **her** to hand it over |
 | Sealing | This version is locked, and its hash goes on the ledger | She taps **Seal** | Every sealed version is kept |
-| Sharing with an attorney | The record key is re-encrypted to one verified attorney she picks | Scope, expiry, key fingerprint and consent text, word for word | She sees every access. Revoking stops future access but can't recall downloads |
+| Sharing with an attorney | The key to her sealed version is re-wrapped, on her device, to one verified attorney she picks | What the whole written account holds, the files she ticks, expiry, the label the attorney will see and the consent text, word for word | She sees every access. Revoking stops future access but can't recall downloads |
 | Sealed match | Her identifier is sealed. A routing state is sealed to the matcher | A separate opt-in, plus a safe contact method | She'll never see a match. A counselor, a licensed attorney, may contact her once |
 | Counselor, stage 1 | The counselor sees the identifier, states and contact methods, then contact details after a conflict check | Covered by her opt-in | The counselor reaches out once, privately, by the method she chose |
 | Counselor, stage 2 | Her full report goes to that counselor only | A new, separate **yes** for each request, after the counselor has spoken with her | Not shared with anyone else who named the same person. A no is final for this match |
-| Deletion | Her ciphertext and keys are destroyed; ledger hashes remain | Typed confirmation | Talk to a lawyer before deleting if a case is possible. Copies already downloaded can't be recalled |
+| Deletion | Her ciphertext and wrapped keys are deleted from the live database; ledger hashes remain. Not a crypto-shred: a server backup made earlier still opens with her passphrase | Typed confirmation and her passphrase | Talk to a lawyer before deleting if a case is possible. Copies already downloaded can't be recalled |
 
 Each of these stages raises at least one open question listed in section 7. None of the consent wording has been
 reviewed by counsel or by advocates yet.

@@ -12,7 +12,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 2. **Fictional data only.** Never demo with, discuss, or accept real survivor stories. If someone starts sharing a real case, gently stop them: *"I'd rather not hear identifying details. We aren't set up to protect them yet."*
 3. **Listen more than you pitch.** Aim for 40% you, 60% them. The discovery questions matter more than the demo.
 4. **Say the limits before they ask.** Experts in this space have seen many naive apps. Credibility comes from naming the weaknesses yourself.
-5. **Words to never use:** "subpoena-proof," "bulletproof," "admissible," "prosecutable pattern," "tamper-proof," "mathematically impossible," "HIPAA-compliant," "the state pays our lawyers," "Police Evidentiary Brief." Use: "Incident Summary in the Survivor's Own Words"; "the operator can't decrypt content; she can still be compelled"; "a lead, not evidence."
+5. **Words to never use:** "subpoena-proof," "bulletproof," "admissible," "prosecutable pattern," "tamper-proof," "mathematically impossible," "HIPAA-compliant," "the state pays our lawyers," "Police Evidentiary Brief." Use: "Incident Summary in the Survivor's Own Words"; "the operator's server holds only ciphertext, so it can't decrypt content from what it stores, but it also serves the app's code (the one limit to name); she can still be compelled"; "a lead, not evidence."
 6. **One specific ask per meeting**, sized to what they can say yes to this week.
 7. **Within 24 hours:** send the thank-you (template in EMAIL_TEMPLATES.md), the promised materials, and log what you learned.
 
@@ -50,7 +50,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 **The ask:** *"Would you review three short things: the consent text a survivor reads before sharing, the warning language, and a sample Incident Summary? About 60-90 minutes, async. If it ever reaches a pilot, would you consider being one of the first listed attorneys under the MOU?"*
 
 **Hard questions and honest answers**
-- *"Can the defense subpoena this?"* Not content from us; we can't decrypt it. We can be compelled to produce metadata. She can be compelled, subject to a motion to quash. Anything given to police is discoverable under R. 3:13-3.
+- *"Can the defense subpoena this?"* Not content from us: we hold only ciphertext, so there is no plaintext to hand over (with the limit that our server also serves the app's code). We can be compelled to produce metadata. She can be compelled, subject to a motion to quash. Anything given to police is discoverable under R. 3:13-3.
 - *"Is any of it privileged?"* Not by default. Communications to counsel for legal advice are. That's why we're building an attorney-first route. We want your view on how to document "prepared at counsel's request."
 - *"Every version is kept: impeachment."* Yes, a real trade-off. Plan: unsealed local drafts, deliberate sealing, warnings. What default would you choose?
 - *"Does this replace her testimony?"* No. It would be testimonial (*Crawford*/*Davis*). The app isn't a fresh complaint; it helps find who she told.
@@ -151,7 +151,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 
 **Hard questions and honest answers**
 - *"Does any money come from lawyers or cases?"* No, and governance forbids it: no referral fees, no fee sharing, no share of VCCO or court awards (RPC 5.4(a), 7.2(c), 7.3(d)).
-- *"What's your risk profile?"* No real survivor data until an independent audit, counsel review, and a signed pilot agreement. The operator can't decrypt content but holds metadata, and a breach of metadata is still a risk. We'll need cyber coverage and an incident-response plan.
+- *"What's your risk profile?"* No real survivor data until an independent audit, counsel review, and a signed pilot agreement. The operator's server holds only ciphertext but also metadata, and a breach of metadata is still a risk. We'll need cyber coverage and an incident-response plan.
 - *"Who's on your board/advisory council?"* Forming. Advisors are unpaid; one seat is reserved for a survivor-led organization or person with lived experience.
 - *"Budget?"* See GRANT_BOILERPLATE.md; draft 12-month pilot budget with assumptions labelled.
 
@@ -174,7 +174,7 @@ Companion docs: [DEMO_SCRIPT.md](../DEMO_SCRIPT.md) (full 10-minute demo and set
 
 **Known weaknesses to state up front (from Whitepaper §5-6)**
 - Web-based E2EE: a malicious or compromised server can serve modified JavaScript or substitute an attorney's public key. Planned: build hashes, SRI, strict CSP, key-fingerprint UI, later a packaged client.
-- Matching: being rebuilt from HMAC+pepper (where the pepper holder could test phone numbers) to RFC 9497 OPRF with a 2-of-2 split key, plus a counselor threshold layer modelled on Callisto (COMPASS 2018). Open issues: Sybil and framing entries, key-server independence, counselor-key misuse, and metadata (π equality classes). Ask for a design review before code audit. Demo-only until then.
+- Matching: moved from HMAC+pepper (where the pepper holder could test phone numbers) to an RFC 9497 threshold OPRF (default 2-of-3 key holders), plus a counselor layer modelled on Callisto (COMPASS 2018). Off by default and off for any pilot. Open issues: Sybil and framing entries, key-server independence, counselor-key misuse, and metadata (π equality classes). Ask for a design review before code audit. Demo-only until then.
 - AES-GCM isn't key-committing; ledger hashes cover ciphertext. Planned: plaintext commitments or a key-committing AEAD.
 - Ledger isn't externally anchored (operator controls clock).
 - Metadata exposure in a database leak: usernames, sizes, timestamps, share relationships, plaintext alias, escrow status.

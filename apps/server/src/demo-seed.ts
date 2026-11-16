@@ -42,7 +42,9 @@ import {
   normalizeMatchIdentifier,
   publicKeyFingerprint,
   rosterPublicKey,
+  sealSlot,
   sha256Hex,
+  slotName,
   submitMatchEntry,
   toBase64,
   wrapKeyForRecipient,
@@ -51,7 +53,12 @@ import {
   type MatchTransport,
 } from '@matra/crypto';
 import type { AttorneyProfile, AuthResponse, EvidenceItem, EvidenceKind, IntakeRecord, MatchContactPreferences, MatchStates, RegisterRequest } from '@matra/shared';
+import { ATTORNEY_SUMMARY_SENTENCE, shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
+
+/** The label attorney.nj1 sees for Riley's seeded share (her app makes one up per share; this one is fixed for the demo script). */
+const RILEY_SHARE_ALIAS = 'Client RLDM3';
 import { createApp, flushPhoneTokens, getDb } from './app.js';
+import { loadMatchingMode } from './matching-off.js';
 import { signOrgLists, storeOrgLists } from './org-signing.js';
 import {
   loadDemoMode,
@@ -62,6 +69,7 @@ import {
   loadPepper,
   loadPhoneVerification,
   resolveDbPath,
+  resolveDraftsDbPath,
 } from './config.js';
 
 const DEMO_PASSPHRASES = {
@@ -231,6 +239,8 @@ async function main() {
   if (!dbPath.split(path.sep).includes('.demo')) throw new Error(`demo-seed refuses a database outside a .demo directory: ${dbPath}`);
   const signingKeyFile = process.env.MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE;
   if (!signingKeyFile) throw new Error('MATRA_COUNSELOR_ROSTER_SIGNING_KEY_FILE (the demo organization key) must be given to demo-seed.');
+  // The demo shows sealed matching end to end (counselors, sealed entries, a staged release): it needs it on.
+  if (loadMatchingMode() !== 'on') throw new Error('demo-seed seeds sealed matching: run it with MATRA_MATCHING=on (the demo stack sets it).');
 
   // The same configuration as index.ts (remote holders, the separate matcher, the mock SMS provider in demo mode).
   const matchingSettings = loadMatchingSettings();
@@ -238,6 +248,7 @@ async function main() {
   const matcher = loadMatcherConfig(process.env, { releaseDelayHours: matchingSettings.releaseDelayHours });
   const app = createApp({
     dbPath,
+    draftsDbPath: resolveDraftsDbPath(dbPath),
     pepper: loadPepper(),
     matching: {
       oprf: loadOprfThreshold(),
@@ -317,14 +328,21 @@ async function main() {
     return { item, key };
   }
 
-  /** Encrypt and upload a sealed ('final') story, as the web app's review screen does. */
+  /**
+   * Encrypt and upload a sealed ('final') story, as the web app's review screen does: only {kind, record, savedAt}. The
+   * fingerprints of what she sealed for matching go into her draft slot, as the web app keeps them (lib/draftSlot.ts).
+   */
   async function sealStory(u: Survivor, s: StorySeed, escrowedHashes: string[] = [], evidence: EvidenceItem[] = []) {
     const key = await generateContentKey();
-    const payload = { kind: 'final', record: intakeRecord(s, evidence), escrowedHashes, savedAt: new Date().toISOString() };
+    const payload = { kind: 'final', record: intakeRecord(s, evidence), savedAt: new Date().toISOString() };
     const res = await call<{ record: { id: string; createdAt: string } }>(u.token, 'POST', '/api/vault/records', {
       envelope: await encryptJSON(payload, key),
       ownerWrappedKey: await wrapKeyWithMaster(key, u.masterKey),
     });
+    if (escrowedHashes.length) {
+      const slot = { kind: 'draft', slotVersion: 1, evidence, escrowedHashes, savedAt: payload.savedAt };
+      await call(u.token, 'PUT', `/api/vault/slots/${await slotName(u.masterKey, 'draft')}`, { ...(await sealSlot(slot, u.masterKey)), expectedVersion: null });
+    }
     return { id: res.record.id, createdAt: res.record.createdAt, key };
   }
 
@@ -413,15 +431,19 @@ async function main() {
       recipientWrappedKey: await wrapKeyForRecipient(rileyRecord.key, alex.publicKey),
       attorneyKeyFingerprint: fp,
       blobs: await Promise.all(rileyFiles.map(async (f) => ({ blobId: f.item.blobId!, recipientWrappedKey: await wrapKeyForRecipient(f.key, alex.publicKey) }))),
+      // the same sentences her app writes (screens/Share.tsx buildConsentStatement), from @matra/shared consent.ts
       consentStatement: [
-        `I, "riley.demo", choose to share my sealed Matra file (sealed ${rileyRecord.createdAt}) with ${alex.displayName} of ${alex.organization}, a verified attorney, so that they can advise me.`,
-        'I am sharing: my written account; my evidence files; the incident summary in my own words, prepared from my account.',
+        `I choose to share my sealed Matra file (sealed ${rileyRecord.createdAt}) with ${alex.displayName} of ${alex.organization}, a verified attorney, so that they can advise me.`,
+        shareAliasSentence(RILEY_SHARE_ALIAS),
+        writtenAccountSentence(),
+        ATTORNEY_SUMMARY_SENTENCE,
+        sharedFilesSentence(rileyFiles.length),
         `It will be encrypted on my device so that only the holder of the key with fingerprint ${fp} can open it.`,
-        'Access ends after 90 days unless I renew it. (Demo seed.)',
+        'This access expires 90 days after the date below unless I renew it. (Demo seed.)',
         `Agreed at ${new Date().toISOString()}.`,
       ].join('\n'),
-      scope: ['record', 'evidence', 'brief'],
-      survivorAlias: 'riley.demo',
+      scope: ['record', 'evidence'],
+      survivorAlias: RILEY_SHARE_ALIAS,
       expiresInDays: 90,
     });
     console.log(`[demo-seed] riley.demo shared her sealed story and ${rileyFiles.length} evidence files with attorney.nj1`);

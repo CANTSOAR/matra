@@ -20,7 +20,7 @@ import {
 } from '@matra/crypto';
 import type { CounselorMatchGroup } from '@matra/shared';
 import { createApp, getDb } from './app.js';
-import { TEST_PEPPER, makeApp, matchTransport, registerUser, sealMatch, type TestUser } from './test-helpers.js';
+import { TEST_PEPPER, makeMatchingApp, matchTransport, registerUser, sealMatch, type TestUser } from './test-helpers.js';
 import type express from 'express';
 
 const blinded = () => ({ blinded: toBase64(blindMatchIdentifier('email:x@example.com').blinded) });
@@ -29,11 +29,11 @@ const groupsOf = async (app: express.Express, c: TestUser) => {
   expect(r.status).toBe(200);
   return r.body.groups as CounselorMatchGroup[];
 };
-const ledgerLen = (db: ReturnType<typeof makeApp>['db']) => (db.prepare('SELECT COUNT(*) n FROM ledger').get() as { n: number }).n;
+const ledgerLen = (db: ReturnType<typeof makeMatchingApp>['db']) => (db.prepare('SELECT COUNT(*) n FROM ledger').get() as { n: number }).n;
 
 describe('sealed matching: access control and rate limits', () => {
   it('only verified-adult survivors can call the OPRF endpoints; counselors and attorneys cannot', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const s = await registerUser(app, 'survivor.ok');
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const atty = await registerUser(app, 'atty.one', 'attorney');
@@ -68,7 +68,7 @@ describe('sealed matching: access control and rate limits', () => {
   });
 
   it('rate-limits per account (daily + lifetime), one unit per distinct blinded element whichever holders it goes to', async () => {
-    const { app, db } = makeApp({ matching: { limits: { perDay: 3, lifetime: 5 } } });
+    const { app, db } = makeMatchingApp({ matching: { limits: { perDay: 3, lifetime: 5 } } });
     const s = await registerUser(app, 'survivor.rl');
     const other = await registerUser(app, 'survivor.other');
     const hit = (u: TestUser, h = 1, b = blinded()) => request(app).post(`/api/matching/oprf/${h}`).set(u.auth).send(b);
@@ -98,7 +98,7 @@ describe('sealed matching: access control and rate limits', () => {
   });
 
   it('spreading guesses over different t-subsets of holders does not multiply the account budget (2-of-3)', async () => {
-    const { app, db } = makeApp({ matching: { limits: { perDay: 3, lifetime: 50 } } });
+    const { app, db } = makeMatchingApp({ matching: { limits: { perDay: 3, lifetime: 50 } } });
     const s = await registerUser(app, 'survivor.spread');
     const pairs = [[1, 2], [1, 3], [2, 3], [1, 2], [1, 3], [2, 3]];
     const ok: number[][] = [];
@@ -114,7 +114,7 @@ describe('sealed matching: access control and rate limits', () => {
   });
 
   it('unverified counselors get nothing and are not offered to survivors', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const pending = await registerUser(app, 'loc.pending', 'counselor', { verify: false });
     expect((await request(app).get('/api/counselor/groups').set(pending.auth)).body.code).toBe('counselor_not_verified');
     const s = await registerUser(app, 'survivor.x');
@@ -128,7 +128,7 @@ describe('sealed matching: access control and rate limits', () => {
 
 describe('sealed matching: threshold release to counselors', () => {
   it('unmatched entries are never released; 2 distinct survivors → one group; counselor reconstructs both bundles', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const loc2 = await registerUser(app, 'loc.two', 'counselor');
     const a = await registerUser(app, 'survivor.a');
@@ -193,7 +193,7 @@ describe('sealed matching: threshold release to counselors', () => {
   });
 
   it('the same survivor naming the same person twice never matches', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const first = await sealMatch(app, a, 'email', 'Bad.Actor+x@gmail.com');
@@ -217,7 +217,7 @@ describe('sealed matching: threshold release to counselors', () => {
   });
 
   it('withdrawal deletes her entry; a group that drops below 2 survivors is no longer released', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -238,7 +238,7 @@ describe('sealed matching: threshold release to counselors', () => {
   });
 
   it('survivors only ever see "sealed"; one ledger entry per submission; nothing reveals a match', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     await registerUser(app, 'loc.one', 'counselor');
     const victim = await registerUser(app, 'survivor.v');
     const perp = await registerUser(app, 'not.a.survivor');
@@ -278,7 +278,7 @@ describe('sealed matching: threshold release to counselors', () => {
   });
 
   it('names cannot be submitted for matching', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     await registerUser(app, 'loc.one', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     await expect(sealMatch(app, a, 'full_name', 'Ryan Smith')).rejects.toThrow(/name_not_unique/);
@@ -287,7 +287,7 @@ describe('sealed matching: threshold release to counselors', () => {
 
 describe('review fixes: release delay and Sybil signals (M2)', () => {
   it('a group is released only once two distinct entries are older than the delay, with Sybil signals', async () => {
-    const { app, db } = makeApp({ matching: { releaseDelayHours: 72 } });
+    const { app, db } = makeMatchingApp({ matching: { releaseDelayHours: 72 } });
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -314,7 +314,7 @@ describe('review fixes: release delay and Sybil signals (M2)', () => {
 
 describe('review fixes: group cleanup (L3)', () => {
   it('withdrawal and account deletion remove empty groups and their counselor notes', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc = await registerUser(app, 'loc.one', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -329,14 +329,14 @@ describe('review fixes: group cleanup (L3)', () => {
     await request(app).delete(`/api/matching/entries/${ea.entry.id}`).set(a.auth);
     expect(count('match_groups')).toBe(1); // b's entry remains
     expect(count('counselor_notes')).toBe(1); // the note about a's (deleted) entry is gone
-    expect((await request(app).post('/api/account/delete').set(b.auth)).status).toBe(200);
+    expect((await request(app).post('/api/account/delete').set(b.auth).send({ authKey: b.authKey })).status).toBe(200);
     expect([count('match_groups'), count('counselor_notes'), count('match_entries')]).toEqual([0, 0, 0]);
   });
 });
 
 describe('review fixes: counselor roster changes (M6) and signed roster (M4)', () => {
   it('new counselors get seals on her next sign-in; removed counselors lose theirs; the cap is 200', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc1 = await registerUser(app, 'loc.one', 'counselor');
     const loc2 = await registerUser(app, 'loc.two', 'counselor', { verify: false });
     const a = await registerUser(app, 'survivor.a');
@@ -372,7 +372,7 @@ describe('review fixes: counselor roster changes (M6) and signed roster (M4)', (
   });
 
   it('with a pinned org key, survivors seal only to counselors on the signed roster; the server refuses others', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const loc1 = await registerUser(app, 'loc.one', 'counselor');
     const loc2 = await registerUser(app, 'loc.two', 'counselor');
     const a = await registerUser(app, 'survivor.a');

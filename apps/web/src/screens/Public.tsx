@@ -132,8 +132,12 @@ export function Welcome() {
 
       <p className="small muted" style={{ textAlign: 'center' }}>
         <Link to="/attorney" data-testid="attorney-link">I’m an attorney</Link>
-        <span aria-hidden="true"> · </span>
-        <Link to="/counselor" data-testid="counselor-link">Legal options counselors</Link>
+        {__MATRA_MATCHING__ && (
+          <>
+            <span aria-hidden="true"> · </span>
+            <Link to="/counselor" data-testid="counselor-link">Legal options counselors</Link>
+          </>
+        )}
       </p>
     </div>
   );
@@ -237,9 +241,11 @@ export function AttorneyLanding() {
           </Link>
         </div>
       </div>
-      <p className="small muted" style={{ textAlign: 'center' }}>
-        <Link to="/counselor" data-testid="counselor-link">Legal options counselors</Link>
-      </p>
+      {__MATRA_MATCHING__ && (
+        <p className="small muted" style={{ textAlign: 'center' }}>
+          <Link to="/counselor" data-testid="counselor-link">Legal options counselors</Link>
+        </p>
+      )}
     </div>
   );
 }

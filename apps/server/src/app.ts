@@ -5,7 +5,7 @@
  * wrapped keys, public keys, and hashes. Request bodies are never logged.
  *
  * Error shape: ApiError `{ error: string, code?: string }`. Codes used:
- *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch
+ *   400 invalid_request | invalid_json | invalid_wrapped_key | scope_mismatch | consent_mismatch
  *   401 unauthorized | session_expired | invalid_credentials
  *   403 forbidden | forbidden_role | share_revoked | share_expired | attorney_not_verified | counselor_not_verified
  *       | age_not_confirmed | phone_not_verified | release_revoked | release_expired
@@ -13,6 +13,7 @@
  *       | counselor_key_mismatch | counselor_unavailable
  *   404 not_found | record_not_found | blob_not_found | attorney_not_found | share_not_found | entry_not_found
  *       | counselor_not_found | group_not_found | request_not_found | release_not_found
+ *       | matching_disabled (MATRA_MATCHING=off: every matching / escrow / counselor / report route, and counselor sign-up)
  *   403 … | counselor_not_listed (seal to a counselor missing from the signed roster)
  *   400 phone_invalid | phone_not_supported | code_invalid | code_expired
  *   401 … invalid_credentials also for a wrong recovery code and an unknown, used or expired reset token
@@ -28,6 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { z } from 'zod';
 import {
+  DEFAULT_KDF_ITERATIONS,
   generateOprfKey,
   groupKeyFromShares,
   fromBase64,
@@ -66,7 +68,9 @@ import type {
   VaultRecordMeta,
   WrappedKey,
 } from '@matra/shared';
-import { openDb, type DB } from './db.js';
+import { SLOT_MAX_PER_ACCOUNT, consentMatches, type DraftMode, type GetSlotResponse, type PutSlotResponse } from '@matra/shared';
+import { deploymentId, openDb, type DB } from './db.js';
+import { SlotStore, draftsDbPathFor } from './slots.js';
 import {
   appendLedger,
   canonicalEnvelope,
@@ -96,11 +100,21 @@ import { AccountOprfBudget, DEFAULT_OPRF_LIMITS, SqliteQuotaStore, type OprfLimi
 import { InProcessHolderPool, RemoteHolderPool, type HolderPool, type RemoteHolderConfig } from './holders.js';
 import { InProcessMatcher, MatcherGate, type MatcherClient, type MatcherPins, type MatcherRosterInput } from './matcher-client.js';
 import { INSPECTOR_ROUTE, RequestRecorder, appProcess, fetchProcess, findInDb } from './inspector.js';
+import { MATCHING_DISABLED, MATCHING_ROUTE_PREFIXES, assertWebBuildMatches, checkLeftoverMatchingRows, matchingDisabled, preflightLeftoverMatchingRows } from './matching-off.js';
+import { checkpoint as checkpointWal, forgetReleaseKeys, forgetShareKeys, sweepRecipientKeys } from './recipient-keys.js';
 import { MockSmsVerifier, PHONE_SEND_LIMITS, SMS_CODE_TTL_MS, SmsError, phoneToken, type PhoneSendLimits, type SmsVerifier } from './sms.js';
 
 export interface CreateAppOptions {
   /** SQLite path, or ':memory:' for tests. */
   dbPath: string;
+  /** Draft slots' SQLite file (src/slots.ts). Default: `<name>-drafts.db` beside `dbPath` (':memory:' with it). */
+  draftsDbPath?: string;
+  /**
+   * MATRA_DRAFT_MODE (packages/shared/src/slots.ts). Default 'slot': a draft save replaces the one before and writes
+   * nothing else. 'keep-versions': each save also files the same envelope as a record with a ledger entry, so every
+   * earlier draft is kept (the launch default waits on counsel: Q-004).
+   */
+  draftMode?: DraftMode;
   /** Server secret for HMACs (fake prelogin salts). */
   pepper: Buffer | string;
   /** Allowed CORS origins (the Vite dev server proxies /api, so CORS is rarely needed). */
@@ -119,9 +133,12 @@ export interface CreateAppOptions {
   /** Number of reverse-proxy hops to trust for the client IP (rate limiting). Render / Fly: 1. */
   trustProxy?: number;
   /**
-   * Sealed matching. `oprf` is the threshold OPRF key set (config.ts loadOprfThreshold): t, and either all m shares
-   * in-process or the remote holders' URLs + pinned share public keys + holder-token key. When omitted (tests), a fresh
-   * ephemeral 2-of-3 ceremony runs — matching then only works for the lifetime of this process.
+   * Sealed matching. Omitted or `false`: OFF (MATRA_MATCHING=off, the pilot default; src/matching-off.ts): no OPRF key
+   * is dealt, no matching_meta row is written, no matcher sync runs, every matching route answers 404
+   * `matching_disabled`, and counselor accounts can't be registered.
+   * An object turns it ON. `oprf` is the threshold OPRF key set (config.ts loadOprfThreshold): t, and either all m shares
+   * in-process or the remote holders' URLs + pinned share public keys + holder-token key. When `oprf` is omitted (tests),
+   * a fresh ephemeral 2-of-3 ceremony runs — matching then only works for the lifetime of this process.
    * releaseDelayHours (default 72): a group is released only once ≥ 2 distinct survivors' entries are at least this old.
    * allowKeyRotation: accept keys that differ from the ones recorded in the DB (MATRA_OPRF_ROTATE=1) → new key epoch.
    */
@@ -153,13 +170,19 @@ export interface CreateAppOptions {
      * config.ts loadMatcherConfig builds this from the environment.
      */
     matcher?: { client: MatcherClient; pins: MatcherPins };
-  };
+  } | false;
   /**
    * DEV / DEMO ONLY: the "what the server sees" inspector, GET /api/dev/inspector (src/inspector.ts). Unauthenticated;
    * keeps the last 200 request summaries in memory. index.ts sets it only when inspectorEnabled() (MATRA_INSPECTOR=1,
    * and not production unless MATRA_DEMO_MODE=1).
    */
   inspector?: boolean;
+  /**
+   * Fewest PBKDF2 rounds a client may register (or reset) a passphrase with. Default: DEFAULT_KDF_ITERATIONS (600,000)
+   * in production; 1,000 elsewhere, so tests can register accounts quickly. Her client refuses fewer than
+   * DEFAULT_KDF_ITERATIONS from prelogin anyway (apps/web/src/lib/session.tsx checkKdfIterations).
+   */
+  minKdfIterations?: number;
 }
 
 /**
@@ -194,6 +217,22 @@ export class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+/** A draft-slot write or delete named a version that is no longer current (another device or tab saved since). */
+const slotConflict = () => new HttpError(409, 'slot_conflict', 'A newer draft was saved from another device or tab.');
+const tooManySlots = () => new HttpError(409, 'too_many_slots', 'This space already holds as many drafts as it can.');
+
+/**
+ * Stands in for a sealed-matching object (key holders, matcher) when matching is off: any use answers 404
+ * `matching_disabled`, the same as the route guard, so nothing can reach a key that was never dealt.
+ */
+function disabledMatching<T extends object>(): T {
+  return new Proxy({} as T, {
+    get() {
+      throw new HttpError(404, MATCHING_DISABLED.code, MATCHING_DISABLED.error);
+    },
+  });
 }
 
 function parse<T extends z.ZodType>(schema: T, data: unknown): z.output<T> {
@@ -261,12 +300,17 @@ interface ShareRow {
   status: 'active' | 'revoked';
   consent_statement: string;
   scope: string;
-  recipient_wrapped_key: string;
+  /** NULL once access ended (src/recipient-keys.ts) */
+  recipient_wrapped_key: string | null;
   survivor_alias: string;
   created_at: string;
   revoked_at: string | null;
   expires_at: string;
   ledger_entry_id: string;
+  /** only on her own share list: whether the attorney is verified right now (attorney_profiles.verified) */
+  attorney_verified?: number | null;
+  /** only on her own share list: JSON array of the files the share covers */
+  blob_ids?: string | null;
 }
 interface MatchEntryRow {
   id: string;
@@ -307,7 +351,8 @@ interface ReportReleaseRow {
   survivor_id: string;
   counselor_id: string;
   record_id: string;
-  recipient_wrapped_key: string;
+  /** NULL once access ended (src/recipient-keys.ts) */
+  recipient_wrapped_key: string | null;
   consent_statement: string;
   status: 'active' | 'revoked';
   created_at: string;
@@ -373,18 +418,23 @@ const toBlobMeta = (b: BlobRow): BlobMeta => ({
   ownerWrappedKey: JSON.parse(b.owner_wrapped_key),
 });
 
-const toShare = (s: ShareRow): Share => ({
+/** A share as one side sees it. The attorney's copy leaves out her account id, so her shares to them link by nothing the server adds. */
+const toShare = (s: ShareRow, forAttorney = false): Share => ({
   id: s.id,
   recordId: s.record_id,
-  survivorId: s.survivor_id,
+  ...(!forAttorney && { survivorId: s.survivor_id }),
   attorneyId: s.attorney_id,
   status: s.status,
   consentStatement: s.consent_statement,
   scope: JSON.parse(s.scope),
+  survivorAlias: s.survivor_alias,
   createdAt: s.created_at,
   expiresAt: s.expires_at,
   ...(s.revoked_at != null && { revokedAt: s.revoked_at }),
   ledgerEntryId: s.ledger_entry_id,
+  ...(s.attorney_verified != null && { attorneyVerified: s.attorney_verified === 1 }),
+  ...(s.recipient_wrapped_key == null && { keyDeleted: true }),
+  ...(s.blob_ids != null && { blobIds: JSON.parse(s.blob_ids) as string[] }),
 });
 
 const DEFAULT_SHARE_DAYS = 90;
@@ -463,14 +513,54 @@ export const HOUSEKEEPING_INTERVAL_MS = 10 * 60_000;
 export const RESET_TOKEN_TTL_MS = 10 * 60_000;
 /** At most this many 'recovery.failed' rows per account per UTC day, so wrong codes can't flood her activity list. */
 export const RECOVERY_FAILED_AUDIT_CAP = 10;
+/** Same for 'auth.login_failed': wrong passphrases from anyone who knows her alias can't flood her activity list. */
+export const LOGIN_FAILED_AUDIT_CAP = 10;
+/** Newest activity rows GET /api/audit returns. Security events (SECURITY_AUDIT_SQL) come back on top, however old. */
+export const AUDIT_LIST_LIMIT = 1000;
+/**
+ * Activity she must always be able to see, even under a flood of other rows: anything about her recovery code, a
+ * passphrase reset with it (W20), a passphrase change, and her other sessions being signed out. Each is capped or
+ * rate-limited where it is written.
+ */
+/** Wrong passphrases typed into a signed-in session (re-authentication), by what was being attempted. */
+const REAUTH_FAILED_ACTIONS = ['auth.reauth_failed', 'auth.delete_reauth_failed', 'auth.passphrase_reauth_failed', 'auth.sessions_reauth_failed'];
+/** At most this many of those rows per account per UTC day (all four together). */
+export const REAUTH_FAILED_AUDIT_CAP = 10;
+const SECURITY_AUDIT_SQL = `(action LIKE 'recovery.%' OR action IN ('auth.recovered', 'auth.passphrase_changed', 'auth.other_sessions_ended', ${REAUTH_FAILED_ACTIONS.map((a) => `'${a}'`).join(', ')}))`;
 
 export function createApp(opts: CreateAppOptions): express.Express {
+  // Matching off over matching rows: production refuses before any migration touches the file (matching-off.ts).
+  if (!opts.matching) preflightLeftoverMatchingRows(opts.dbPath, process.env.NODE_ENV === 'production');
   const db: DB = openDb(opts.dbPath);
+  const slots = new SlotStore(opts.draftsDbPath ?? draftsDbPathFor(opts.dbPath), SLOT_MAX_PER_ACCOUNT);
+  const draftMode: DraftMode = opts.draftMode ?? 'slot';
+  // The drafts file must belong to this main database (the same random deployment id in both, src/slots.ts). If it
+  // doesn't (a mistyped MATRA_DB_PATH, a restore of one file, a fresh main database), nothing is swept, and production
+  // refuses to start rather than serve or touch someone else's drafts.
+  const userExists = db.prepare('SELECT 1 FROM users WHERE id = ?');
+  const shredded = db.prepare(`SELECT 1 FROM ledger WHERE type = 'account.shredded' AND subject_id = ?`);
+  const accountExists = (id: string) => !!userExists.get(id);
+  const binding = slots.bind(deploymentId(db), accountExists);
+  if (binding === 'mismatch') {
+    const msg = `the draft-slot file (${opts.draftsDbPath ?? draftsDbPathFor(opts.dbPath)}) belongs to a different main database than ${opts.dbPath}. Check MATRA_DB_PATH and MATRA_DRAFTS_DB_PATH.`;
+    if (process.env.NODE_ENV === 'production') throw new Error(`Refusing to start: ${msg}`);
+    console.warn(`[matra] WARNING: ${msg} Its slots are left alone (not swept).`);
+  } else {
+    // Slots of accounts that were provably deleted (no user row AND an account.shredded ledger entry): an account
+    // deletion that stopped between the two files. Slots whose owner is merely missing are kept and reported.
+    const swept = slots.sweepDeleted(accountExists, (id) => !!shredded.get(id));
+    if (swept.deleted) console.log(`[matra] drafts: deleted the slots of ${swept.deleted} deleted account(s) left by an interrupted account deletion.`);
+    if (swept.unexplained) console.warn(`[matra] drafts: ${swept.unexplained} account(s) with slots are not in the main database and have no deletion record; their slots are kept.`);
+  }
+  /** Sealed matching's settings when it is on; undefined when off (src/matching-off.ts). */
+  const mopts = opts.matching || undefined;
+  if (!mopts) checkLeftoverMatchingRows(db, process.env.NODE_ENV === 'production');
   const pepper = typeof opts.pepper === 'string' ? Buffer.from(opts.pepper, 'utf8') : opts.pepper;
   if (pepper.length < 16) throw new Error('pepper must be at least 16 bytes');
 
   const app = express();
   app.locals.db = db;
+  app.locals.slots = slots;
   app.disable('x-powered-by');
   app.set('etag', false);
   if (opts.trustProxy) app.set('trust proxy', opts.trustProxy);
@@ -496,7 +586,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.use(
     cors({
       origin: opts.corsOrigins ?? ['http://localhost:5173', 'http://127.0.0.1:5173'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Owner-Wrapped-Key'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Owner-Wrapped-Key', 'X-Evidence-Commitment'],
       exposedHeaders: ['X-Content-Hash', 'X-Blob-Id'],
       maxAge: 600,
     }),
@@ -510,56 +600,73 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const survivorOnly = requireRole('survivor');
   const attorneyOnly = requireRole('attorney');
   const counselorOnly = requireRole('counselor');
+  // Matching off: one guard in front of every matching, escrow, counselor and report route, signed in or not.
+  if (!mopts) app.use(MATCHING_ROUTE_PREFIXES, matchingDisabled);
 
   // ── sealed matching: t-of-m threshold OPRF key holders (in-process, or remote processes behind this server) ──
-  const limits: OprfLimits = { ...DEFAULT_OPRF_LIMITS, ...opts.matching?.limits };
-  const oprfOpt = opts.matching?.oprf ?? { t: 2, shares: splitOprfKey(generateOprfKey().secretKey, 2, 3) };
-  let holders: HolderPool;
-  if (oprfOpt.remote) holders = new RemoteHolderPool(oprfOpt.t, oprfOpt.remote, pepper);
-  else if (oprfOpt.shares) holders = new InProcessHolderPool(oprfOpt.t, oprfOpt.shares, db, limits);
-  else throw new Error('matching.oprf needs either shares (in-process) or remote holders');
-  // Refuses an inconsistent or degenerate key set (shares from different ceremonies, duplicates, identity keys).
-  const groupPublicKey = toBase64(groupKeyFromShares(holders.publicKeys().map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })), holders.t));
-  const releaseDelayMs = Math.max(0, opts.matching?.releaseDelayHours ?? 72) * 3_600_000;
-  const matcher: MatcherClient =
-    opts.matching?.matcher?.client ??
-    new InProcessMatcher({ key: new Uint8Array(randomBytes(32)), platformSecretKey: new Uint8Array(randomBytes(32)), releaseDelayMs });
-  const matcherGate = new MatcherGate(matcher, opts.matching?.matcher?.pins ?? { allowSimulated: true });
-
-  // ── key pinning in the DB (review M5): t, the group key and the share public keys are recorded on first start; a
-  // silent key change would make every existing entry unmatchable (and could be used to partition survivors), so it is
-  // refused unless the operator explicitly rotates. A rotation starts a new key epoch; survivors' clients re-seal on
-  // their next sign-in. A database still carrying the additive keys (oprf_pk_a/b) counts as a key change.
+  // Off (MATRA_MATCHING=off, src/matching-off.ts): none of this runs. No key is dealt and nothing is written to
+  // matching_meta; the matching routes below are registered but unreachable (the guard above answers 404 first), and
+  // anything that still reached these objects would get the same 404 (`disabledMatching`).
+  const limits: OprfLimits = { ...DEFAULT_OPRF_LIMITS, ...mopts?.limits };
   const metaGet = db.prepare('SELECT value FROM matching_meta WHERE key = ?');
   const metaSet = db.prepare('INSERT INTO matching_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
   const meta = (k: string) => (metaGet.get(k) as { value: string } | undefined)?.value;
-  const sharePks = JSON.stringify(holders.publicKeys());
-  db.transaction(() => {
-    const recorded = { t: meta('oprf_t'), pk: meta('oprf_group_pk'), shares: meta('oprf_share_pks') };
-    const legacy = meta('oprf_pk_a') !== undefined || meta('oprf_pk_b') !== undefined;
-    const record = () => {
-      metaSet.run('oprf_t', String(holders.t));
-      metaSet.run('oprf_group_pk', groupPublicKey);
-      metaSet.run('oprf_share_pks', sharePks);
-      db.prepare(`DELETE FROM matching_meta WHERE key IN ('oprf_pk_a', 'oprf_pk_b')`).run();
-    };
-    if (!legacy && recorded.t === undefined && recorded.pk === undefined && recorded.shares === undefined) {
-      record();
-      metaSet.run('key_epoch', String(Number(meta('key_epoch') ?? 0) + 1));
-    } else if (legacy || recorded.t !== String(holders.t) || recorded.pk !== groupPublicKey || recorded.shares !== sharePks) {
-      if (!opts.matching?.allowKeyRotation)
-        throw new Error(
-          'OPRF key holder public keys differ from the ones recorded in this database. Refusing to start: a silent key ' +
-            'change breaks every sealed entry. To rotate deliberately, restart once with MATRA_OPRF_ROTATE=1.',
-        );
-      const epoch = Number(meta('key_epoch') ?? 1) + 1;
-      record();
-      metaSet.run('key_epoch', String(epoch));
-      db.prepare('DELETE FROM oprf_quota').run(); // new keys: re-sealing must not be blocked by old quotas
-      console.warn(`[matra] OPRF keys rotated: key epoch is now ${epoch}. Survivors' clients re-seal on next sign-in.`);
-    }
-  })();
-  const keyEpoch = Number(meta('key_epoch'));
+  const startMatching = (on: NonNullable<typeof mopts>) => {
+    const oprfOpt = on.oprf ?? { t: 2, shares: splitOprfKey(generateOprfKey().secretKey, 2, 3) };
+    let holders: HolderPool;
+    if (oprfOpt.remote) holders = new RemoteHolderPool(oprfOpt.t, oprfOpt.remote, pepper);
+    else if (oprfOpt.shares) holders = new InProcessHolderPool(oprfOpt.t, oprfOpt.shares, db, limits);
+    else throw new Error('matching.oprf needs either shares (in-process) or remote holders');
+    // Refuses an inconsistent or degenerate key set (shares from different ceremonies, duplicates, identity keys).
+    const groupPublicKey = toBase64(groupKeyFromShares(holders.publicKeys().map((h) => ({ index: h.index, publicKey: fromBase64(h.publicKey) })), holders.t));
+    const releaseDelayMs = Math.max(0, on.releaseDelayHours ?? 72) * 3_600_000;
+    const matcher: MatcherClient =
+      on.matcher?.client ??
+      new InProcessMatcher({ key: new Uint8Array(randomBytes(32)), platformSecretKey: new Uint8Array(randomBytes(32)), releaseDelayMs });
+    const matcherGate = new MatcherGate(matcher, on.matcher?.pins ?? { allowSimulated: true });
+
+    // ── key pinning in the DB (review M5): t, the group key and the share public keys are recorded on first start; a
+    // silent key change would make every existing entry unmatchable (and could be used to partition survivors), so it is
+    // refused unless the operator explicitly rotates. A rotation starts a new key epoch; survivors' clients re-seal on
+    // their next sign-in. A database still carrying the additive keys (oprf_pk_a/b) counts as a key change.
+    const sharePks = JSON.stringify(holders.publicKeys());
+    db.transaction(() => {
+      const recorded = { t: meta('oprf_t'), pk: meta('oprf_group_pk'), shares: meta('oprf_share_pks') };
+      const legacy = meta('oprf_pk_a') !== undefined || meta('oprf_pk_b') !== undefined;
+      const record = () => {
+        metaSet.run('oprf_t', String(holders.t));
+        metaSet.run('oprf_group_pk', groupPublicKey);
+        metaSet.run('oprf_share_pks', sharePks);
+        db.prepare(`DELETE FROM matching_meta WHERE key IN ('oprf_pk_a', 'oprf_pk_b')`).run();
+      };
+      if (!legacy && recorded.t === undefined && recorded.pk === undefined && recorded.shares === undefined) {
+        record();
+        metaSet.run('key_epoch', String(Number(meta('key_epoch') ?? 0) + 1));
+      } else if (legacy || recorded.t !== String(holders.t) || recorded.pk !== groupPublicKey || recorded.shares !== sharePks) {
+        if (!on.allowKeyRotation)
+          throw new Error(
+            'OPRF key holder public keys differ from the ones recorded in this database. Refusing to start: a silent key ' +
+              'change breaks every sealed entry. To rotate deliberately, restart once with MATRA_OPRF_ROTATE=1.',
+          );
+        const epoch = Number(meta('key_epoch') ?? 1) + 1;
+        record();
+        metaSet.run('key_epoch', String(epoch));
+        db.prepare('DELETE FROM oprf_quota').run(); // new keys: re-sealing must not be blocked by old quotas
+        console.warn(`[matra] OPRF keys rotated: key epoch is now ${epoch}. Survivors' clients re-seal on next sign-in.`);
+      }
+    })();
+    return { holders, groupPublicKey, releaseDelayMs, matcher, matcherGate, keyEpoch: Number(meta('key_epoch')) };
+  };
+  const { holders, groupPublicKey, releaseDelayMs, matcher, matcherGate, keyEpoch } = mopts
+    ? startMatching(mopts)
+    : {
+        holders: disabledMatching<HolderPool>(),
+        groupPublicKey: '',
+        releaseDelayMs: 0,
+        matcher: disabledMatching<MatcherClient>(),
+        matcherGate: disabledMatching<MatcherGate>(),
+        keyEpoch: 0,
+      };
   // One unit per account per distinct blinded element, whichever holders it goes to (src/oprf.ts AccountOprfBudget).
   const accountBudget = new AccountOprfBudget(new SqliteQuotaStore(db), limits);
 
@@ -587,6 +694,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     ),
     recoveryFailedSince: db.prepare(
       `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'recovery.failed' AND at >= ?`,
+    ),
+    loginFailedSince: db.prepare(
+      `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = 'auth.login_failed' AND at >= ?`,
     ),
     insertAudit: db.prepare('INSERT INTO audit_events (id, user_id, action, detail, at) VALUES (?, ?, ?, ?, ?)'),
     recordById: db.prepare('SELECT * FROM records WHERE id = ?'),
@@ -616,6 +726,21 @@ export function createApp(opts: CreateAppOptions): express.Express {
     return p ? `${p.display_name}${p.organization ? `, ${p.organization}` : ''} (${u?.username ?? 'attorney'})` : 'An attorney';
   };
 
+  /**
+   * Attorney routes that read shared files need a verified attorney, like verifiedCounselor for counselors. Unverifying
+   * an attorney (verify-attorney --revoke) pauses access to every share at once without revoking her consent: the
+   * survivor decides whether to revoke or keep it (attorney-verification.ts tells her).
+   */
+  const assertVerifiedAttorney = (userId: string) => {
+    const p = q.profileByUser.get(userId) as ProfileRow | undefined;
+    if (!p || p.verified !== 1)
+      throw new HttpError(403, 'attorney_not_verified', 'Your attorney account is not verified right now, so files shared with you are paused.');
+  };
+  const verifiedAttorney = (req: Request, _res: Response, next: NextFunction) => {
+    assertVerifiedAttorney(req.user!.id);
+    next();
+  };
+
   // ════════════ health ════════════
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
@@ -629,9 +754,19 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json(fakeKdfSalt(pepper, username));
   });
 
+  const minKdfIterations = opts.minKdfIterations ?? (process.env.NODE_ENV === 'production' ? DEFAULT_KDF_ITERATIONS : 1_000);
+  const assertKdfIterations = (n: number) => {
+    if (n < minKdfIterations)
+      throw new HttpError(400, 'invalid_request', `kdfIterations: must be at least ${minKdfIterations}`);
+  };
+
   app.post('/api/auth/register', async (req, res) => {
     rateLimit(req, 'register', req.body?.username);
+    // Counselors exist only for sealed matching: with matching off there is nothing for a counselor account to do (and
+    // the same answer comes back whatever else the request holds).
+    if (!mopts && req.body?.role === 'counselor') throw new HttpError(404, MATCHING_DISABLED.code, MATCHING_DISABLED.error);
     const body = parse(S.registerRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
     if (q.userByName.get(body.username))
       throw new HttpError(409, 'username_taken', 'That username is not available.');
     const { hash, salt } = await hashAuthKey(body.authKey);
@@ -686,6 +821,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.status(201).json({ token, user: toPublicUser(q.userById.get(id) as UserRow) });
   });
 
+  const credentialsUnchanged = db.prepare('SELECT 1 FROM users WHERE id = ? AND auth_hash = ?');
   app.post('/api/auth/login', async (req, res) => {
     rateLimit(req, 'login', req.body?.username);
     const body = parse(S.loginRequest, req.body);
@@ -695,10 +831,16 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     }
     if (!(await verifyAuthKey(body.authKey, u.auth_salt, u.auth_hash))) {
-      audit(u.id, 'auth.login_failed', 'A sign-in attempt with an incorrect passphrase');
+      // capped per UTC day, like recovery.failed, so wrong passphrases can't push everything else off her list
+      const today = new Date().toISOString().slice(0, 10);
+      const { n } = q.loginFailedSince.get(u.id, today) as { n: number };
+      if (n < LOGIN_FAILED_AUDIT_CAP) audit(u.id, 'auth.login_failed', 'A sign-in attempt with an incorrect passphrase');
       throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     }
-    const token = createSession(db, u.id);
+    // Only if her passphrase is still the one just checked: a sign-in with the old passphrase that was in flight while
+    // she changed it (or reset it) must not outlive the change, which has already signed out every other session.
+    const token = db.transaction(() => (credentialsUnchanged.get(u.id, u.auth_hash) ? createSession(db, u.id) : null))();
+    if (!token) throw new HttpError(401, 'invalid_credentials', 'Username or passphrase is incorrect.');
     audit(u.id, 'auth.login', 'Signed in');
     res.json({ token, user: toPublicUser(u) });
   });
@@ -732,10 +874,27 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const recoveryLimiter = clients.limiter(10, 15 * 60_000); // per client: a wrong code is a typo, not a hobby
   app.locals.resetTokens = resetTokens;
 
-  /** Re-authenticate with the passphrase auth key before changing what can open her account. */
-  const reauth = async (u: UserRow, authKey: string) => {
+  /**
+   * Re-authenticate with the passphrase auth key before changing what can open her account (a recovery code) or
+   * deleting it. A session alone is not enough: a session can be left open on a shared device.
+   */
+  /** Her passphrase (or key version) changed between reading her row and writing it: nothing was changed here. */
+  const passphraseChanged = () =>
+    new HttpError(409, 'passphrase_changed', 'Your passphrase was changed somewhere else just now, so nothing was changed here.');
+  const REAUTH_FAILED = {
+    recovery: ['auth.reauth_failed', 'A recovery-code change with an incorrect passphrase'],
+    delete: ['auth.delete_reauth_failed', 'An attempt to delete the account with an incorrect passphrase'],
+    passphrase: ['auth.passphrase_reauth_failed', 'A passphrase change with an incorrect passphrase'],
+    sessions: ['auth.sessions_reauth_failed', 'An attempt to sign out other sessions with an incorrect passphrase'],
+  } as const;
+  const reauthFailedSince = db.prepare(
+    `SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action IN (${REAUTH_FAILED_ACTIONS.map(() => '?').join(', ')}) AND at >= ?`,
+  );
+  const reauth = async (u: UserRow, authKey: string, purpose: keyof typeof REAUTH_FAILED = 'recovery') => {
     if (!(await verifyAuthKey(authKey, u.auth_salt, u.auth_hash))) {
-      audit(u.id, 'auth.reauth_failed', 'A recovery-code change with an incorrect passphrase');
+      // Someone holding her open session is guessing: always listed in her activity, capped per UTC day so it can't flood it.
+      const { n } = reauthFailedSince.get(u.id, ...REAUTH_FAILED_ACTIONS, new Date().toISOString().slice(0, 10)) as { n: number };
+      if (n < REAUTH_FAILED_AUDIT_CAP) audit(u.id, REAUTH_FAILED[purpose][0], REAUTH_FAILED[purpose][1]);
       throw new HttpError(401, 'invalid_credentials', 'That passphrase is incorrect.');
     }
   };
@@ -753,10 +912,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const { hash, salt } = await hashAuthKey(body.recoveryAuthKey);
     const replacing = u.recovery_auth_hash != null;
     db.transaction(() => {
-      db.prepare(
+      // Conditional on the passphrase she just proved (and the key version that was read with it): a passphrase change
+      // that committed during the scrypt above must not be overwritten with a wrap under the old passphrase.
+      const r = db.prepare(
         `UPDATE users SET key_version = 2, wrapped_account_key = COALESCE(?, wrapped_account_key),
-                          recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ? WHERE id = ?`,
-      ).run(body.wrappedAccountKey ? canonicalEnvelope(body.wrappedAccountKey) : null, hash, salt, canonicalEnvelope(body.recoveryWrappedKey), u.id);
+                          recovery_auth_hash = ?, recovery_auth_salt = ?, recovery_wrapped_key = ?
+          WHERE id = ? AND auth_hash = ? AND key_version = ?`,
+      ).run(body.wrappedAccountKey ? canonicalEnvelope(body.wrappedAccountKey) : null, hash, salt, canonicalEnvelope(body.recoveryWrappedKey), u.id, u.auth_hash, u.key_version);
+      if (r.changes !== 1) throw passphraseChanged();
       // a reset started with the old code must not finish with it
       for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
       audit(u.id, replacing ? 'recovery.replaced' : 'recovery.set_up', replacing ? 'Made a new recovery code (the old one stopped working)' : 'Set up a recovery code');
@@ -770,11 +933,74 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const u = q.userById.get(req.user!.id) as UserRow;
     await reauth(u, body.authKey);
     db.transaction(() => {
-      db.prepare('UPDATE users SET recovery_auth_hash = NULL, recovery_auth_salt = NULL, recovery_wrapped_key = NULL WHERE id = ?').run(u.id);
+      const r = db
+        .prepare('UPDATE users SET recovery_auth_hash = NULL, recovery_auth_salt = NULL, recovery_wrapped_key = NULL WHERE id = ? AND auth_hash = ?')
+        .run(u.id, u.auth_hash);
+      if (r.changes !== 1) throw passphraseChanged();
       for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
       audit(u.id, 'recovery.turned_off', 'Turned off the recovery code');
     })();
     res.json({ user: toPublicUser(q.userById.get(u.id) as UserRow) });
+  });
+
+  // ════════════ changing the passphrase; her other sessions (PR 8) ════════════
+  // The account secret AS never changes here: her client unwraps it with the old passphrase (key version 1: derives it,
+  // the same bytes), wraps it under a key from the new one, and sends that. Records, files, her private key, draft
+  // slot names (HKDF of AS) and shares all hang off AS, so nothing else is re-encrypted, and a recovery code (which
+  // wraps the same AS) keeps working. It stops future sign-ins with the old passphrase; it can't take back a copy of AS
+  // that someone already unwrapped (W20 residual 1, whitepaper §3).
+  const deleteOtherSessions = db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?');
+
+  app.post('/api/account/passphrase', auth, async (req, res) => {
+    const me = req.user!;
+    rateLimit(req, 'passphrase-change', me.username);
+    const body = parse(S.changePassphraseRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
+    const u = q.userById.get(me.id) as UserRow;
+    await reauth(u, body.authKey, 'passphrase');
+    const pass = await hashAuthKey(body.newAuthKey);
+    let endedSessions = 0;
+    const changed = db.transaction(() => {
+      // Conditional on the passphrase she just proved: if it changed during the scrypt above (another tab, a reset with
+      // her recovery code), nothing changes here.
+      const r = db
+        .prepare(
+          `UPDATE users SET auth_hash = ?, auth_salt = ?, kdf_salt = ?, kdf_iterations = ?, key_version = 2, wrapped_account_key = ?
+            WHERE id = ? AND auth_hash = ?`,
+        )
+        .run(pass.hash, pass.salt, body.kdfSalt, body.kdfIterations, canonicalEnvelope(body.wrappedAccountKey), u.id, u.auth_hash);
+      if (r.changes !== 1) return false;
+      endedSessions = deleteOtherSessions.run(u.id, sha256Hex(req.sessionToken!)).changes;
+      // a reset started with her recovery code before the change has to start again (with the code, which still works)
+      for (const [k, t] of resetTokens) if (t.userId === u.id) resetTokens.delete(k);
+      audit(u.id, 'auth.passphrase_changed', 'You changed your passphrase; every other session was signed out');
+      return true;
+    })();
+    if (!changed) throw passphraseChanged();
+    res.json({ user: toPublicUser(q.userById.get(u.id) as UserRow), endedSessions });
+  });
+
+  app.get('/api/auth/sessions', auth, (req, res) => {
+    const mine = sha256Hex(req.sessionToken!);
+    const rows = db
+      .prepare('SELECT token_hash, created_at, expires_at FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC, rowid DESC')
+      .all(req.user!.id, Date.now()) as Array<{ token_hash: string; created_at: string; expires_at: number }>;
+    res.json({
+      sessions: rows.map((r) => ({ signedInAt: r.created_at, expiresAt: new Date(r.expires_at).toISOString(), current: r.token_hash === mine })),
+    });
+  });
+
+  app.post('/api/auth/sessions/revoke-others', auth, async (req, res) => {
+    const me = req.user!;
+    rateLimit(req, 'sessions-revoke', me.username);
+    const body = parse(S.revokeOtherSessionsRequest, req.body);
+    await reauth(q.userById.get(me.id) as UserRow, body.authKey, 'sessions');
+    let endedSessions = 0;
+    db.transaction(() => {
+      endedSessions = deleteOtherSessions.run(me.id, sha256Hex(req.sessionToken!)).changes;
+      audit(me.id, 'auth.other_sessions_ended', 'You signed out every other session');
+    })();
+    res.json({ endedSessions });
   });
 
   app.post('/api/auth/recover/start', async (req, res) => {
@@ -806,6 +1032,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.post('/api/auth/recover/finish', async (req, res) => {
     rateLimit(req, 'recover-finish', '');
     const body = parse(S.recoverFinishRequest, req.body);
+    assertKdfIterations(body.kdfIterations);
     const key = sha256Hex(body.resetToken);
     const pending = resetTokens.get(key);
     resetTokens.delete(key); // single use, whatever happens next
@@ -890,6 +1117,57 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ record });
   });
 
+  // ════════════ vault: draft slots (src/slots.ts) ════════════
+  // Her draft, overwritten in place: no ledger entry, no audit row. With MATRA_DRAFT_MODE=keep-versions each write is
+  // also filed as a record + ledger entry (as every draft save was before slots), in the same request.
+  app.get('/api/vault/slots/:name', auth, survivorOnly, (req, res) => {
+    const name = parse(S.slotName, req.params.name);
+    const row = slots.get(req.user!.id, name);
+    const body: GetSlotResponse = {
+      slot: row
+        ? { name: row.name, envelope: JSON.parse(row.envelope), wrappedKey: JSON.parse(row.wrapped_key), version: row.version, updatedDay: row.updated_day }
+        : null,
+      draftMode,
+    };
+    res.json(body);
+  });
+
+  app.put('/api/vault/slots/:name', auth, survivorOnly, (req, res) => {
+    const me = req.user!;
+    const name = parse(S.slotName, req.params.name);
+    const body = parse(S.putSlotRequest, req.body);
+    const envelopeJson = canonicalEnvelope(body.envelope);
+    const wrappedJson = JSON.stringify(body.wrappedKey);
+    const current = slots.versionOf(me.id, name);
+    if (current !== body.expectedVersion) throw slotConflict();
+    if (current === null && !slots.hasRoom(me.id)) throw tooManySlots();
+    if (draftMode === 'keep-versions') {
+      // Keep this version as well: a record with a ledger entry, written before the slot so a failure keeps neither.
+      const id = newId();
+      db.transaction(() => {
+        const ledgerEntry = appendLedger(db, 'record.sealed', id, envelopeContentHash(body.envelope));
+        db.prepare(
+          `INSERT INTO records (id, owner_id, supersedes, envelope, owner_wrapped_key, content_hash, created_at, ledger_entry_id)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        ).run(id, me.id, envelopeJson, wrappedJson, ledgerEntry.contentHash, ledgerEntry.timestamp, ledgerEntry.id);
+        audit(me.id, 'record.created', `Encrypted record saved (ledger #${ledgerEntry.seq})`);
+      })();
+    }
+    const result = slots.put(me.id, name, envelopeJson, wrappedJson, body.expectedVersion);
+    if (!result.ok && result.reason === 'conflict') throw slotConflict();
+    if (!result.ok) throw tooManySlots();
+    const out: PutSlotResponse = { version: result.version, updatedDay: result.updatedDay, draftMode };
+    res.json(out);
+  });
+
+  app.delete('/api/vault/slots/:name', auth, survivorOnly, (req, res) => {
+    const name = parse(S.slotName, req.params.name);
+    const body = parse(S.deleteSlotRequest, req.body ?? {});
+    const r = slots.delete(req.user!.id, name, body.expectedVersion);
+    if (!r.ok) throw slotConflict();
+    res.json({ ok: true });
+  });
+
   // ════════════ vault: blobs ════════════
   app.post(
     '/api/vault/blobs',
@@ -909,18 +1187,24 @@ export function createApp(opts: CreateAppOptions): express.Express {
       } catch {
         throw new HttpError(400, 'invalid_wrapped_key', 'Header X-Owner-Wrapped-Key must be base64(JSON(WrappedKey)) with alg A256GCM-KW.');
       }
+      // Optional: the SALTED commitment to her original file's hash (never a plain hash; see ledger.ts evidence.committed).
+      const commitmentHdr = req.get('x-evidence-commitment');
+      if (commitmentHdr !== undefined && !/^[0-9a-f]{64}$/.test(commitmentHdr))
+        throw new HttpError(400, 'invalid_commitment', 'Header X-Evidence-Commitment must be 64 lowercase hex characters.');
       const id = newId();
       const contentHash = sha256Hex(data);
       let ledgerEntry!: LedgerEntry;
+      let commitmentEntry: LedgerEntry | undefined;
       db.transaction(() => {
         ledgerEntry = appendLedger(db, 'blob.sealed', id, contentHash);
+        if (commitmentHdr) commitmentEntry = appendLedger(db, 'evidence.committed', id, commitmentHdr);
         db.prepare(
           `INSERT INTO blobs (id, owner_id, data, size_bytes, content_hash, owner_wrapped_key, created_at, ledger_entry_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(id, me.id, data, data.length, contentHash, JSON.stringify(wrapped), ledgerEntry.timestamp, ledgerEntry.id);
         audit(me.id, 'blob.uploaded', `Encrypted evidence file sealed (ledger #${ledgerEntry.seq})`);
       })();
-      res.status(201).json({ blob: toBlobMeta(q.blobMetaById.get(id) as BlobRow), ledgerEntry });
+      res.status(201).json({ blob: toBlobMeta(q.blobMetaById.get(id) as BlobRow), ledgerEntry, ...(commitmentEntry && { commitmentEntry }) });
     },
   );
 
@@ -940,6 +1224,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const meta = q.blobMetaById.get(bid) as BlobRow | undefined;
     if (!meta) throw new HttpError(404, 'blob_not_found', 'File not found.');
     if (meta.owner_id !== me.id) {
+      if (me.role === 'attorney') assertVerifiedAttorney(me.id);
       const grant =
         me.role === 'attorney'
           ? (db
@@ -1042,8 +1327,23 @@ export function createApp(opts: CreateAppOptions): express.Express {
       if (!meta) throw new HttpError(404, 'blob_not_found', 'One of the files was not found.');
       if (meta.owner_id !== me.id) throw new HttpError(403, 'forbidden', 'You can only share your own files.');
     }
+    // The scope she agreed to must be what is wrapped (@matra/shared consent.ts): her written account always (its key
+    // is the one wrapped), 'evidence' exactly when files are, and no separate 'brief': the incident summary is laid out
+    // from the written account, so it can't be left out of a share that has the account.
+    if (!body.scope.includes('record'))
+      throw new HttpError(400, 'scope_mismatch', "The written account is always shared, so the consent scope must include 'record'.");
+    if (body.scope.includes('brief'))
+      throw new HttpError(400, 'scope_mismatch', "The incident summary is laid out from the written account; it isn't a separate choice.");
     if (body.blobs.length > 0 && !body.scope.includes('evidence'))
       throw new HttpError(400, 'scope_mismatch', "Sharing files requires 'evidence' in the consent scope.");
+    if (body.blobs.length === 0 && body.scope.includes('evidence'))
+      throw new HttpError(400, 'scope_mismatch', "The consent scope names evidence files, but no file was shared.");
+    if (!consentMatches(body.consentStatement, { files: body.blobs.length, alias: body.survivorAlias }))
+      throw new HttpError(
+        400,
+        'consent_mismatch',
+        'The consent statement must say that the written account is shared, how many files are shared, and the label the attorney sees.',
+      );
 
     const id = newId();
     const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
@@ -1090,28 +1390,42 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   app.get('/api/shares', auth, (req, res) => {
     const me = req.user!;
-    const col = me.role === 'attorney' ? 'attorney_id' : 'survivor_id';
-    const rows = db.prepare(`SELECT * FROM shares WHERE ${col} = ? ORDER BY created_at DESC, rowid DESC`).all(me.id) as ShareRow[];
-    res.json({ shares: rows.map(toShare) });
+    if (me.role === 'attorney') {
+      assertVerifiedAttorney(me.id);
+      const rows = db.prepare('SELECT * FROM shares WHERE attorney_id = ? ORDER BY created_at DESC, rowid DESC').all(me.id) as ShareRow[];
+      return res.json({ shares: rows.map((r) => toShare(r, true)) });
+    }
+    // Her own list also says whether each attorney is verified right now: an unverified attorney's access is paused.
+    const rows = db
+      .prepare(
+        `SELECT s.*, p.verified AS attorney_verified,
+                (SELECT json_group_array(sb.blob_id) FROM share_blobs sb WHERE sb.share_id = s.id) AS blob_ids
+           FROM shares s LEFT JOIN attorney_profiles p ON p.user_id = s.attorney_id
+          WHERE s.survivor_id = ? ORDER BY s.created_at DESC, s.rowid DESC`,
+      )
+      .all(me.id) as ShareRow[];
+    res.json({ shares: rows.map((r) => toShare(r)) });
   });
 
-  app.get('/api/shares/:id/bundle', auth, attorneyOnly, (req, res) => {
+  app.get('/api/shares/:id/bundle', auth, attorneyOnly, verifiedAttorney, (req, res) => {
     const me = req.user!;
     const s = q.shareById.get(parse(S.id, req.params.id)) as ShareRow | undefined;
     if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
     if (s.attorney_id !== me.id) throw new HttpError(403, 'forbidden', 'This share was not granted to you.');
     if (s.status !== 'active') throw new HttpError(403, 'share_revoked', 'The survivor has revoked access to this file.');
-    if (!isShareLive(s)) throw new HttpError(403, 'share_expired', 'This share has expired. Ask the survivor to renew it.');
+    // (an active share has no wrap only once it expired 30+ days ago and she hasn't renewed it yet)
+    if (!isShareLive(s) || s.recipient_wrapped_key == null)
+      throw new HttpError(403, 'share_expired', 'This share has expired. Ask the survivor to renew it.');
     const r = q.recordById.get(s.record_id) as RecordRow;
     const blobs = db
       .prepare(
         `SELECT sb.blob_id, sb.recipient_wrapped_key, b.content_hash, b.size_bytes
            FROM share_blobs sb JOIN blobs b ON b.id = sb.blob_id
-          WHERE sb.share_id = ? ORDER BY sb.rowid ASC`,
+          WHERE sb.share_id = ? AND sb.recipient_wrapped_key IS NOT NULL ORDER BY sb.rowid ASC`,
       )
       .all(s.id) as Array<{ blob_id: string; recipient_wrapped_key: string; content_hash: string; size_bytes: number }>;
     const bundle: ShareBundle = {
-      share: toShare(s),
+      share: toShare(s, true),
       record: {
         id: r.id,
         envelope: JSON.parse(r.envelope),
@@ -1142,12 +1456,38 @@ export function createApp(opts: CreateAppOptions): express.Express {
     if (!s) throw new HttpError(404, 'share_not_found', 'Share not found.');
     if (s.survivor_id !== me.id) throw new HttpError(403, 'forbidden', 'You can only renew your own shares.');
     if (s.status === 'revoked') throw new HttpError(409, 'already_revoked', 'A revoked share cannot be renewed. Create a new share.');
-    const { expiresInDays } = parse(S.renewShareRequest, req.body ?? {});
-    const expiresAt = addDays(Date.now(), expiresInDays ?? DEFAULT_SHARE_DAYS);
+    const body = parse(S.renewShareRequest, req.body ?? {});
+    // Access ended more than WRAP_GRACE_DAYS ago, so the attorney's copies of the keys were deleted (src/recipient-keys.ts):
+    // renewing needs fresh ones from her device, for the same record and files, to the key she confirmed when she shared.
+    const keyDeleted = s.recipient_wrapped_key == null;
+    const coveredBlobs = (db.prepare('SELECT blob_id FROM share_blobs WHERE share_id = ?').all(s.id) as Array<{ blob_id: string }>).map((b) => b.blob_id);
+    if (keyDeleted) {
+      if (!body.recipientWrappedKey)
+        throw new HttpError(409, 'rewrap_required', 'This share ended long enough ago that its keys were deleted. Lock it for the attorney again to renew.');
+      const attorney = q.userById.get(s.attorney_id) as UserRow | undefined;
+      if (!attorney || !s.consent_statement.includes(keyFingerprint(attorney.public_key)))
+        throw new HttpError(409, 'attorney_key_mismatch', "The attorney's key is not the one you confirmed when you shared. Nothing was renewed.");
+      const sent = (body.blobs ?? []).map((b) => b.blobId);
+      if (sent.length !== coveredBlobs.length || !coveredBlobs.every((id) => sent.includes(id)))
+        throw new HttpError(400, 'rewrap_mismatch', 'The renewed share must cover exactly the files it covered before.');
+    } else if (body.recipientWrappedKey || body.blobs) {
+      throw new HttpError(409, 'rewrap_not_needed', 'This share still has its keys; renew it without new ones.');
+    }
+    const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
     let ledgerEntry!: LedgerEntry;
     db.transaction(() => {
-      ledgerEntry = appendLedger(db, 'share.renewed', s.id, sha256Hex(JSON.stringify({ shareId: s.id, expiresAt })));
+      ledgerEntry = appendLedger(
+        db,
+        'share.renewed',
+        s.id,
+        sha256Hex(JSON.stringify({ shareId: s.id, expiresAt, ...(keyDeleted && { rewrapped: true }) })),
+      );
       db.prepare('UPDATE shares SET expires_at = ? WHERE id = ?').run(expiresAt, s.id);
+      if (keyDeleted) {
+        db.prepare('UPDATE shares SET recipient_wrapped_key = ? WHERE id = ?').run(JSON.stringify(body.recipientWrappedKey), s.id);
+        const put = db.prepare('UPDATE share_blobs SET recipient_wrapped_key = ? WHERE share_id = ? AND blob_id = ?');
+        for (const b of body.blobs ?? []) put.run(JSON.stringify(b.recipientWrappedKey), s.id, b.blobId);
+      }
       audit(me.id, 'share.renewed', `You renewed access for ${attorneyLabel(s.attorney_id)} until ${expiresAt.slice(0, 10)}`);
       audit(s.attorney_id, 'share.renewed_by_survivor', `A survivor ("${s.survivor_alias}") renewed your access to a case file`);
     })();
@@ -1171,9 +1511,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
         revokedAt,
       );
       db.prepare(`UPDATE shares SET status = 'revoked', revoked_at = ? WHERE id = ?`).run(revokedAt, s.id);
+      // the attorney's copies of the keys go with it (src/recipient-keys.ts)
+      forgetShareKeys(db, s.id);
       audit(me.id, 'share.revoked', `You revoked access for ${attorneyLabel(s.attorney_id)}`);
       audit(s.attorney_id, 'share.revoked_by_survivor', `A survivor ("${s.survivor_alias}") revoked your access to a case file`);
     })();
+    checkpointWal(db);
     res.json({ share: toShare(q.shareById.get(s.id) as ShareRow), ledgerEntry });
   });
 
@@ -1243,8 +1586,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
     ).run();
     db.prepare('DELETE FROM match_groups WHERE NOT EXISTS (SELECT 1 FROM match_entries e WHERE e.tag = match_groups.tag)').run();
   };
-  pruneSeals();
-  pruneGroups();
+  // Matching off: leave whatever an earlier "on" stored exactly as it is (src/matching-off.ts).
+  if (mopts) {
+    pruneSeals();
+    pruneGroups();
+  }
 
   // ── matcher service (src/matcher-client.ts; W15, W18). Every sealed entry is forwarded to the matcher with: its tag, a
   // pseudonymous survivor reference (HMAC of the tag and the account id under the pepper: the matcher counts distinct
@@ -1274,7 +1620,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   };
   let lastRosterSent = '';
   const syncOnce = async () => {
-    if (!(await matcherGate.ok())) return;
+    if (!mopts || !(await matcherGate.ok())) return; // nothing is ever sent to a matcher while matching is off
     const step = async (what: string, fn: () => Promise<void>) => {
       try {
         await fn();
@@ -1311,16 +1657,18 @@ export function createApp(opts: CreateAppOptions): express.Express {
   /** Run one sync after any in flight (serialized; never throws). */
   const syncMatcher = (): Promise<void> => (syncChain = syncChain.then(syncOnce, syncOnce).catch(() => undefined));
   // The matcher may have lost state (an in-memory matcher, a restore): resend every entry once at startup (idempotent).
-  db.prepare('UPDATE match_entries SET matcher_synced = 0').run();
-  setImmediate(() => void syncMatcher());
-  setInterval(() => void syncMatcher(), 60_000).unref();
+  if (mopts) {
+    db.prepare('UPDATE match_entries SET matcher_synced = 0').run();
+    setImmediate(() => void syncMatcher());
+    setInterval(() => void syncMatcher(), 60_000).unref();
+  }
   app.locals.syncMatcher = syncMatcher;
   app.locals.matcherGateReset = () => matcherGate.reset();
 
   // ── phone verify-then-forget (W13, W19; src/sms.ts). Pending challenges live only in this Map, for 10 minutes: the
   // raw number is in memory just long enough for the provider's check call, and never written anywhere.
-  const requirePhone = opts.matching?.requirePhoneVerification ?? true;
-  const phoneOpt = opts.matching?.phone ?? {};
+  const requirePhone = mopts?.requirePhoneVerification ?? true;
+  const phoneOpt = mopts?.phone ?? {};
   const sms: SmsVerifier = phoneOpt.verifier ?? new MockSmsVerifier();
   const phoneHashKey = phoneOpt.hashKey ?? new Uint8Array(randomBytes(32));
   const maxAccountsPerPhone = phoneOpt.maxAccountsPerPhone ?? 2;
@@ -1347,9 +1695,40 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // row (its created_at is a sign-in time), no expired challenge (a raw number) and no expired limiter key (the
   // (account, phone token) pair is the very link W19 keeps off disk). Unref'd; errors (a closed test DB) are ignored.
   const memoryLimiters = [smsStartPerAccount, smsStartPerAccountPhone, smsGlobalHour, smsGlobalDay];
+  // MATRA_MATCHING=off: every report-release route is 404 (B1's guard stays), so she can neither see nor end a release
+  // written while matching was on, and the counselor can't open it either. If matching were switched back on, that
+  // access would come back without her doing anything. So Matra ends each live one for her, like a conflict: ledger
+  // row, a line in her activity and the counselor's, and the counselor's copy of the keys deleted. Nothing is deleted.
+  // (Production refuses to start off with such rows at all: matching-off.ts checkLeftoverMatchingRows.)
+  const endReleasesWhileMatchingOff = () => {
+    const live = db.prepare(`SELECT id, survivor_id, counselor_id FROM report_releases WHERE status = 'active'`).all() as Array<{
+      id: string;
+      survivor_id: string;
+      counselor_id: string;
+    }>;
+    for (const rel of live)
+      db.transaction(() => {
+        const at = new Date().toISOString();
+        const reason: ReportRevokeReason = 'matching_off';
+        appendLedger(db, 'report.revoked', rel.id, sha256Hex(JSON.stringify({ releaseId: rel.id, status: 'revoked', reason, revokedAt: at })), at);
+        db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = ? WHERE id = ?`).run(at, reason, rel.id);
+        forgetReleaseKeys(db, rel.id);
+        audit(rel.survivor_id, 'report.revoked', 'Your report is no longer shared with the legal options counselor: sealed matching is turned off on this server, so Matra ended this access. You don’t need to do anything.');
+        audit(rel.counselor_id, 'counselor.release_revoked', 'Your access to a report a survivor shared with you has ended');
+      })();
+  };
   const housekeeping = () => {
     try {
       purgeExpiredSessions(db);
+    } catch {
+      /* DB closed */
+    }
+    try {
+      if (!mopts) endReleasesWhileMatchingOff();
+      // recipients' keys of shares and releases that ended (src/recipient-keys.ts), whether or not matching is on
+      sweepRecipientKeys(db);
+      // and out of the write-ahead log, also after a release Matra ended for her inside another request
+      checkpointWal(db);
     } catch {
       /* DB closed */
     }
@@ -1600,10 +1979,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
     conflict: 'they can’t take on this matter, so Matra ended their access. You don’t need to do anything.',
     resealed: 'your sealed match moved to new matching keys, so Matra ended this access. You don’t need to do anything.',
     withdrawn: 'you withdrew the sealed identifier it was about.',
+    matching_off: 'sealed matching is turned off on this server, so Matra ended this access. You don’t need to do anything.',
   };
   const endRelease = (rel: LiveReleaseRef, reason: Exclude<ReportRevokeReason, 'survivor'>, revokedAt: string) => {
     appendLedger(db, 'report.revoked', rel.id, revokeHash(rel.id, reason, revokedAt), revokedAt);
     db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = ? WHERE id = ?`).run(revokedAt, reason, rel.id);
+    forgetReleaseKeys(db, rel.id);
     audit(rel.survivor_id, 'report.revoked', `Your report is no longer shared with ${counselorLabel(rel.counselor_id)}: ${ENDED_FOR_HER[reason]}`);
     audit(rel.counselor_id, 'counselor.release_revoked', 'Your access to a report a survivor shared with you has ended');
   };
@@ -2043,7 +2424,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const r = releaseById.get(parse(S.id, req.params.id)) as ReportReleaseRow | undefined;
     if (!r || r.counselor_id !== req.user!.id) throw new HttpError(404, 'release_not_found', 'Report not found.');
     if (r.status !== 'active') throw new HttpError(403, 'release_revoked', 'She has stopped sharing her report with you.');
-    if (!isReleaseLive(r)) throw new HttpError(403, 'release_expired', 'Access to this report has ended.');
+    if (!isReleaseLive(r) || r.recipient_wrapped_key == null) throw new HttpError(403, 'release_expired', 'Access to this report has ended.');
     const g = groupById.get(r.group_id) as GroupRow | undefined;
     const ids = rosterIds();
     if (!g || !assignmentFor.get(g.tag, r.counselor_id) || (ids && !ids.has(r.counselor_id)))
@@ -2063,7 +2444,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       .prepare(
         `SELECT rb.blob_id, rb.recipient_wrapped_key, b.content_hash, b.size_bytes
            FROM report_release_blobs rb JOIN blobs b ON b.id = rb.blob_id
-          WHERE rb.release_id = ? ORDER BY rb.rowid ASC`,
+          WHERE rb.release_id = ? AND rb.recipient_wrapped_key IS NOT NULL ORDER BY rb.rowid ASC`,
       )
       .all(r.id) as Array<{ blob_id: string; recipient_wrapped_key: string; content_hash: string; size_bytes: number }>;
     const when = new Date().toISOString();
@@ -2071,7 +2452,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const bundle: ReportReleaseBundle = {
       release: toRelease(releaseById.get(r.id) as ReportReleaseRow),
       record: { id: rec.id, envelope: JSON.parse(rec.envelope), contentHash: rec.content_hash, createdAt: rec.created_at, ledgerEntryId: rec.ledger_entry_id },
-      recipientWrappedKey: JSON.parse(r.recipient_wrapped_key),
+      recipientWrappedKey: JSON.parse(r.recipient_wrapped_key!), // liveReleaseFor refuses a release without one
       blobs: blobs.map((b) => ({ blobId: b.blob_id, recipientWrappedKey: JSON.parse(b.recipient_wrapped_key), contentHash: b.content_hash, sizeBytes: b.size_bytes })),
     };
     audit(me.id, 'counselor.opened_report', 'Opened a report a survivor shared with you');
@@ -2160,6 +2541,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
       throw new HttpError(409, 'counselor_key_mismatch', "The counselor's key does not match the one you confirmed. Nothing was shared.");
     if (!body.consentStatement.includes(fp))
       throw new HttpError(400, 'consent_fingerprint_missing', 'The consent statement must name the confirmed key fingerprint.');
+    // Her consent must say what the counselor can open: the written account, and exactly this many files.
+    if (!consentMatches(body.consentStatement, { files: body.blobs.length }))
+      throw new HttpError(400, 'consent_mismatch', 'The consent statement must say that the written account is shared and how many files are shared.');
     const id = newId();
     const expiresAt = addDays(Date.now(), body.expiresInDays ?? DEFAULT_SHARE_DAYS);
     const blobIds = body.blobs.map((b) => b.blobId);
@@ -2216,23 +2600,39 @@ export function createApp(opts: CreateAppOptions): express.Express {
       const revokedAt = new Date().toISOString();
       ledgerEntry = appendLedger(db, 'report.revoked', r.id, revokeHash(r.id, 'survivor', revokedAt), revokedAt);
       db.prepare(`UPDATE report_releases SET status = 'revoked', revoked_at = ?, revoke_reason = 'survivor' WHERE id = ?`).run(revokedAt, r.id);
+      forgetReleaseKeys(db, r.id); // the counselor's copies of the keys go with it (src/recipient-keys.ts)
       audit(me.id, 'report.revoked', `You stopped sharing your report with ${counselorLabel(r.counselor_id)}`);
       audit(r.counselor_id, 'counselor.release_revoked', 'A survivor stopped sharing her report with you');
     })();
+    checkpointWal(db);
     res.json({ release: toSurvivorRelease(releaseById.get(r.id) as ReportReleaseRow), ledgerEntry });
   });
 
   // ════════════ audit ════════════
+  // The newest AUDIT_LIST_LIMIT rows, plus every security event (recovery code, reset) even if it is older than those,
+  // so no flood of other rows can hide that her recovery code was used. Newest first.
+  const auditList = db.prepare(
+    `SELECT * FROM audit_events
+      WHERE user_id = ?
+        AND (rowid IN (SELECT rowid FROM audit_events WHERE user_id = ? ORDER BY at DESC, rowid DESC LIMIT ${AUDIT_LIST_LIMIT})
+             OR ${SECURITY_AUDIT_SQL})
+      ORDER BY at DESC, rowid DESC`,
+  );
   app.get('/api/audit', auth, (req, res) => {
-    const rows = db
-      .prepare('SELECT * FROM audit_events WHERE user_id = ? ORDER BY at DESC, rowid DESC LIMIT 1000')
-      .all(req.user!.id) as AuditRow[];
+    const rows = auditList.all(req.user!.id, req.user!.id) as AuditRow[];
     res.json({ events: rows.map(toAudit) });
   });
 
-  // ════════════ account crypto-shred ════════════
-  app.post('/api/account/delete', auth, (req, res) => {
+  // ════════════ account deletion ════════════
+  // Deletes her rows (ciphertext, wrapped keys, shares, matches, activity) from the live database. secure_delete is ON,
+  // so freed pages are overwritten, and a TRUNCATE checkpoint afterwards empties the WAL. It is not a crypto-shred:
+  // her keys are wrapped under her passphrase, so a backup or copy of the database made earlier stays decryptable by
+  // anyone who has that copy and her passphrase (docs/SECURITY_WHITEPAPER.md §2).
+  app.post('/api/account/delete', auth, async (req, res) => {
     const me = req.user!;
+    rateLimit(req, 'account-delete', me.username);
+    const body = parse(S.deleteAccountRequest, req.body ?? {});
+    await reauth(q.userById.get(me.id) as UserRow, body.authKey, 'delete');
     db.transaction(() => {
       const recordIds = (db.prepare('SELECT id FROM records WHERE owner_id = ?').all(me.id) as Array<{ id: string }>)
         .map((r) => r.id)
@@ -2278,6 +2678,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
       appendLedger(db, 'account.shredded', me.id, sha256Hex(JSON.stringify({ userId: me.id, recordIds, blobIds })));
     })();
+    // Move the deleted pages out of the WAL file now rather than at some later automatic checkpoint (same as phone tokens).
+    checkpoint();
+    // Her draft slots live in their own file: delete them too (and empty that WAL). A crash between the two leaves
+    // slots without an account; the next start removes them, because this deletion's account.shredded ledger entry proves
+    // the account is gone (slots.sweepDeleted).
+    slots.deleteOwner(me.id);
     void syncMatcher(); // her entries leave the matcher; a counselor's departure changes its roster
     res.json({ ok: true });
   });
@@ -2285,7 +2691,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // ════════════ fallthrough & errors ════════════
   // ════════════ dev / demo: what the server sees (src/inspector.ts) ════════════
   if (recorder) {
-    const remoteHolders = oprfOpt.remote?.urls ?? [];
+    const remoteHolders = mopts?.oprf?.remote?.urls ?? [];
     app.get(INSPECTOR_ROUTE, async (req, res) => {
       const find = typeof req.query.find === 'string' ? req.query.find.trim().slice(0, 200) : '';
       const limiters: Array<[string, RateLimiter]> = [
@@ -2295,7 +2701,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ['sms global hour', smsGlobalHour],
         ['sms global day', smsGlobalDay],
       ];
-      const app_ = appProcess({ db, recorder, limiters, pendingPhoneChallenges: challenges.size, holdersInProcess: !oprfOpt.remote });
+      const app_ = appProcess({ db, slotsDb: slots.db, recorder, limiters, pendingPhoneChallenges: challenges.size, holdersInProcess: !!mopts && !mopts.oprf?.remote });
       const holderStates = await Promise.all(
         remoteHolders.map((url, i) =>
           fetchProcess(`${url.replace(/\/+$/, '')}/debug/state`, { name: `Key holder ${i + 1}`, role: 'holder', note: `Separate process at ${url}.` }),
@@ -2303,9 +2709,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
       );
       let matcherState;
       try {
-        matcherState = matcher.debugState
-          ? await matcher.debugState()
-          : { name: 'Matcher', role: 'matcher' as const, note: 'This matcher client has no debug view.', tables: [] };
+        matcherState = !mopts
+          ? { name: 'Matcher', role: 'matcher' as const, note: 'Sealed matching is off (MATRA_MATCHING=off): there is no matcher.', tables: [] }
+          : matcher.debugState
+            ? await matcher.debugState()
+            : { name: 'Matcher', role: 'matcher' as const, note: 'This matcher client has no debug view.', tables: [] };
       } catch (e) {
         matcherState = { name: 'Matcher', role: 'matcher' as const, note: 'Separate matcher service.', error: `not reachable (${(e as Error).message})`, tables: [] };
       }
@@ -2322,7 +2730,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.status(404).json({ error: 'Not found', code: 'not_found' });
   });
 
-  if (opts.webDir) mountWebApp(app, opts.webDir, !!opts.demoBanner);
+  if (opts.webDir) {
+    // the build's own MATRA_MATCHING must be this server's (matching-off.ts)
+    assertWebBuildMatches(opts.webDir, mopts ? 'on' : 'off');
+    mountWebApp(app, opts.webDir, !!opts.demoBanner);
+  }
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code });
@@ -2396,4 +2808,9 @@ export function flushPhoneTokens(app: express.Express): void {
 
 export function getDb(app: express.Express): DB {
   return app.locals.db as DB;
+}
+
+/** The draft-slot store (src/slots.ts), for tests and the inspector. */
+export function getSlots(app: express.Express): SlotStore {
+  return app.locals.slots as SlotStore;
 }

@@ -2,8 +2,8 @@
  * Matra demo seed — idempotent. Creates FICTIONAL demo accounts through the real API
  * (client-side key derivation with @matra/crypto, exactly like the web app):
  *   - 3 verified attorneys (NJ / NY)
- *   - 2 verified Legal Options Counselors (receive matched sealed-match groups only, each group to ONE of them, by state):
- *     counselor.demo licensed in NJ, counselor.ny licensed in NY
+ *   - with MATRA_MATCHING=on only: 2 verified Legal Options Counselors (receive matched sealed-match groups only, each
+ *     group to ONE of them, by state): counselor.demo licensed in NJ, counselor.ny licensed in NY
  *   - 1 survivor, jane.demo, with no records (the live demo creates them)
  *
  *   npm run seed -w @matra/server          (MATRA_DB_PATH overrides the DB location)
@@ -12,7 +12,8 @@ import type { AddressInfo } from 'node:net';
 import { DEFAULT_KDF_ITERATIONS, deriveKeys, generateIdentity, newKdfSalt } from '@matra/crypto';
 import type { AuthResponse, RegisterRequest } from '@matra/shared';
 import { createApp, getDb } from './app.js';
-import { loadMatchingSettings, loadOprfThreshold, loadPepper, resolveDbPath } from './config.js';
+import { loadMatchingSettings, loadOprfThreshold, loadPepper, resolveDbPath, resolveDraftsDbPath } from './config.js';
+import { loadMatchingMode } from './matching-off.js';
 
 const ATTORNEY_PASSPHRASE = 'demo-attorney-passphrase';
 const SURVIVOR_PASSPHRASE = 'demo-survivor-passphrase';
@@ -70,7 +71,10 @@ const ATTORNEYS: AttorneySeed[] = [
 
 async function main() {
   const dbPath = resolveDbPath();
-  const app = createApp({ dbPath, pepper: loadPepper(), matching: { oprf: loadOprfThreshold(), ...loadMatchingSettings() } });
+  // Counselors exist only for sealed matching: with MATRA_MATCHING=off (the pilot default) none are seeded.
+  const matchingOn = loadMatchingMode() === 'on';
+  const counselors = matchingOn ? COUNSELORS : [];
+  const app = createApp({ dbPath, draftsDbPath: resolveDraftsDbPath(dbPath), pepper: loadPepper(), matching: matchingOn && { oprf: loadOprfThreshold(), ...loadMatchingSettings() } });
   const db = getDb(app);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((r) => server.once('listening', () => r()));
@@ -125,7 +129,7 @@ async function main() {
         `UPDATE attorney_profiles SET verified = 1 WHERE user_id = (SELECT id FROM users WHERE username = ?)`,
       ).run(a.username);
     }
-    for (const c of COUNSELORS) {
+    for (const c of counselors) {
       if (exists(c.username)) console.log(`[seed] skip   ${c.username} (exists)`);
       else {
         await register(c.username, COUNSELOR_PASSPHRASE, 'counselor', undefined, c.profile);
@@ -145,7 +149,7 @@ async function main() {
 
     console.log('\n[seed] Matra demo accounts (ALL FICTIONAL — for demonstration only):');
     for (const a of ATTORNEYS) console.log(`  attorney  ${a.username.padEnd(14)} passphrase: ${ATTORNEY_PASSPHRASE}  [${a.profile.jurisdictions.join(', ')}] verified`);
-    for (const c of COUNSELORS)
+    for (const c of counselors)
       console.log(`  counselor ${c.username.padEnd(14)} passphrase: ${COUNSELOR_PASSPHRASE}  [licensed: ${c.profile.jurisdictions.join(', ')}] verified`);
     console.log(`  survivor  ${'jane.demo'.padEnd(14)} passphrase: ${SURVIVOR_PASSPHRASE}`);
   } finally {

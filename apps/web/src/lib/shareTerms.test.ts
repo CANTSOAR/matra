@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { AttorneyProfile } from '@matra/shared';
 import { SHARE_DISCLAIMER, buildConsentStatement } from '../screens/Share';
 import { DEFAULT_SHARE_DAYS, shareLengthDays, shareLengthLabel } from './shareTerms';
+import { aliasSlug } from '../attorney/Attorney';
 
 const attorney = { displayName: 'Demo — Alex Rivera, Esq.', organization: 'Demo Legal Aid' } as AttorneyProfile;
 const statement = (days: number) =>
   buildConsentStatement({
-    alias: 'bluebird-1',
+    alias: 'Client BCDFG',
     attorney,
     fingerprint: 'ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD-ABCD',
-    scope: ['record', 'brief'],
+    files: 0,
     sealedAt: '2026-10-01T10:00:00.000Z',
     at: '2026-10-02T10:00:00.000Z',
     expiresInDays: days,
@@ -38,5 +39,13 @@ describe('share consent text', () => {
     expect(s).toMatch(/The attorney can read and save what I share\./);
     expect(s).toMatch(/it can’t erase what was already viewed or saved/);
     expect(s).toMatch(/This access expires 90 days after the date below unless I renew it\./);
+  });
+});
+
+describe('the attorney’s PDF file name comes from the share’s label', () => {
+  it('turns the label into a safe file-name part', () => {
+    expect(aliasSlug('Client K7QZ4')).toBe('client-k7qz4');
+    expect(aliasSlug('../evil name"')).toBe('evil-name');
+    expect(aliasSlug('---')).toBe('client');
   });
 });

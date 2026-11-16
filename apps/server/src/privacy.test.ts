@@ -8,7 +8,8 @@ import path from 'node:path';
 import type express from 'express';
 import request from 'supertest';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { HOUSEKEEPING_INTERVAL_MS, createApp, flushPhoneTokens, getDb } from './app.js';
+import { sealSlot, slotName } from '@matra/crypto';
+import { HOUSEKEEPING_INTERVAL_MS, createApp, flushPhoneTokens, getDb, getSlots } from './app.js';
 import { MAX_RATE_LIMIT_WINDOW_MS, RateLimiter, SESSION_TTL_MS } from './auth.js';
 import { ClientKeyer, msUntilUtcMidnight, requestLogLine } from './privacy.js';
 import { TEST_PEPPER, createRecord, makeApp, registerUser, sealMatch, syncMatcher, uploadBlob, verifyPhone } from './test-helpers.js';
@@ -25,7 +26,8 @@ describe('ClientKeyer: daily-salted keyed hash of the client address', () => {
     expect(k.keyFor('203.0.113.77')).toBe(a);
     expect(k.keyFor('203.0.113.78')).not.toBe(a);
     expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(a).not.toContain('203');
+    // the whole address, not a fragment: the key is random base64url, so '203' alone turns up by chance about once in 6,000 salts
+    expect(a).not.toContain('203.0.113.77');
   });
 
   it('rotates its salt at midnight UTC, so keys cannot be linked across days', () => {
@@ -185,6 +187,9 @@ describe('no client IP or user agent on disk or in logs (W11)', () => {
     expect((await request(app).post('/api/auth/login').send({ username: a.user.username, authKey: Buffer.alloc(32, 7).toString('base64') })).status).toBe(401);
     expect((await request(app).post('/api/auth/login').send({ username: a.user.username, authKey: a.authKey })).status).toBe(200);
     expect((await createRecord(app, a)).res.status).toBe(201);
+    const draftSlot = `/api/vault/slots/${await slotName(a.masterKey, 'draft')}`;
+    expect((await request(app).put(draftSlot).set(a.auth).send({ ...(await sealSlot({ words: 'draft' }, a.masterKey)), expectedVersion: null })).status).toBe(200);
+    expect((await request(app).get(draftSlot).set(a.auth)).status).toBe(200);
     expect((await uploadBlob(app, a)).res.status).toBe(201);
     expect((await verifyPhone(app, a)).status).toBe(200);
     flushPhoneTokens(inner);
@@ -206,13 +211,20 @@ describe('no client IP or user agent on disk or in logs (W11)', () => {
 
     const db = getDb(inner);
     expect(db.prepare('SELECT COUNT(*) n FROM match_groups').get()).toEqual({ n: 1 }); // the matching path really ran
-    // The DB as SQL sees it, then every byte of the files on disk (main DB, WAL, shared memory), before and after close.
-    const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>).map((t) => t.name);
-    const dump = tables.map((t) => JSON.stringify(db.prepare(`SELECT * FROM "${t}"`).all(), (_k, v) => (Buffer.isBuffer(v) ? v.toString('latin1') : v))).join('\n');
+    // The DBs as SQL sees them (main and draft slots), then every byte of the files on disk (both DBs, WALs, shared
+    // memory), before and after close.
+    const slotsDb = getSlots(inner).db;
+    const dumpDb = (d: typeof db) =>
+      (d.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
+        .map((t) => JSON.stringify(d.prepare(`SELECT * FROM "${t.name}"`).all(), (_k, v) => (Buffer.isBuffer(v) ? v.toString('latin1') : v)))
+        .join('\n');
+    expect(slotsDb.prepare('SELECT COUNT(*) n FROM slots').get()).toEqual({ n: 1 }); // the slot path really ran
+    const dump = `${dumpDb(db)}\n${dumpDb(slotsDb)}`;
     const files = () => fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f)).toString('latin1')).join('\n');
     const needles = [IP, IP6, UA, 'MatraLeakProbe', '127.0.0.1', '::ffff:'];
     const onDiskOpen = files();
     db.close();
+    slotsDb.close();
     const onDiskClosed = files();
     for (const n of needles) {
       expect(dump, `DB contents contain ${n}`).not.toContain(n);

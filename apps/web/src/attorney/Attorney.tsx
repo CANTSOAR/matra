@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { checkAttorneyKey, decryptBlob, decryptJSON, publicKeyFingerprint, sha256Hex, unwrapKeyWithPrivate } from '@matra/crypto';
 import type { EvidenceItem, IntakeRecord, LedgerEntry, LedgerProofResponse, ShareBundle } from '@matra/shared';
-import { envelopeHash } from '../api/client';
+import { ApiError, envelopeHash } from '../api/client';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { BriefPreview, downloadPdf, generateIncidentSummary } from '../integration/briefAdapter';
 import { friendlyError, useRequiredSession } from '../lib/session';
@@ -11,12 +11,30 @@ import { MATCH_PINS } from '../matchPins';
 import { CheckLines } from '../verify/CheckLines';
 import { accountCheck, chainCheck, evidenceCheck, overallTone, proofHashes, sealedEntry, type CheckLine } from '../verify/checks';
 
+// 'brief' only on shares made before the summary stopped being a separate choice (it is laid out from the account)
 const SCOPE_WORDS: Record<string, string> = { record: 'Written account', evidence: 'Evidence files', brief: 'Incident summary' };
 const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).join(' · ');
 
+/** The share's label as a file-name part ("Client K7QZ4" → "client-k7qz4"); never anything from her account. */
+export function aliasSlug(alias: string): string {
+  return alias.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'client';
+}
+
 export function AttorneyCases() {
   const { api, session, refreshProfile } = useRequiredSession();
-  const shares = useAsync(() => api.listShares().then((r) => r.shares), [api]);
+  // null: the server refuses an unverified attorney (403 attorney_not_verified); shares to her are paused, not gone
+  const shares = useAsync(
+    () =>
+      api
+        .listShares()
+        .then((r) => r.shares)
+        .catch((e) => {
+          if (e instanceof ApiError && e.code === 'attorney_not_verified') return null;
+          throw e;
+        }),
+    [api],
+  );
+  const paused = shares.data === null;
   const fp = useAsync(() => publicKeyFingerprint(session.user.publicKey), [session.user.publicKey]);
   // Is this key in the org-signed directory survivors' apps check against (W3)? Unpinned (development) builds say nothing.
   const listing = useAsync(
@@ -86,18 +104,30 @@ export function AttorneyCases() {
           Received a summary PDF or evidence files by email or on a drive? <Link to="/verify">Check a file</Link> in your
           browser; nothing is uploaded.
         </p>
+        <p className="small muted" style={{ margin: 0 }}>
+          <Link to="/attorney/passphrase" data-testid="attorney-passphrase-link">Change your passphrase or sign out other devices</Link>
+        </p>
       </div>
       <section className="card stack" aria-labelledby="active">
         <h2 id="active">Active files</h2>
         <p className="small muted">Each file was shared with you by a survivor, with their consent. Every time you open one, they can see it.</p>
         {shares.loading && <Loading />}
         {shares.error && <ErrorNote>{shares.error}</ErrorNote>}
+        {/* Any unverified account: a new one with no files yet, or one Matra unverified (its sessions end, so after
+            signing back in its profile says unverified too). */}
+        {paused && (
+          <p className="muted" data-testid="attorney-paused">
+            Your account isn’t verified by Matra right now, so you can’t open shared files. If clients shared files with
+            you before, each of them decides whether to end or keep your access. Files they keep shared will show here
+            again if Matra verifies your account.
+          </p>
+        )}
         {shares.data && active.length === 0 && <p className="muted">No files have been shared with you yet.</p>}
         <ul className="list">
           {active.map((s) => (
             <li key={s.id} className="row" style={{ justifyContent: 'space-between' }}>
               <span style={{ minWidth: 0 }}>
-                <strong>Shared file</strong>
+                <strong>{s.survivorAlias ?? 'Shared file'}</strong>
                 <br />
                 <span className="small muted">
                   Shared {formatDate(s.createdAt)} · access until {formatDate(s.expiresAt)} · {scopeText(s.scope)}
@@ -197,7 +227,7 @@ export function AttorneyCase() {
         generatedAt: new Date(),
         preparedFor: session.attorneyProfile?.displayName,
       });
-      downloadPdf(pdf, `matra-incident-summary-${bundle.survivorAlias}-${new Date().toISOString().slice(0, 10)}.pdf`);
+      downloadPdf(pdf, `matra-incident-summary-${aliasSlug(bundle.survivorAlias)}-${new Date().toISOString().slice(0, 10)}.pdf`);
     } catch (e) {
       setBriefError(friendlyError(e));
     } finally {
@@ -214,7 +244,8 @@ export function AttorneyCase() {
       {opened.error && <ErrorNote>{opened.error}</ErrorNote>}
       {opened.data && (
         <>
-          <PageTitle eyebrow="Shared file">Client: {opened.data.bundle.survivorAlias}</PageTitle>
+          {/* the share's label, made up on her device for this share only (never her username) */}
+          <PageTitle eyebrow="Shared file">{opened.data.bundle.survivorAlias}</PageTitle>
           <dl className="case-meta">
             <div>
               <dt>Shared</dt>

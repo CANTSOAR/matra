@@ -14,6 +14,17 @@ export interface BriefOptions {
   preparedFor?: string;
   /** Address of the in-browser checker printed in "How to verify" (default: this app's origin + /verify). */
   verifyUrl?: string;
+  /**
+   * Evidence item id -> the SALTED commitment to the hash of the file as she added it (src/evidence/commitment.ts). Listed
+   * in the Evidence Inventory when given. Never a plain hash of the original, and never the salt.
+   */
+  exhibitFingerprints?: Record<string, string>;
+  /**
+   * Stored file (blob id) -> its exhibit number, from the one numbering (src/evidence/exhibits.ts buildExhibits), so the number
+   * printed here is the number on her screen and in her exhibit list. When given, rows are ordered by it and a file with no
+   * number (it was never stored) shows "–"; when absent, rows are simply counted in the order of the record (callers with no file list).
+   */
+  exhibitNumbers?: Record<string, number>;
 }
 
 export interface BriefRow {

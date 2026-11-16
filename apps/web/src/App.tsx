@@ -30,14 +30,17 @@ const Brief = page(() => import('./screens/Brief'), 'Brief');
 const Share = page(() => import('./screens/Share'), 'Share');
 const DeleteAccount = page(() => import('./screens/DeleteAccount'), 'DeleteAccount');
 const RecoverySettings = page(() => import('./screens/Recovery'), 'RecoverySettings');
+const ChangePassphrase = page(() => import('./screens/ChangePassphrase'), 'ChangePassphrase');
 const RecoverScreen = page(() => import('./screens/Recovery'), 'RecoverScreen');
-const SurvivorMatching = page(() => import('./counselor/SurvivorMatching'), 'SurvivorMatching');
-const PhoneVerify = page(() => import('./counselor/PhoneVerify'), 'PhoneVerify');
 const AttorneyCases = page(() => import('./attorney/Attorney'), 'AttorneyCases');
 const AttorneyCase = page(() => import('./attorney/Attorney'), 'AttorneyCase');
-const CounselorPortal = page(() => import('./counselor/Counselor'), 'CounselorPortal');
-const CounselorReport = page(() => import('./counselor/CounselorReport'), 'CounselorReport');
-const ReportRequest = page(() => import('./counselor/ReportRequest'), 'ReportRequest');
+// Sealed matching and the counselor portal exist only in a build with MATRA_MATCHING=on. In any other build these are
+// null and their routes below are not registered, so the screens, their copy and their API calls are not in the bundle.
+const SurvivorMatching = __MATRA_MATCHING__ ? page(() => import('./counselor/SurvivorMatching'), 'SurvivorMatching') : null;
+const PhoneVerify = __MATRA_MATCHING__ ? page(() => import('./counselor/PhoneVerify'), 'PhoneVerify') : null;
+const CounselorPortal = __MATRA_MATCHING__ ? page(() => import('./counselor/Counselor'), 'CounselorPortal') : null;
+const CounselorReport = __MATRA_MATCHING__ ? page(() => import('./counselor/CounselorReport'), 'CounselorReport') : null;
+const ReportRequest = __MATRA_MATCHING__ ? page(() => import('./counselor/ReportRequest'), 'ReportRequest') : null;
 const VerifyPage = page(() => import('./verify/VerifyPage'), 'VerifyPage');
 
 /** A calm placeholder while a screen's code arrives. */
@@ -48,7 +51,7 @@ function Lazy({ children }: { children: ReactNode }) {
 export function AppRoutes() {
   return (
     <Routes>
-      <Route element={<CounselorGate><Layout /></CounselorGate>}>
+      <Route element={__MATRA_MATCHING__ ? <CounselorGate><Layout /></CounselorGate> : <Layout />}>
         <Route index element={<Welcome />} />
         <Route path="safety" element={<SafetyTips />} />
         <Route path="start" element={<StartScreen />} />
@@ -61,21 +64,31 @@ export function AppRoutes() {
         <Route path="vault/evidence" element={<RequireSession role="survivor"><Lazy><Evidence /></Lazy></RequireSession>} />
         <Route path="vault/brief" element={<RequireSession role="survivor"><Lazy><Brief /></Lazy></RequireSession>} />
         <Route path="vault/share" element={<RequireSession role="survivor"><Lazy><Share /></Lazy></RequireSession>} />
-        <Route path="vault/matching" element={<RequireSession role="survivor"><Lazy><SurvivorMatching /></Lazy></RequireSession>} />
-        <Route path="vault/matching/verify" element={<RequireSession role="survivor"><Lazy><PhoneVerify /></Lazy></RequireSession>} />
-        <Route path="vault/requests/:id" element={<RequireSession role="survivor"><Lazy><ReportRequest /></Lazy></RequireSession>} />
+        {__MATRA_MATCHING__ && SurvivorMatching && PhoneVerify && ReportRequest && (
+          <>
+            <Route path="vault/matching" element={<RequireSession role="survivor"><Lazy><SurvivorMatching /></Lazy></RequireSession>} />
+            <Route path="vault/matching/verify" element={<RequireSession role="survivor"><Lazy><PhoneVerify /></Lazy></RequireSession>} />
+            <Route path="vault/requests/:id" element={<RequireSession role="survivor"><Lazy><ReportRequest /></Lazy></RequireSession>} />
+          </>
+        )}
         <Route path="vault/delete" element={<RequireSession role="survivor"><Lazy><DeleteAccount /></Lazy></RequireSession>} />
         <Route path="vault/recovery" element={<RequireSession role="survivor"><Lazy><RecoverySettings /></Lazy></RequireSession>} />
+        <Route path="vault/passphrase" element={<RequireSession role="survivor"><Lazy><ChangePassphrase /></Lazy></RequireSession>} />
 
         <Route path="attorney" element={<AttorneyLanding />} />
         <Route path="attorney/register" element={<AttorneyRegisterScreen />} />
         <Route path="attorney/signin" element={<AttorneySignInScreen />} />
         <Route path="attorney/cases" element={<RequireSession role="attorney"><Lazy><AttorneyCases /></Lazy></RequireSession>} />
         <Route path="attorney/cases/:id" element={<RequireSession role="attorney"><Lazy><AttorneyCase /></Lazy></RequireSession>} />
+        <Route path="attorney/passphrase" element={<RequireSession role="attorney"><Lazy><ChangePassphrase /></Lazy></RequireSession>} />
 
-        <Route path="counselor" element={<CounselorSignIn />} />
-        <Route path="counselor/matches" element={<RequireCounselor><Lazy><CounselorPortal /></Lazy></RequireCounselor>} />
-        <Route path="counselor/reports/:id" element={<RequireCounselor><Lazy><CounselorReport /></Lazy></RequireCounselor>} />
+        {__MATRA_MATCHING__ && CounselorPortal && CounselorReport && (
+          <>
+            <Route path="counselor" element={<CounselorSignIn />} />
+            <Route path="counselor/matches" element={<RequireCounselor><Lazy><CounselorPortal /></Lazy></RequireCounselor>} />
+            <Route path="counselor/reports/:id" element={<RequireCounselor><Lazy><CounselorReport /></Lazy></RequireCounselor>} />
+          </>
+        )}
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

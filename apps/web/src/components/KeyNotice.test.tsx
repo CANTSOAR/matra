@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MATCHING_CONSENT_LINES, NOTICES } from '../lib/disclosures';
+import { MATCHING_CONSENT_LINES, NOTICES, savedVersionsNotice } from '../lib/disclosures';
 import { KeyNotice } from './KeyNotice';
 
 const BANNED = /subpoena-proof|bulletproof|admissible|tamper-proof/i;
@@ -34,6 +34,11 @@ describe('KeyNotice', () => {
       'Matra can’t read what you write. But a court can order you to hand it over. Anything you give police will be shared with the defense.',
     );
     expect(NOTICES.savedVersions.title).toBe('Every saved version is kept');
+    // her draft is saved over as she writes (MATRA_DRAFT_MODE=slot, the default): the seal notice says what is kept
+    expect(savedVersionsNotice('slot')).toBe(NOTICES.sealedVersions);
+    expect(NOTICES.sealedVersions.title).toBe('Sealed versions are kept');
+    expect(NOTICES.sealedVersions.body.join(' ')).toMatch(/your draft is saved over as you go, so only your newest draft is kept/);
+    expect(savedVersionsNotice('keep-versions')).toBe(NOTICES.savedVersions);
     expect(NOTICES.deleting.body.join(' ')).toMatch(/talk to a lawyer before you delete/);
     expect(NOTICES.deleting.body.join(' ')).toMatch(/not legal advice/);
     expect(NOTICES.sharing.body.join(' ')).toMatch(/can’t erase what they already saved/);

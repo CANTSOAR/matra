@@ -14,15 +14,39 @@ import {
   wrapKeyWithMaster,
 } from '@matra/crypto';
 import type { AttorneyProfile, AuthResponse, Envelope, IdentifierKind, MatchStates, RegisterRequest, Role } from '@matra/shared';
+import { shareAliasSentence, sharedFilesSentence, writtenAccountSentence } from '@matra/shared';
 import { createApp, getDb, type CreateAppOptions } from './app.js';
 
 export const TEST_ITERATIONS = 1000;
+
+/** A share label in the form her app makes ("Client XXXXX"). */
+export const TEST_ALIAS = 'Client BCDFG';
+
+/** A consent statement the server accepts for an attorney share of `files` files to the key `fp` (@matra/shared consent.ts). */
+export const shareConsent = (fp: string, files: number, alias = TEST_ALIAS) =>
+  [`I consent to share my case file with this attorney for legal consultation. Key ${fp}.`, shareAliasSentence(alias), writtenAccountSentence(), sharedFilesSentence(files)].join('\n');
+
+/** The same for a report release to a counselor (no label). */
+export const releaseConsent = (fp: string, files: number) =>
+  [`I share my report with this counselor only (key ${fp}).`, writtenAccountSentence(), sharedFilesSentence(files)].join('\n');
 export const TEST_PEPPER = 'test-pepper-0123456789abcdef-0123456789';
 
-export function makeApp(extra: { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; inspector?: boolean } = {}) {
+type MakeAppOptions = { autoVerifyAttorneys?: boolean; matching?: CreateAppOptions['matching']; dbPath?: string; draftsDbPath?: string; inspector?: boolean; minKdfIterations?: number };
+
+/**
+ * An app over an in-memory database. Sealed matching is OFF, as in the pilot (MATRA_MATCHING=off), unless the test
+ * turns it on with `matching: {…}` or uses makeMatchingApp.
+ */
+export function makeApp(extra: MakeAppOptions = {}) {
   // Tests release matched groups immediately unless they set a delay (production default: 72 h).
-  const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra, matching: { releaseDelayHours: 0, ...extra.matching } });
+  const matching = extra.matching ? { releaseDelayHours: 0, ...extra.matching } : false;
+  const app = createApp({ dbPath: ':memory:', pepper: TEST_PEPPER, ...extra, matching });
   return { app, db: getDb(app) };
+}
+
+/** makeApp with sealed matching ON (MATRA_MATCHING=on): an ephemeral 2-of-3 OPRF key set unless `matching.oprf` is given. */
+export function makeMatchingApp(extra: MakeAppOptions = {}) {
+  return makeApp({ ...extra, matching: extra.matching || {} });
 }
 
 export interface TestUser {
@@ -101,16 +125,23 @@ export async function createRecord(app: express.Express, u: TestUser, data: unkn
   return { res, key, envelope };
 }
 
-export async function uploadBlob(app: express.Express, u: TestUser, bytes = new TextEncoder().encode('evidence bytes')) {
+export async function uploadBlob(
+  app: express.Express,
+  u: TestUser,
+  bytes = new TextEncoder().encode('evidence bytes'),
+  /** the salted commitment to her original file's hash (header X-Evidence-Commitment); omitted by default */
+  commitment?: string,
+) {
   const key = await generateContentKey();
   const ct = await encryptBlob(bytes, key);
   const wrapped = await wrapKeyWithMaster(key, u.masterKey);
-  const res = await request(app)
+  let req = request(app)
     .post('/api/vault/blobs')
     .set(u.auth)
     .set('Content-Type', 'application/octet-stream')
-    .set('X-Owner-Wrapped-Key', Buffer.from(JSON.stringify(wrapped)).toString('base64'))
-    .send(Buffer.from(ct));
+    .set('X-Owner-Wrapped-Key', Buffer.from(JSON.stringify(wrapped)).toString('base64'));
+  if (commitment !== undefined) req = req.set('X-Evidence-Commitment', commitment);
+  const res = await req.send(Buffer.from(ct));
   return { res, key, ct };
 }
 

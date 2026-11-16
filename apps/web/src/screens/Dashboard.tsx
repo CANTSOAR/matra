@@ -1,13 +1,17 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import type { AttorneyProfile, AuditEvent, EscrowEntry, Share } from '@matra/shared';
+import type { AttorneyProfile, AuditEvent, EscrowEntry, Share, SurvivorReportRequest } from '@matra/shared';
 import { ErrorNote, Loading, PageTitle, VerifyBadge, formatDate, useAsync } from '../components/common';
 import { friendlyError, useRequiredSession } from '../lib/session';
-import { escrowLabel, finals, hasUnsealedMatches, latestOf, loadVault, mergeEvidence, shortHash, formatBytes, type OpenedRecord } from '../lib/vault';
+import { finals, isCleanFinal, latestOf, legacyDraftEvidence, loadSpace, mergeEvidence, resumeFrom, shortHash, formatBytes, type OpenedRecord, type VaultProblem } from '../lib/vault';
+import { matchingApi } from '../api/matching';
+import { escrowLabel, hasUnsealedMatches } from '../lib/matching';
+import { UnreadableNote } from '../components/UnreadableNote';
 import { PhoneStepCard } from '../components/PhoneStepCard';
 import { ExportCard } from '../components/ExportCard';
 import { IconBook, IconFeather, IconImage, IconPeople } from '../components/icons';
 import { shareLengthDays, shareLengthLabel } from '../lib/shareTerms';
+import { renewShare } from '../lib/renewShare';
 
 const AUDIT_TEXT: Record<string, string> = {
   'account.created': 'You created your space',
@@ -15,7 +19,12 @@ const AUDIT_TEXT: Record<string, string> = {
   'auth.logout': 'Signed out',
   'auth.login_failed': 'Someone tried to sign in with the wrong passphrase',
   'auth.reauth_failed': 'Someone tried to change your recovery code with the wrong passphrase',
+  'auth.delete_reauth_failed': 'Someone tried to delete your space with the wrong passphrase',
   'auth.recovered': 'Your passphrase was reset with your recovery code',
+  'auth.passphrase_changed': 'You changed your passphrase (every other session was signed out)',
+  'auth.passphrase_reauth_failed': 'Someone tried to change your passphrase with the wrong one',
+  'auth.other_sessions_ended': 'You signed out everywhere else',
+  'auth.sessions_reauth_failed': 'Someone tried to sign out your other sessions with the wrong passphrase',
   'recovery.set_up': 'You set up a recovery code',
   'recovery.replaced': 'You made a new recovery code (the old one stopped working)',
   'recovery.turned_off': 'You turned off your recovery code',
@@ -25,18 +34,25 @@ const AUDIT_TEXT: Record<string, string> = {
   // client refines this using records it can decrypt.
   'record.created': 'You saved to your space',
   'blob.uploaded': 'Evidence added to your space',
-  'escrow.created': 'You sealed a match',
-  'escrow.withdrawn': 'You withdrew a sealed match',
+  ...(__MATRA_MATCHING__ && {
+    'escrow.created': 'You sealed a match',
+    'escrow.withdrawn': 'You withdrew a sealed match',
+  }),
   'share.created': 'You shared your file with an attorney',
   'share.revoked': 'You took back an attorney’s access',
   'attorney.opened_share': 'Attorney opened your file',
   'attorney.downloaded_evidence': 'Attorney downloaded an evidence file',
-  // staged release (her side)
-  'report.released': 'You shared your report with a legal options counselor',
-  'report.declined': 'You decided not to share your report',
-  'report.revoked': 'You stopped sharing your report with a legal options counselor',
-  'counselor.opened_report': 'The legal options counselor opened your report',
-  'counselor.downloaded_evidence': 'The legal options counselor downloaded one of your evidence files',
+  // verify-attorney (server attorney-verification.ts): her share is paused, not revoked; she decides
+  'attorney.unverified': 'An attorney you shared with is no longer verified by Matra. Their access is paused: you can revoke it or keep it',
+  'attorney.reverified': 'An attorney you shared with is verified by Matra again, so their access is back on',
+  // staged release (her side; only in a build with sealed matching)
+  ...(__MATRA_MATCHING__ && {
+    'report.released': 'You shared your report with a legal options counselor',
+    'report.declined': 'You decided not to share your report',
+    'report.revoked': 'You stopped sharing your report with a legal options counselor',
+    'counselor.opened_report': 'The legal options counselor opened your report',
+    'counselor.downloaded_evidence': 'The legal options counselor downloaded one of your evidence files',
+  }),
   // attorney-side events
   'share.received': 'A client shared a file with you',
   'share.opened': 'You opened a shared file',
@@ -62,7 +78,7 @@ export function describeAudit(e: AuditEvent, kindBySeq?: Map<number, OpenedRecor
   if (/blob.*(download|read)/.test(a)) return 'A shared evidence file was downloaded';
   if (/revoke/.test(a)) return 'You took back an attorney’s access';
   if (/share/.test(a)) return 'You shared your file with an attorney';
-  if (/escrow/.test(a)) return /withdr/.test(a) ? 'You withdrew a sealed match' : 'You sealed a match';
+  if (__MATRA_MATCHING__ && /escrow/.test(a)) return /withdr/.test(a) ? 'You withdrew a sealed match' : 'You sealed a match';
   if (/blob|evidence/.test(a)) return 'Evidence added to your space';
   if (/record/.test(a)) return 'You saved to your space';
   if (/register|signup|account\.create/.test(a)) return 'You created your space';
@@ -115,8 +131,11 @@ export function formatRange(fromIso: string, toIso: string): string {
   }
 }
 
+// 'brief' only on shares made before the summary stopped being a separate choice
 const SCOPE_WORDS: Record<string, string> = { record: 'written story', evidence: 'evidence files', brief: 'summary' };
-const scopeText = (scope: string[]) => scope.map((x) => SCOPE_WORDS[x] ?? x).join(', ');
+/** "written story, 2 evidence files": how many files when her list says (it carries the share's file ids). */
+const scopeText = (scope: string[], files?: number) =>
+  scope.map((x) => (x === 'evidence' && files ? plural(files, 'evidence file') : (SCOPE_WORDS[x] ?? x))).join(', ');
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function Dashboard() {
@@ -125,14 +144,24 @@ export function Dashboard() {
   const location = useLocation();
   const firstVisit = !!(location.state as { firstVisit?: boolean } | null)?.firstVisit;
 
-  // profile records included only so the activity list can name them; finals/latestOf pick by kind
-  const vault = useAsync(() => loadVault(api, mk, { includeProfile: true }), [api, mk]);
+  // Her records and her draft (lib/draftSlot.ts: saved over as she writes, kept after sealing so she can add to it).
+  // Home only reads, so it is the one screen that shows what did load when something didn't (`allowPartial`), with a
+  // note saying what is left out and why. Profile records included only so the activity list can name them.
+  const space = useAsync(() => loadSpace(api, mk, { includeProfile: true, allowPartial: true }), [api, mk]);
+  const vault = { loading: space.loading, error: space.error, data: space.data?.vault };
+  const slot = { data: space.data?.slot };
   const blobs = useAsync(() => api.listBlobs().then((r) => r.blobs), [api]);
   const working = useAsync(() => getWorkingData(), [getWorkingData, workingVersion]);
-  const escrow = useAsync(async () => {
-    const { entries } = await api.listEscrow();
-    return Promise.all(entries.map(async (e) => ({ entry: e, label: await escrowLabel(e.labelEnvelope, mk) })));
-  }, [api, mk]);
+  // Sealed matching only in a build that has it (MATRA_MATCHING=on); the other branch is all a pilot build contains.
+  const escrow = useAsync(
+    __MATRA_MATCHING__
+      ? async () => {
+          const { entries } = await matchingApi(api).listEscrow();
+          return Promise.all(entries.map(async (e) => ({ entry: e, label: await escrowLabel(e.labelEnvelope, mk) })));
+        }
+      : async () => [],
+    [api, mk],
+  );
   const shares = useAsync(async () => {
     const [{ shares }, atts] = await Promise.all([api.listShares(), api.listAttorneys().catch(() => ({ attorneys: [] as AttorneyProfile[] }))]);
     const byId = new Map(atts.attorneys.map((a) => [a.userId, a]));
@@ -140,29 +169,39 @@ export function Dashboard() {
   }, [api]);
   const audit = useAsync(() => api.listAudit().then((r) => r.events), [api]);
   // Staged release: a counselor who has already spoken with her asked for her full report. Shown only to her.
-  const reportRequests = useAsync(() => api.reportRequests().then((r) => r.requests), [api]);
+  const reportRequests = useAsync(
+    __MATRA_MATCHING__ ? () => matchingApi(api).reportRequests().then((r) => r.requests) : async (): Promise<SurvivorReportRequest[]> => [],
+    [api],
+  );
   const pendingRequests = (reportRequests.data ?? []).filter((r) => r.status === 'pending');
   const sharingReports = (reportRequests.data ?? []).filter(
     (r) => r.release?.status === 'active' && Date.parse(r.release.expiresAt) > Date.now(),
   );
   // Her sealed record chose a sealed match that is waiting for a phone confirmation (W13; counselor/PhoneVerify.tsx).
-  const phoneStep = useAsync(async () => {
-    const final = vault.data && latestOf(vault.data, 'final');
-    if (!final?.payload.record || !(await hasUnsealedMatches(final.payload.record, final.payload.escrowedHashes))) return false;
-    const st = await api.phoneVerificationStatus();
-    return st.required && !st.verified;
-  }, [api, vault.data]);
+  const phoneStep = useAsync(
+    __MATRA_MATCHING__
+      ? async () => {
+          if (!vault.data || !slot.data) return false;
+          const resume = resumeFrom(slot.data.slot, vault.data);
+          if (!resume.final?.payload.record || !(await hasUnsealedMatches(resume.final.payload.record, resume.escrowedHashes))) return false;
+          const st = await matchingApi(api).phoneVerificationStatus();
+          return st.required && !st.verified;
+        }
+      : async () => false,
+    [api, vault.data, slot.data],
+  );
   const [showAllActivity, setShowAllActivity] = useState(false);
 
   const records = vault.data ?? [];
   const sealed = finals(records);
-  const savedDraft = latestOf(records, 'draft');
+  // A draft counts as "in progress" until it is sealed; the save right after sealing marks it with that seal.
+  const savedDraft = slot.data?.slot?.value;
   const latestFinal = latestOf(records, 'final');
-  const evidenceMeta = mergeEvidence(savedDraft?.payload.evidence, latestFinal?.payload.record?.evidence, working.data?.evidence);
+  const evidenceMeta = mergeEvidence(legacyDraftEvidence(records), savedDraft?.evidence, latestFinal?.payload.record?.evidence, working.data?.evidence);
   const metaByBlob = new Map(evidenceMeta.filter((e) => e.blobId).map((e) => [e.blobId!, e]));
   const kindBySeq = new Map(records.filter((r) => r.ledgerEntry).map((r) => [r.ledgerEntry!.seq, r.payload.kind]));
 
-  const hasDraft = !!working.data || (!!savedDraft && !savedDraft.supersededBy);
+  const hasDraft = !!working.data || (!!savedDraft?.draft && !savedDraft.sealedRecordId);
   const currentSeal = sealed.find((r) => !r.supersededBy);
   const fileCount = blobs.data?.length ?? 0;
   const activeShares = (shares.data ?? []).filter(
@@ -225,7 +264,7 @@ export function Dashboard() {
         </div>
       </section>
 
-      {pendingRequests.map((r) => (
+      {__MATRA_MATCHING__ && pendingRequests.map((r) => (
         <section key={r.id} className="card warm stack" aria-label="A request for your report" data-testid="home-report-request">
           <p style={{ margin: 0 }}>
             <strong>A legal options counselor has asked to see your report.</strong> You don’t have to decide now, and you can
@@ -238,7 +277,7 @@ export function Dashboard() {
           </div>
         </section>
       ))}
-      {sharingReports.map((r) => (
+      {__MATRA_MATCHING__ && sharingReports.map((r) => (
         <section key={r.id} className="card soft stack" aria-label="A report you are sharing" data-testid="home-report-shared">
           <p style={{ margin: 0 }}>
             You’re sharing your report with {r.counselor.displayName}, a legal options counselor, until{' '}
@@ -324,12 +363,13 @@ export function Dashboard() {
         {vault.error && <ErrorNote>{vault.error}</ErrorNote>}
         {!vault.loading && !vault.error && (
           <>
+            <UnreadableNote problems={space.data?.problems} />
             {hasDraft && (
               <p className="small">
                 {working.data ? (
                   <span className="badge">Draft in progress — not saved to your space yet</span>
                 ) : (
-                  <span className="badge neutral">Draft saved {formatDate(savedDraft!.payload.savedAt)}</span>
+                  <span className="badge neutral">Draft saved {formatDate(savedDraft!.savedAt)}</span>
                 )}
               </p>
             )}
@@ -402,30 +442,32 @@ export function Dashboard() {
         )}
       </section>
 
-      {/* ── escrow ── */}
-      <section className="card stack" aria-labelledby="escrow" data-testid="home-escrow">
-        <div className="section-title">
-          <h2 id="escrow">Sealed matches</h2>
-          <Link className="btn btn-small" to="/vault/matching" data-testid="home-matching-link">Review or withdraw</Link>
-        </div>
-        <p className="small muted">
-          If you chose a sealed match, the email, phone number, or social media profile you gave was sealed on this device
-          before it was sent. Only a Legal Options Counselor ever sees a match. This list will always say “Sealed” —
-          that’s on purpose, so no one can use this page to find out whether they’ve been named.
-        </p>
-        {phoneStep.data && <PhoneStepCard />}
-        {escrow.loading && <Loading />}
-        {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
-        {escrow.data && escrow.data.length === 0 && <p className="muted">Nothing sealed.</p>}
-        {escrow.data?.map(({ entry, label }) => <EscrowCard key={entry.id} entry={entry} label={label} />)}
-        {escrow.data && escrow.data.length > 0 && (
+      {/* ── escrow (only in a build with sealed matching) ── */}
+      {__MATRA_MATCHING__ && (
+        <section className="card stack" aria-labelledby="escrow" data-testid="home-escrow">
+          <div className="section-title">
+            <h2 id="escrow">Sealed matches</h2>
+            <Link className="btn btn-small" to="/vault/matching" data-testid="home-matching-link">Review or withdraw</Link>
+          </div>
           <p className="small muted">
-            If someone else names the same person, a Legal Options Counselor — a licensed attorney, not the police, not
-            your school — may reach out to you privately, the way you chose. You can say no, and there are no fees. A match
-            is a lead, not evidence. Names are never used.
+            If you chose a sealed match, the email, phone number, or social media profile you gave was sealed on this device
+            before it was sent. Only a Legal Options Counselor ever sees a match. This list will always say “Sealed” —
+            that’s on purpose, so no one can use this page to find out whether they’ve been named.
           </p>
-        )}
-      </section>
+          {phoneStep.data && <PhoneStepCard />}
+          {escrow.loading && <Loading />}
+          {escrow.error && <ErrorNote>{escrow.error}</ErrorNote>}
+          {escrow.data && escrow.data.length === 0 && <p className="muted">Nothing sealed.</p>}
+          {escrow.data?.map(({ entry, label }) => <EscrowCard key={entry.id} entry={entry} label={label} />)}
+          {escrow.data && escrow.data.length > 0 && (
+            <p className="small muted">
+              If someone else names the same person, a Legal Options Counselor — a licensed attorney, not the police, not
+              your school — may reach out to you privately, the way you chose. You can say no, and there are no fees. A match
+              is a lead, not evidence. Names are never used.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* ── shares ── */}
       <section className="card stack" aria-labelledby="shares" data-testid="home-shares">
@@ -441,7 +483,14 @@ export function Dashboard() {
         {shares.data && shares.data.length > 0 && (
           <ul className="list">
             {shares.data.map(({ share, attorney }) => (
-              <ShareRow key={share.id} share={share} attorney={attorney} onChanged={() => { void shares.reload(); void audit.reload(); }} />
+              <ShareRow
+                key={share.id}
+                share={share}
+                attorney={attorney}
+                renewable={renewableShare(records, share.recordId, space.data?.problems)}
+                record={records.find((r) => r.meta.id === share.recordId)}
+                onChanged={() => { void shares.reload(); void audit.reload(); }}
+              />
             ))}
           </ul>
         )}
@@ -463,6 +512,12 @@ export function Dashboard() {
       </section>
 
       <ExportCard>
+        <p className="small muted" style={{ margin: 0 }}>
+          Want a new passphrase, or to sign out other devices?{' '}
+          <Link to="/vault/passphrase" data-testid="passphrase-link">
+            Passphrase and devices
+          </Link>
+        </p>
         <p className="small muted" style={{ margin: 0 }}>
           Want to erase your space instead?{' '}
           <Link to="/vault/delete" data-testid="delete-account-link">
@@ -596,20 +651,48 @@ function EscrowCard({ entry, label }: { entry: EscrowEntry; label: string }) {
   );
 }
 
-function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: AttorneyProfile; onChanged(): void }) {
-  const { api } = useRequiredSession();
+/**
+ * A share may be renewed only if the sealed version it shared holds nothing but her account. One sealed before draft
+ * slots also holds her working notes, and renewing would extend the attorney's access to them; until her vault has
+ * opened and shows which it is, Renew stays hidden.
+ */
+function renewableShare(records: OpenedRecord[], recordId: string, problems: VaultProblem[] = []): Renewable {
+  const r = records.find((x) => x.meta.id === recordId);
+  // the version it shared didn't load cleanly here: say so, rather than waiting for it forever
+  if (!r && problems.some((p) => p.id === recordId)) return 'problem';
+  return !r ? 'unknown' : isCleanFinal(r.payload) ? 'yes' : 'legacy';
+}
+type Renewable = 'yes' | 'legacy' | 'unknown' | 'problem';
+
+function ShareRow({
+  share,
+  attorney,
+  renewable,
+  record,
+  onChanged,
+}: {
+  share: Share;
+  attorney?: AttorneyProfile;
+  renewable: Renewable;
+  /** the sealed version it shared, to lock it for the attorney again if their copy of the key was deleted */
+  record?: OpenedRecord;
+  onChanged(): void;
+}) {
+  const { api, session } = useRequiredSession();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = attorney ? attorney.displayName : 'Attorney';
   const expired = share.status === 'active' && Date.parse(share.expiresAt) <= Date.now();
+  // the attorney is not verified right now: the server refuses their access until they are (her share stays)
+  const paused = share.status === 'active' && !expired && share.attorneyVerified === false;
   // keep the length she chose when she shared (from her consent text), not always 90 days
   const days = shareLengthDays(share);
   async function renew() {
     setBusy(true);
     setError(null);
     try {
-      await api.renewShare(share.id, days);
+      await renewShare(api, session.masterKey, share, record, days);
       onChanged();
     } catch (e) {
       setError(friendlyError(e));
@@ -638,12 +721,25 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
           {attorney?.organization && <span className="small muted"> · {attorney.organization}</span>}
           <br />
           <span className="small muted">
-            Shared {formatDate(share.createdAt)} · {scopeText(share.scope)}
+            Shared {formatDate(share.createdAt)} · {scopeText(share.scope, share.blobIds?.length)}
+            {share.survivorAlias && <> · called “{share.survivorAlias}”</>}
             {share.status === 'active' && <> · {expired ? 'ended' : 'until'} {formatDate(share.expiresAt)}</>}
           </span>
         </span>
-        {share.status === 'active' ? expired ? <span className="badge neutral">Expired</span> : <span className="badge ok">Has access</span> : <span className="badge neutral">Revoked {formatDate(share.revokedAt)}</span>}
+        {share.status === 'active' ? expired ? <span className="badge neutral">Expired</span> : paused ? <span className="badge neutral">Paused</span> : <span className="badge ok">Has access</span> : <span className="badge neutral">Revoked {formatDate(share.revokedAt)}</span>}
       </div>
+      {share.status === 'active' && expired && share.keyDeleted && (
+        <p className="small muted" style={{ margin: 0 }} data-testid="share-key-deleted">
+          Access ended more than 30 days ago, so Matra deleted the attorney’s copy of the key to your file. If you renew,
+          your file is locked for them again on this device first.
+        </p>
+      )}
+      {paused && (
+        <p className="small muted" style={{ margin: 0 }} data-testid="share-paused">
+          This attorney is not verified by Matra right now, so they can’t open your file. You can revoke their access, or
+          keep it in case they are verified again.
+        </p>
+      )}
       {share.status === 'active' &&
         (confirming ? (
           <div className="card warn stack">
@@ -662,9 +758,23 @@ function ShareRow({ share, attorney, onChanged }: { share: Share; attorney?: Att
           </div>
         ) : (
           <div className="row">
-            <button className="btn btn-small" onClick={renew} disabled={busy}>
-              {busy ? 'Renewing…' : `Renew for ${shareLengthLabel(days)}`}
-            </button>
+            {renewable === 'yes' && (
+              <button className="btn btn-small" onClick={renew} disabled={busy}>
+                {busy ? 'Renewing…' : `Renew for ${shareLengthLabel(days)}`}
+              </button>
+            )}
+            {renewable === 'problem' && (
+              <p className="small muted" style={{ margin: 0 }} data-testid="share-problem">
+                The version this share is of didn’t open as you saved it just now, so it can’t be renewed from here. You
+                can revoke it, or try again later.
+              </p>
+            )}
+            {renewable === 'legacy' && (
+              <p className="small muted" style={{ margin: 0 }} data-testid="share-legacy">
+                This share is of a version saved in an older format that also keeps your working notes, so it can’t be
+                renewed. You can revoke it, and share your newest sealed version instead.
+              </p>
+            )}
             <button className="btn btn-small btn-danger" onClick={() => setConfirming(true)} data-testid="share-revoke">
               Revoke
             </button>

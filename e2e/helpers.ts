@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test as base, expect, type Page } from '@playwright/test';
 
-export const SURVIVOR_PASS = 'e2e quiet harbor maple lantern seven';
+export const SURVIVOR_PASS = 'e2e quiet harbor maple lantern seven willow copper tundra violin saffron';
 export const ATTORNEY_PASS = 'demo-attorney-passphrase';
 export const QUICK_EXIT_HOST = 'www.google.com';
 

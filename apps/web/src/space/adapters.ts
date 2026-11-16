@@ -10,10 +10,8 @@
 import { createElement, lazy, Suspense, type ComponentType } from 'react';
 import { Loading } from '../components/common';
 import type { IntakeRecord } from '@matra/shared';
-import type { ApiClient } from '../api/client';
 import * as vault from '../lib/vault';
 import { asGroup, asList, asRecord, newGroupItem, stepById, type AnswerValue, type IntakeDraft } from '../intake/draft';
-import { matchContactOf } from '../intake/record';
 import type { StoryEntry, Suggestion } from '../understand/types';
 import type { TranscriptResult } from '../voice/types';
 
@@ -171,51 +169,3 @@ export async function preloadTranscriber(onProgress?: (pct: number) => void): Pr
   await (await loadVoice?.())?.preloadTranscriber?.(onProgress);
 }
 
-// ───────────── matching (sealed escrow) ─────────────
-
-export interface MatchContact {
-  method?: string;
-  detail?: string;
-  notes?: string;
-}
-
-/**
- * Lodge the sealed-match codes for the people she opted in. Routed through here because the vault-level
- * matching function is being rebuilt (unique identifiers only + a counselor contact preference): rewire this
- * one call when its new signature lands. `contact` is how a legal options counselor may reach her on a match.
- */
-export async function lodgeMatches(
-  api: ApiClient,
-  masterKey: CryptoKey,
-  record: IntakeRecord,
-  alreadyLodged: string[],
-  contact: MatchContact | undefined,
-): Promise<string[]> {
-  // Only unique identifiers are ever matched; names are dropped before anything is sealed.
-  const matchable: IntakeRecord = {
-    ...record,
-    perpetrators: record.perpetrators.map((p) => ({
-      ...p,
-      identifiers: p.identifiers.filter((i) => i.kind === 'email' || i.kind === 'phone' || i.kind === 'social_handle'),
-    })),
-  };
-  return vault.lodgeEscrow(api, masterKey, matchable, alreadyLodged, { contact });
-}
-
-/**
- * After she confirms a phone number (counselor/PhoneVerify.tsx): seal the identifiers her current sealed record chose
- * for a sealed match but that could not be sealed yet. If anything new was sealed, her record is saved again as a new
- * sealed version (same story; only the list of sealed fingerprints changes), so a later re-seal never resubmits — or
- * undoes the withdrawal of — an identifier. Returns how many identifiers were newly sealed.
- */
-export async function retrySealedMatches(api: ApiClient, masterKey: CryptoKey): Promise<number> {
-  const final = vault.latestOf(await vault.loadVault(api, masterKey, { withLedger: false }), 'final');
-  const record = final?.payload.record;
-  const before = final?.payload.escrowedHashes ?? [];
-  if (!final || !record || !(await vault.hasUnsealedMatches(record, before))) return 0;
-  const draft = final.payload.draft;
-  const after = await lodgeMatches(api, masterKey, record, before, draft ? matchContactOf(draft) : undefined);
-  const added = after.filter((h) => !before.includes(h)).length;
-  if (added) await vault.sealPayload(api, masterKey, { ...final.payload, escrowedHashes: after, savedAt: new Date().toISOString() }, final.meta.id);
-  return added;
-}

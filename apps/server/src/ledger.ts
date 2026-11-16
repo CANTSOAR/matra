@@ -8,6 +8,10 @@
  *   record.sealed    SHA-256_hex(UTF-8 of JSON.stringify({ v, alg, iv, ct }))  — canonical Envelope,
  *                    exactly those four keys in that order, no whitespace. See `envelopeContentHash`.
  *   blob.sealed      SHA-256_hex(raw ciphertext bytes as uploaded, i.e. iv || ct).
+ *   evidence.committed  the survivor's SALTED commitment SHA-256(salt || SHA-256(original file)), 64 hex, as she sent it
+ *                    (subjectId = the blob). Never a plain file hash: a plain hash of a file is a fingerprint anyone
+ *                    holding the same bytes could look up, so the app never sends one and the server never stores one
+ *                    (PLAN_REVIEW finding 1). Without her salt the value can't be tested against a guess.
  *   share.granted    SHA-256_hex(JSON.stringify({ shareId, recordId, attorneyId, consentStatement, scope, blobIds }))
  *                    — attests the exact consent text. blobIds keep the order sent by the client.
  *   share.revoked    SHA-256_hex(JSON.stringify({ shareId, status: 'revoked', revokedAt }))
@@ -35,6 +39,7 @@ import { GENESIS_HASH, type DB } from './db.js';
 export type LedgerType =
   | 'record.sealed'
   | 'blob.sealed'
+  | 'evidence.committed'
   | 'share.granted'
   | 'share.revoked'
   | 'share.renewed'
@@ -159,7 +164,7 @@ export function verifyLedger(db: DB): LedgerVerifyResponse {
 }
 
 /** Entry types the public proof lookup answers for: sealed content only (records and evidence files). */
-export const PROOF_TYPES = ['record.sealed', 'blob.sealed'] as const;
+export const PROOF_TYPES = ['record.sealed', 'blob.sealed', 'evidence.committed'] as const;
 /** At most this many links per proof (a very long ledger is checked up to here; the client says so). */
 export const PROOF_MAX_LINKS = 20_000;
 

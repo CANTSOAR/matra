@@ -1,7 +1,7 @@
 # Privacy data inventory
 
 Every piece of data Matra's own code keeps, where it lives, why, and for how long. Threat model:
-[threat-model.md](threat-model.md) §2 and W11. Code: `apps/server/src/db.ts` (app DB), `apps/server/src/privacy.ts`
+[threat-model.md](threat-model.md) §2 and W11. Code: `apps/server/src/db.ts` (app DB), `apps/server/src/slots.ts` (draft slots), `apps/server/src/privacy.ts`
 (IP handling, request logs), `apps/matcher/src/store.ts` (matcher DB), `apps/server/src/db.ts openHolderDb` (key
 holders). Keep this file in step with the schema: a new column needs a row here.
 
@@ -20,11 +20,13 @@ any log output. **No third-party requests:** the web app loads everything from i
 'self'`, no analytics, no CDN, no web fonts from elsewhere); `npm run build` runs `scripts/audit-web-build.mjs`, and
 every e2e test fails on a request to another origin.
 
+**What this inventory cannot rule out.** It describes what the code we publish keeps. The operator also serves the web app's code, so a modified app could send a passphrase or plaintext to the server, and the server could then keep it (threat model W4); nothing yet lets a survivor check the code she was served.
+
 **Outside our code.** The hosting provider's edge / load balancer and the SMS provider keep their own records (e.g.
 access logs with IPs; the number and time of each verification). Turning IP logging off at the edge is a deployment
 step ([DEPLOY.md](DEPLOY.md)); this code cannot enforce it.
 
-Retention key: **account** = until the account is deleted (crypto-shred, `POST /api/account/delete`);
+Retention key: **account** = until the account is deleted (`POST /api/account/delete`, with her passphrase: rows deleted from the live database with `secure_delete` on, then a TRUNCATE checkpoint; not a crypto-shred, so a backup taken earlier keeps them);
 **forever** = never deleted (append-only); **memory** = process memory only, never written.
 
 ## 1. App server database (SQLite, `MATRA_DB_PATH`)
@@ -56,6 +58,8 @@ Retention key: **account** = until the account is deleted (crypto-shred, `POST /
 Sessions expire 12 h after sign-in (`SESSION_TTL_MS`). Expired rows are deleted at startup, on every sign-in, and by a
 sweep every 10 minutes (`auth.ts purgeExpiredSessions`, `app.ts` housekeeping), so an abandoned session (tab closed,
 quick exit, auto-lock) does not leave a sign-in time on disk. While a session is live, `created_at` is a sign-in time.
+She can see her own live sessions' sign-in and expiry times ("Passphrase and devices"); that is all a session row holds.
+Changing her passphrase, or "sign out everywhere else", deletes her other rows at once.
 
 ### attorney_profiles / counselor_profiles
 | Column | What / why | Retention |
@@ -66,18 +70,22 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 | Column | What / why | Retention |
 |---|---|---|
 | id, owner_id, supersedes | which account, which version | account |
-| envelope / data | ciphertext of her record / evidence file | account |
+| envelope / data | ciphertext of her record / evidence file. A record is a sealed version (`{kind, record, savedAt}`) or her preferences; with `MATRA_DRAFT_MODE=keep-versions`, also a copy of every draft save (§1a) | account |
 | owner_wrapped_key | content key wrapped under her master key | account |
 | content_hash, size_bytes | integrity check; size (W11: not padded yet) | account |
 | created_at, ledger_entry_id | when sealed; link to the ledger | account |
+
+Evidence files (P6): each upload may carry a **salted commitment** `SHA-256(salt ‖ SHA-256(original file))` (header `X-Evidence-Commitment`), which is
+written to the ledger as an `evidence.committed` entry for the blob; the server never receives a plain hash of any file, the salt, or the original bytes of
+a file that was stripped (threat model W27). A kept original, if she chose that, is a second ordinary blob.
 
 ### shares, share_blobs (survivor → attorney)
 | Column | What / why | Retention |
 |---|---|---|
 | record_id, survivor_id, attorney_id, scope | what she shared with whom | account (either side) |
-| recipient_wrapped_key | content key wrapped to the attorney's public key | account |
+| recipient_wrapped_key | content key (and each shared file's) wrapped to the attorney's public key | until access ends: deleted (set to NULL) in the same transaction as her revoke, or by housekeeping 30 days after the share expired; a renewal after that stores a fresh one from her device (`src/recipient-keys.ts`). Backups made before keep it |
 | consent_statement | the consent text she agreed to (also hashed into the ledger) | account |
-| survivor_alias | the name she chose to show the attorney | account |
+| survivor_alias | the share's label shown to the attorney ("Client" + 5 random characters, made up on her device for that share only; never her username). Shares made before 2026-11-15 may hold her username | account |
 | status, created_at, expires_at, revoked_at, ledger_entry_id | access control and her audit view | account |
 
 ### ledger (append-only)
@@ -85,12 +93,26 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 |---|---|---|
 | seq, id, type, subject_id, content_hash, timestamp, prev_hash, entry_hash | tamper-evident history: ids, hashes, times only. No content, no IP, no identifier tag | **forever** (survives account deletion; hashes only) |
 
+### deployment_meta
+| Column | What / why | Retention |
+|---|---|---|
+| key, value | `db_id`: a random id for this database, written once; the draft-slot file stores the same id (§1a) | deployment |
+
 ### audit_events
 | Column | What / why | Retention |
 |---|---|---|
-| user_id, action, detail, at | her own activity trail shown to her ("an attorney opened your file at …"); no IP or device | account |
+| user_id, action, detail, at | her own activity trail shown to her ("an attorney opened your file at …"); no IP or device. Failed sign-ins and wrong recovery codes are capped at 10 rows each per UTC day, and wrong passphrases on re-authentication (recovery-code changes, delete, change passphrase, sign out other devices) at 10 a day together. A passphrase change (`auth.passphrase_changed`), ending her other sessions (`auth.other_sessions_ended`) and a recovery-code start are always listed | account |
 
 ### Sealed matching
+
+With `MATRA_MATCHING=off` (the pilot setting) matching writes nothing: the server loads no phone key, refuses counselor
+accounts, and none of these tables gets a row, except `matching_meta`, which then holds only the org-signed attorney
+directory and an empty signed counselor roster (written by `verify-attorney` / `sign-roster`; the pilot needs the
+directory to share). The tables still exist (one schema for both settings). A production server set to off refuses to
+start over a database that still has sealed-match entries or report releases. In other environments, housekeeping ends
+any live report release (as Matra ending it for her: `report.revoked`, reason `matching_off`) and deletes the
+counselor's copy of its keys; no row is deleted.
+
 | Table | What / why | Retention |
 |---|---|---|
 | match_entries | per (survivor, identifier): OPRF tag, contact bundle and contact details (ciphertext), her label (ciphertext), routing states sealed to the matcher (ciphertext), key epoch, sync flag | until she withdraws it or deletes her account |
@@ -100,11 +122,38 @@ quick exit, auto-lock) does not leave a sign-in time on disk. While a session is
 | matcher_pending_deletes | entry ids queued for deletion at the matcher | until the matcher confirms |
 | counselor_notes | counselor's notes, encrypted under her own key | group-level notes: until no entry with the group's tag remains (or the counselor's account is deleted); notes about one entry: with that entry |
 | conflict_checks | counselor's conflict-check result and time per group | until no entry with the group's tag remains (or the counselor's account is deleted) |
-| report_requests, report_releases, report_release_blobs | staged release: who asked whom, her yes/no, wrapped keys, consent text, times | with the entry / account |
+| report_requests, report_releases, report_release_blobs | staged release: who asked whom, her yes/no, wrapped keys, consent text, times | with the entry / account; the wrapped keys only until the release ends (deleted with her revoke or Matra's, or 30 days after it expired, also with `MATRA_MATCHING=off`) |
 | oprf_quota | per account and holder: today's count and lifetime count (no per-call times) | account |
 | phone_tokens | keyed hash of a verified number and a count; no account id, no rowid | **forever** (no row names an account, so none can be deleted with one) |
 | matching_meta | OPRF public keys, key epoch, signed counselor roster | deployment |
 | shred_authorizations | transient row inside the account-deletion transaction | never committed |
+
+## 1a. Draft slots (SQLite, `<main db name>-drafts.db` beside it, or `MATRA_DRAFTS_DB_PATH`)
+
+Her draft, saved over as she writes (docs/SECURITY_WHITEPAPER.md §4b). With `MATRA_DRAFT_MODE=slot` (default) a slot
+write adds no ledger entry and no `audit_events` row; with `keep-versions` each write also adds a record, a
+`record.sealed` ledger entry and a `record.created` activity row (§1 records). Every write ends with a TRUNCATE
+checkpoint, and `secure_delete` is on, so the file and its WAL hold only the newest copy once a write returns, unless
+another reader blocks the checkpoint (logged; cleared by the next write). A backup or snapshot taken earlier, or freed
+filesystem blocks, can still hold an older one. The file's modification time shows when any account last wrote.
+
+### slots (WITHOUT ROWID)
+| Column | What / why | Retention |
+|---|---|---|
+| owner_id | which account | account (deleted with it; if a deletion stops between the two files, deleted at the next start for accounts with an `account.shredded` ledger entry) |
+| name | 64 hex: HMAC under a key only her device derives, so the name doesn't say which slot it is (how many slots she has and how often each is written can) | account |
+| envelope, wrapped_key | ciphertext of her draft (padded to whole 16 KiB) and its key wrapped under her master key | until her next save replaces it, or the account is deleted |
+| version | random 128-bit tag, new on every write (compare-and-swap, so two devices don't overwrite each other); not a count | until her next save |
+| updated_day | UTC day of the last write; no finer time, no creation time | account |
+
+A second slot, her **private evidence slot** (P6, `apps/web/src/evidence/privateStore.ts`), uses the same table under its own opaque name. Its plaintext
+(only her device sees it) holds, per file: the plain hash of the original, the salt of its commitment, the commitment, when she added it, a screenshot label,
+the blob id of a kept original, and the text read from the image if she asked for it. It is not written when the draft mode is `keep-versions` (threat model W29).
+
+### slots_meta
+| Column | What / why | Retention |
+|---|---|---|
+| key, value | `main_db_id`: the random id of the main database this file belongs to (also in its `deployment_meta`), so a drafts file is never used or swept with another database | deployment |
 
 ## 2. App server memory (never written)
 

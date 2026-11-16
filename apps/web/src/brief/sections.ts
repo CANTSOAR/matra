@@ -54,6 +54,13 @@ function safeMethods(r: IntakeRecord): string {
  * Pure function: the structured content of the Incident Summary in the Survivor's Own Words.
  * Survivor-authored text is carried through byte-for-byte (never trimmed, rewritten or summarised).
  */
+/** The evidence rows in exhibit-number order (numbered first, the rest after in their own order), when numbers are given. */
+function orderedEvidence<T extends { blobId?: string }>(evidence: readonly T[], numbers?: Record<string, number>): T[] {
+  if (!numbers) return [...evidence];
+  const n = (e: T) => (e.blobId ? numbers[e.blobId] : undefined) ?? Number.POSITIVE_INFINITY;
+  return evidence.map((e, i) => ({ e, i })).sort((a, b) => n(a.e) - n(b.e) || a.i - b.i).map((x) => x.e);
+}
+
 export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): BriefSection[] {
   const r = record;
   const out: BriefSection[] = [];
@@ -273,7 +280,7 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
         ...(m.soughtCare || has(m.date) ? [row('Date of care', formatDate(m.date))] : []),
         row('Forensic exam (SANE / evidence kit) completed', m.forensicExamCompleted === undefined ? NOT_PROVIDED : yesNo(m.forensicExamCompleted)),
         ...(m.toxicologyTest ? [row('Toxicology (alcohol / drug) testing', survivorAnswered(m.toxicologyTest))] : []),
-        ...(m.fiveYearHoldKit ? [row('Kit held without a police report (anonymous / Five-Year Hold)', survivorAnswered(m.fiveYearHoldKit))] : []),
+        ...(m.fiveYearHoldKit ? [row('Kit held without a police report (anonymous / "Hold" kit)', survivorAnswered(m.fiveYearHoldKit))] : []),
         ...(m.kitReportedToPolice ? [row('Kit reported to police', survivorAnswered(m.kitReportedToPolice))] : []),
         vrow('Injuries', m.injuries),
       ],
@@ -316,14 +323,24 @@ export function briefSections(record: IntakeRecord, opts: BriefOptions = {}): Br
             { header: 'Description', width: 0.25 }, { header: 'Captured', width: 0.13 },
             { header: 'Size', width: 0.09 }, { header: 'Metadata stripped', width: 0.12 },
           ],
-          rows: r.evidence.map((e, i) => ({
+          rows: orderedEvidence(r.evidence, opts.exhibitNumbers).map((e, i) => ({
             cells: [
-              String(i + 1), e.fileName || NOT_PROVIDED, EVIDENCE_KIND_LABELS[e.kind] ?? e.kind, orNP(e.description),
+              opts.exhibitNumbers ? (e.blobId && opts.exhibitNumbers[e.blobId] !== undefined ? String(opts.exhibitNumbers[e.blobId]) : '–') : String(i + 1), e.fileName || NOT_PROVIDED, EVIDENCE_KIND_LABELS[e.kind] ?? e.kind, orNP(e.description),
               formatDate(e.capturedAt), formatBytes(e.sizeBytes), e.metadataStripped ? 'Yes' : 'No',
             ],
-            detail: { label: 'SHA-256', value: orNP(e.sha256), mono: true },
+            detail: opts.exhibitFingerprints?.[e.id]
+              ? { label: 'SHA-256', value: `${orNP(e.sha256)}   Salted fingerprint of the original file: ${opts.exhibitFingerprints[e.id]}`, mono: true }
+              : { label: 'SHA-256', value: orNP(e.sha256), mono: true },
           })),
         },
+        ...(Object.keys(opts.exhibitFingerprints ?? {}).some((id) => r.evidence.some((e) => e.id === id))
+          ? [{
+              kind: 'note', tone: 'info',
+              text: 'A “salted fingerprint” is a scrambled form of the fingerprint of the file exactly as the survivor chose it, made with a ' +
+                'secret value only she holds. It can be checked only by someone she gives that value to. It shows that a file with those ' +
+                'exact bytes existed when she added it; it does not show that the copy listed above came from that file.',
+            } as BriefBlock]
+          : []),
         {
           kind: 'note', tone: 'info',
           text: 'SHA-256 values are computed over the exact file bytes provided to the reader (after any metadata stripping). ' +

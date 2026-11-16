@@ -16,7 +16,7 @@ import type { CounselorMatchGroup, RoutingEnvelope } from '@matra/shared';
 import { getDb } from './app.js';
 import { loadMatcherConfig } from './config.js';
 import { InProcessMatcher, type MatcherClient } from './matcher-client.js';
-import { makeApp, registerUser, sealMatch, syncMatcher, type TestUser } from './test-helpers.js';
+import { makeMatchingApp, registerUser, sealMatch, syncMatcher, type TestUser } from './test-helpers.js';
 import type express from 'express';
 
 const groupsOf = async (app: express.Express, c: TestUser) => {
@@ -58,7 +58,7 @@ function flaky(inner: MatcherClient) {
 
 describe('matcher service: one counselor per group, routed by state', () => {
   it('incident NY → only the NY-licensed counselor sees the group, with the reason; the NJ counselor sees nothing', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const nj = await registerUser(app, 'loc.nj', 'counselor');
     const ny = await registerUser(app, 'loc.ny', 'counselor');
     licensed(app, ny, ['NY']);
@@ -74,7 +74,7 @@ describe('matcher service: one counselor per group, routed by state', () => {
   });
 
   it('falls back to the survivor state; nobody licensed → not released to anyone', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const nj = await registerUser(app, 'loc.nj', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -90,7 +90,7 @@ describe('matcher service: one counselor per group, routed by state', () => {
   });
 
   it('a group where nobody gave a state is still released to one counselor (fallback:no_state)', async () => {
-    const { app } = makeApp();
+    const { app } = makeMatchingApp();
     const nj = await registerUser(app, 'loc.nj', 'counselor');
     for (const n of ['a', 'b']) await sealMatch(app, await registerUser(app, `survivor.${n}`), 'email', 'x@example.com', undefined, n, undefined, {});
     const g = await groupsOf(app, nj);
@@ -99,7 +99,7 @@ describe('matcher service: one counselor per group, routed by state', () => {
   });
 
   it('the assigned counselor declines: the group goes to another counselor and never comes back to her', async () => {
-    const { app, db } = makeApp();
+    const { app, db } = makeMatchingApp();
     const c1 = await registerUser(app, 'loc.one', 'counselor');
     const c2 = await registerUser(app, 'loc.two', 'counselor');
     const a = await registerUser(app, 'survivor.a');
@@ -134,7 +134,7 @@ describe('matcher service: one counselor per group, routed by state', () => {
 describe('matcher service: availability and attestation', () => {
   it('matcher down → entries are still created; the group is released after the matcher comes back', async () => {
     const m = flaky(inProcess().client);
-    const { app, db } = makeApp({ matching: { matcher: { client: m.client, pins: { allowSimulated: true } } } });
+    const { app, db } = makeMatchingApp({ matching: { matcher: { client: m.client, pins: { allowSimulated: true } } } });
     const loc = await registerUser(app, 'loc.nj', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -160,7 +160,7 @@ describe('matcher service: availability and attestation', () => {
 
   it('withdrawal while the matcher is down is delivered later: the group is withdrawn from the counselor', async () => {
     const m = flaky(inProcess().client);
-    const { app } = makeApp({ matching: { matcher: { client: m.client, pins: { allowSimulated: true } } } });
+    const { app } = makeMatchingApp({ matching: { matcher: { client: m.client, pins: { allowSimulated: true } } } });
     const loc = await registerUser(app, 'loc.nj', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -178,7 +178,7 @@ describe('matcher service: availability and attestation', () => {
 
   it('the app server forwards nothing when the matcher measurement is not the pinned one', async () => {
     const mp = inProcess();
-    const { app, db } = makeApp({
+    const { app, db } = makeMatchingApp({
       matching: { matcher: { client: mp.client, pins: { platformKey: platformPublicKey(mp.platform), measurement: 'ff'.repeat(32), allowSimulated: true } } },
     });
     const loc = await registerUser(app, 'loc.nj', 'counselor');
@@ -192,7 +192,7 @@ describe('matcher service: availability and attestation', () => {
     expect(mp.client.matcher.assignments()).toEqual([]);
     // with the right measurement pinned, everything goes through
     const ok = inProcess();
-    const { app: app2 } = makeApp({
+    const { app: app2 } = makeMatchingApp({
       matching: { matcher: { client: ok.client, pins: { platformKey: platformPublicKey(ok.platform), measurement: ok.client.attester.measurement, allowSimulated: true } } },
     });
     const loc2 = await registerUser(app2, 'loc.nj', 'counselor');
@@ -202,7 +202,7 @@ describe('matcher service: availability and attestation', () => {
 
   it('a pinned client refuses a matcher that is not the published build, before any key holder is asked', async () => {
     const mp = inProcess();
-    const { app, db } = makeApp({ matching: { matcher: { client: mp.client, pins: { allowSimulated: true } } } });
+    const { app, db } = makeMatchingApp({ matching: { matcher: { client: mp.client, pins: { allowSimulated: true } } } });
     await registerUser(app, 'loc.nj', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const pins = { attestation: { platformKey: platformPublicKey(mp.platform), measurement: 'ee'.repeat(32) }, allowSimulatedAttestation: true };
@@ -227,7 +227,7 @@ describe('matcher service: availability and attestation', () => {
 
   it('GET /api/matching/attestation proxies the matcher (public), needs a 64-hex nonce, and verifies', async () => {
     const mp = inProcess();
-    const { app } = makeApp({ matching: { matcher: { client: mp.client, pins: { allowSimulated: true } } } });
+    const { app } = makeMatchingApp({ matching: { matcher: { client: mp.client, pins: { allowSimulated: true } } } });
     const nonce = newAttestationNonce();
     const r = await request(app).get(`/api/matching/attestation?nonce=${nonce}`);
     expect(r.status).toBe(200);
@@ -240,7 +240,7 @@ describe('matcher service: availability and attestation', () => {
 describe('matcher service: what the app server keeps (privacy)', () => {
   it("no per-entry state in the app DB (only a released group's assignment reason names one); routing opens only with the matcher key and only under its own tag", async () => {
     const mp = inProcess();
-    const { app, db } = makeApp({ matching: { matcher: { client: mp.client, pins: { allowSimulated: true } } } });
+    const { app, db } = makeMatchingApp({ matching: { matcher: { client: mp.client, pins: { allowSimulated: true } } } });
     await registerUser(app, 'loc.nj', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');
@@ -264,7 +264,7 @@ describe('matcher service: what the app server keeps (privacy)', () => {
     const mp = inProcess();
     const seen: unknown[] = [];
     const spy: MatcherClient = { ...mp.client, kind: 'in-process', attestation: (n) => mp.client.attestation(n), upsertEntry: async (e) => void seen.push(e), removeEntry: async () => {}, putRoster: async (r) => void seen.push(r), assignments: async () => [], decline: async () => {} };
-    const { app } = makeApp({ matching: { matcher: { client: spy, pins: { allowSimulated: true } } } });
+    const { app } = makeMatchingApp({ matching: { matcher: { client: spy, pins: { allowSimulated: true } } } });
     await registerUser(app, 'loc.nj', 'counselor');
     const a = await registerUser(app, 'survivor.a');
     const b = await registerUser(app, 'survivor.b');

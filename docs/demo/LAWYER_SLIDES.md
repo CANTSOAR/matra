@@ -100,7 +100,7 @@ don't overcome hearsay or confrontation objections, and they don't show the cont
 
 - She chooses from verified attorneys only; her app checks your key against Matra's signed attorney directory, so she never has to call you to compare codes
 - The consent text is stored word for word, and its hash goes on the ledger
-- Shares expire after 90 days by default. Revoking stops future access but can't recall what you downloaded
+- Shares expire after 90 days by default. Revoking stops future access and deletes your copy of the key from Matra's database, but can't recall what you downloaded
 
 **Speaker note:** Read the consent text aloud in the demo. Mention that the partner MOU covers deletion when a share is
 revoked or declined. Whether she can require destruction after you've read it is open (Q-050), and so is whether the
@@ -143,9 +143,9 @@ demo. The counselor gives options counseling. They don't take the case, and the 
 
 ## Slide 10: What Matra can and cannot see
 
-**Message:** We can't read her content, but we aren't subpoena-proof, and we never claim to be.
+**Message:** Our server holds only ciphertext, so it can't read her content (as long as the code we serve is untampered), but we aren't subpoena-proof, and we never claim to be.
 
-- Matra can't read her story, evidence, PDF, sealed identifier, phone number or passphrase
+- Matra's server can't read her story, evidence, PDF, sealed identifier, phone number or passphrase, if the web code we serve is untampered
 - Matra can see account existence, times, sizes, who shared with whom, the consent text, the access log and the ledger
 - She, and anyone she shares with, can be ordered to produce records. Anything given to police is discoverable
 
